@@ -151,7 +151,7 @@ function OmoMark({ size }: { size: number }) {
 
 /**
  * Clawd, Claude Code's pixel mascot. Path from LobeHub Icons (lobehub/lobe-icons,
- * `claudecode-color`, MIT); the mark itself belongs to Anthropic.
+ * `claudecode-color`, MIT, THIRD_PARTY_NOTICES.md); the mark itself belongs to Anthropic.
  */
 function ClaudeCodeMark({ size }: { size: number }) {
   return (
@@ -163,8 +163,8 @@ function ClaudeCodeMark({ size }: { size: number }) {
 
 /**
  * The Codex logo: a violet-to-blue cloud holding a `>_` prompt, on a white tile. Paths and
- * gradient from LobeHub Icons (lobehub/lobe-icons, `codex-color`, MIT); the mark itself
- * belongs to OpenAI.
+ * gradient from LobeHub Icons (lobehub/lobe-icons, `codex-color`, MIT, THIRD_PARTY_NOTICES.md); the mark
+ * itself belongs to OpenAI.
  */
 function CodexAppMark({ size }: { size: number }) {
   const gradientId = useId();

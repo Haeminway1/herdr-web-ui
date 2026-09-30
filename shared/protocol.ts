@@ -457,7 +457,8 @@ export type ServerMessage =
   | { type: "pane-exited"; pane_id: string }
   /** session structure changed (pane created/closed): refetch /api/session */
   | { type: "session-changed" }
-  | { type: "error"; code: string; message: string };
+  /** `pane_id` names the pane an error is about, when it is about one (`attach_held`) */
+  | { type: "error"; code: string; message: string; pane_id?: string };
 
 /** herdr's default socket, under XDG_CONFIG_HOME when set, as herdr itself resolves it. */
 export const HERDR_SOCKET_PATH = `${process.env["XDG_CONFIG_HOME"] || `${process.env["HOME"] ?? ""}/.config`}/herdr/herdr.sock`;

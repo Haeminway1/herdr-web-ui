@@ -7,17 +7,27 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Fixed
+- A pane waiting for another web bridge no longer frees its input for a moment and reports the
+  wait twice when herdr's refusal of a retry arrives slowly (a busy PC).
+- A pane herdr reports waiting for input always gets a card in the chat, even when no reader
+  knows its screen: a marked menu there is offered as options answered from the cursor, and
+  otherwise the screen's last lines come with Enter and Esc. Such screens are logged once.
+
 ### Added
+- Settings → Plan limits → Where puts the plan meters at the top of the sidebar instead of
+  beside Settings: a row per account with its plan, the limit closest to running out, a bar
+  and when it resets. A tap opens every limit.
 - A dark report look is the new default: a near-black blue-grey canvas, hairlines, near-square
   corners, white primary actions, electric blue only on small marks, and amber / red / green agent
   states. Settings → Appearance → Colors also offers a neutral Ghostty-style **Charcoal** and the
   original **Amber**.
 - Settings → Appearance can show Clawd, Claude Code's mascot, on Claude panes and the Codex
   logo (a blue cloud with a prompt) on Codex panes instead of the provider logos.
-- On a phone, a swipe in from the left edge opens the workspace list and a swipe to the left
-  closes it.
-- While typing in the chat on a phone, a tap on the transcript, a drag down it, or the new
-  **Hide keyboard** button puts the keyboard away to read; the draft stays in the composer.
+
+## [0.3.35] - 2026-09-30
+
+### Added
 - A Korean README (`README.ko.md`), linked from the English, Simplified Chinese and
   Japanese READMEs.
 
@@ -30,14 +40,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ### Fixed
 - Claude Code's unnumbered menus, such as the folder-trust check on a folder it has not seen
   ("Enter to confirm · Esc to cancel"), show as a card in the chat and can be answered there.
-  herdr reported the pane INPUT, but no card appeared.
-- A pane whose terminal another web bridge on the same herdr has open (two installs side by
-  side) now waits for it instead of ending with "Another web bridge is attached": it says so,
-  keeps the chat readable, and attaches by itself as soon as the other bridge lets go.
-- An iPhone home screen app no longer leaves an empty band as tall as the status bar under the
-  composer. The shell follows the visual viewport only while the keyboard is up.
-- Tapping a notification while the app is open in the background opens that pane even when the
-  system is slow or refuses to bring the window forward.
+  herdr reported the pane INPUT, but no card appeared. An answer presses Enter only once the
+  cursor is on the row it answers; a menu whose rows cannot be told apart gets no card.
+- The iPhone home-screen app starts below the status bar instead of drawing beneath it, so the
+  header text is no longer blurred on iOS 27 (#164). iOS reads this when the app is added, so an
+  existing install keeps the blur until it is removed from the Home Screen and added again; send
+  or copy unsent drafts and queued messages first. See [the testing guide](docs/ios-home-screen-testing.md).
 - A Codex pane no longer reads RUN for good after its first turn. herdr reports Codex as
   `unknown` at rest, and that was taken for more work; the agent that worked reading `unknown`
   is now a finish (DONE until seen, with its done alert). Late session snapshots no longer
@@ -47,10 +55,22 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   Copilot sign-in in an editor, or a paid plan, still shows.
 - A local or remote PC refresh no longer replaces a newer pane status with an older
   snapshot. Status and session changes received during a refresh queue a fresh load.
+- The installed iPhone app no longer leaves a band under the composer. The shell keeps its
+  full height until a text field takes the keyboard, and the keyboard sizing also follows
+  direct terminal typing and pointer changes, and clears when a focused field goes away.
+- Tapping an alert opens its PC and pane, also when the tap starts the app or focusing the
+  window is refused; the newest tap wins over an older one still opening.
+- A pane whose terminal another web bridge on the same herdr has open (two installs side by
+  side) now waits for it instead of ending with "Another web bridge is attached": it says so,
+  keeps the chat readable, and attaches by itself as soon as the other bridge lets go.
 
 ## [0.3.34] - 2026-09-30
 
 ### Added
+- On a phone, a swipe in from the left edge opens the workspace list and a swipe to the left
+  closes it.
+- While typing in the chat on a phone, a tap on the transcript, a drag down it, or the new
+  **Hide keyboard** button puts the keyboard away to read; the draft stays in the composer.
 - A pane herdr could not restore after a restart (herdr 0.9.3+, e.g. its folder was
   removed) is marked NOT RESTORED in the sidebar, and selecting it shows herdr's reason
   instead of a terminal that ends at once. The server no longer tries to attach it.

@@ -72,7 +72,7 @@ function Provider({ usage, now, count }: { usage: ProviderUsage; now: number; co
 export function UsageMeters() {
   const t = useT();
   const { settings } = useSettings();
-  const { report, loading, refresh } = useUsage(settings.showUsage);
+  const { report, loading, refresh } = useUsage(settings.showUsage && settings.usagePlacement === "footer");
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const rootRef = useRef<HTMLDivElement>(null);
@@ -106,7 +106,7 @@ export function UsageMeters() {
   const count = settings.usageCount;
   // an account hidden in Settings is left out of the strip and the popover alike
   const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
-  if (!settings.showUsage || shown.length === 0) return null;
+  if (!settings.showUsage || settings.usagePlacement !== "footer" || shown.length === 0) return null;
   const folded = shown.length > MAX_CHIPS ? shown.length - (MAX_CHIPS - 1) : 0;
   const chips = folded > 0 ? shown.slice(0, MAX_CHIPS - 1) : shown;
   const summary = shown.map((usage) => {
@@ -141,5 +141,63 @@ export function UsageMeters() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The plan meters as a panel at the top of the sidebar (Settings → Plan limits → Where): one
+ * row per account with its logo, plan, the limit closest to running out and when it resets.
+ * The panel opens every limit, as the strip's popover does.
+ */
+export function UsagePanel() {
+  const t = useT();
+  const { settings } = useSettings();
+  const top = settings.showUsage && settings.usagePlacement === "top";
+  const { report, loading, refresh } = useUsage(top);
+  const [open, setOpen] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!top) return;
+    setNow(Date.now());
+    const tick = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(tick);
+  }, [top]);
+
+  const count = settings.usageCount;
+  const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
+  if (!top || shown.length === 0) return null;
+  return (
+    <section className="usage-panel" aria-label={t("Subscription usage")}>
+      <button type="button" className="usage-panel-rows" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {shown.map((usage) => {
+          const window = tightestWindow(usage);
+          const value = window ? meterPercent(window, count) : 0;
+          const reset = window ? formatResetIn(window.resets_at, now) : null;
+          return (
+            <span key={usage.key} className={`usage-panel-row${level(window)}${usage.problem ? " has-problem" : ""}`}>
+              <AgentMark agent={PROVIDER_MARK[usage.id]} size={16} />
+              <span className="usage-panel-name">
+                {PROVIDER_NAME[usage.id]}
+                {usage.plan && <span className="usage-plan">{usage.plan}</span>}
+              </span>
+              <span className="usage-panel-value">{window ? meterText(window, count) : "—"}</span>
+              <span className="usage-bar" aria-hidden="true"><span style={{ width: value > 0 ? `max(4px, ${value}%)` : 0 }} /></span>
+              {window && <span className="usage-panel-window">{windowLabel(window)}{reset ? ` · ${t("Resets in {time}", { time: reset })}` : ""}</span>}
+            </span>
+          );
+        })}
+      </button>
+      {open && (
+        <div className="usage-panel-detail">
+          <header className="usage-popover-head">
+            <span>{t("Subscription usage")}</span>
+            <button type="button" className="icon-button" aria-label={t("Refresh")} title={t("Refresh")} aria-busy={loading} onClick={() => { if (!loading) refresh(); }}>
+              <RefreshCw aria-hidden="true" className={loading ? "is-spinning" : undefined} />
+            </button>
+          </header>
+          {shown.map((usage) => <Provider key={usage.key} usage={usage} now={now} count={count} />)}
+        </div>
+      )}
+    </section>
   );
 }

@@ -555,7 +555,7 @@ export function PaneTerminal({
           }
           const prompt = secretPrompt(lines.join("\n"), term.cols);
           secretRef.current = prompt;
-          term.options.disableStdin = observeRef.current || prompt !== null;
+          term.options.disableStdin = observeRef.current || prompt !== null || heldRef.current;
           setSecret((previous) => previous?.pane === owner && previous.prompt === prompt ? previous : prompt ? { pane: owner, prompt } : null);
         });
       } else if (message.type === "attach-resumed") {
@@ -588,6 +588,8 @@ export function PaneTerminal({
         if (term.cols !== message.cols || term.rows !== message.rows) term.resize(message.cols, message.rows);
       } else if (message.type === "error") {
         if (message.code === "attach_held") {
+          // a pane this terminal already left: its wait is not this pane's
+          if (message.pane_id !== undefined && message.pane_id !== paneRef.current) return;
           // not an end: the server attaches as soon as the other bridge lets go
           setHeld(true);
           term.options.disableStdin = true;
@@ -854,7 +856,7 @@ export function PaneTerminal({
   const sendDraft = useCallback(() => {
     const socket = socketRef.current;
     const pane = paneRef.current;
-    if (!socket || !pane || draft.text.length === 0 || !socket.connected || secretRef.current !== null) return;
+    if (!socket || !pane || draft.text.length === 0 || !socket.connected || secretRef.current !== null || heldRef.current) return;
     socket.sendInput(pane, draft.text);
     setDraft(EMPTY_DRAFT);
   }, [draft]);
@@ -1040,7 +1042,7 @@ export function PaneTerminal({
               <span className="draft-dropped">{t(draft.droppedSpecial === 1 ? "{count} special key dropped" : "{count} special keys dropped", { count: draft.droppedSpecial })}</span>
             )}
             <span className="draft-actions">
-              <button type="button" className="draft-send" disabled={draft.text.length === 0 || observing || secretActive} onClick={sendDraft}>
+              <button type="button" className="draft-send" disabled={draft.text.length === 0 || observing || secretActive || held} onClick={sendDraft}>
                 {t("Send")}
               </button>
               <button type="button" className="draft-discard" onClick={discardDraft}>

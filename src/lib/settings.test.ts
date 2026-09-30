@@ -106,3 +106,11 @@ describe("agent marks", () => {
     expect(sanitizeSettings({ claudeMark: "alien", codexMark: 1 })).toMatchObject({ claudeMark: "logo", codexMark: "logo" });
   });
 });
+
+describe("plan meter placement", () => {
+  it("sits beside Settings until the top of the list is chosen", () => {
+    expect(DEFAULT_SETTINGS.usagePlacement).toBe("footer");
+    expect(sanitizeSettings({ usagePlacement: "top" }).usagePlacement).toBe("top");
+    expect(sanitizeSettings({ usagePlacement: "left" }).usagePlacement).toBe("footer");
+  });
+});
