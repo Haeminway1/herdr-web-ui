@@ -27,6 +27,17 @@ export function swipeVerdict(drawerOpen: boolean, startX: number, dx: number, dy
   return "ignore";
 }
 
+/** A dialog, the palette or a sheet is up: a swipe there is theirs, not the drawer's under them. */
+const MODAL = "[aria-modal='true'], dialog[open]";
+
+/** Something under the finger scrolled sideways, a code block or a table: a swipe right scrolls it back. */
+function scrolledAside(target: EventTarget | null): boolean {
+  for (let node = target as HTMLElement | null; node; node = node.parentElement) {
+    if (node.scrollLeft > 0 && node.scrollWidth > node.clientWidth) return true;
+  }
+  return false;
+}
+
 /** Listens on the whole document; returns the cleanup. */
 export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean) => void): () => void {
   const narrow = window.matchMedia("(max-width: 768px)");
@@ -36,18 +47,23 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
   let done = false;
   const onStart = (event: TouchEvent): void => {
     const touch = event.touches[0];
-    start = event.touches.length === 1 && touch && narrow.matches ? { x: touch.clientX, y: touch.clientY, open: isOpen() } : null;
+    const open = isOpen();
+    start = event.touches.length === 1 && touch && narrow.matches && document.querySelector(MODAL) === null && (open || !scrolledAside(event.target))
+      ? { x: touch.clientX, y: touch.clientY, open } : null;
     claimed = false;
     done = false;
   };
   const onMove = (event: TouchEvent): void => {
     const touch = event.touches[0];
     if (start === null || !touch) return;
+    // the screen turned wide mid-stroke: there is no drawer to swipe any more
+    if (!narrow.matches) { onEnd(); return; }
     const verdict = done ? "claim" : swipeVerdict(start.open, start.x, touch.clientX - start.x, touch.clientY - start.y);
-    // a stroke that was already the drawer's stays so, back near where it started or turned
-    // aside; one that never was waits for a direction, or goes back to the page
+    // a stroke that was already the drawer's stays so when it comes back near where it started;
+    // one that never was waits for a direction. Until the drawer moves, a stroke that turns to
+    // scrolling goes back to the page, so the terminal's one-finger scroll is not held up
     if (!claimed && verdict === "pending") return;
-    if (!claimed && verdict === "ignore") { start = null; return; }
+    if (verdict === "ignore") { onEnd(); return; }
     claimed = true;
     // a recognised swipe belongs to the drawer, not to the terminal or list under the finger
     event.preventDefault();

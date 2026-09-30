@@ -34,14 +34,19 @@ describe("watchDrawerSwipe", () => {
   type Handler = (event: unknown) => void;
   let listeners: Map<string, Handler>;
   let saved: { window: unknown; document: unknown };
+  let narrow: { matches: boolean };
+  let modal: unknown;
 
   beforeEach(() => {
     listeners = new Map();
+    narrow = { matches: true };
+    modal = null;
     saved = { window: (globalThis as Record<string, unknown>)["window"], document: (globalThis as Record<string, unknown>)["document"] };
-    (globalThis as Record<string, unknown>)["window"] = { matchMedia: () => ({ matches: true }) };
+    (globalThis as Record<string, unknown>)["window"] = { matchMedia: () => narrow };
     (globalThis as Record<string, unknown>)["document"] = {
       addEventListener: (type: string, handler: Handler) => listeners.set(type, handler),
       removeEventListener: (type: string) => listeners.delete(type),
+      querySelector: () => modal,
     };
   });
   afterEach(() => {
@@ -50,7 +55,7 @@ describe("watchDrawerSwipe", () => {
   });
 
   /** One stroke through the listener; how many moves reached the page, and what the drawer did. */
-  const stroke = (points: [number, number][], open = false) => {
+  const stroke = (points: [number, number][], open = false, target: unknown = null, midway?: () => void) => {
     const calls: boolean[] = [];
     const stop = watchDrawerSwipe(() => open, (next) => calls.push(next));
     let reached = 0;
@@ -59,8 +64,9 @@ describe("watchDrawerSwipe", () => {
       return { touches: [{ clientX: x, clientY: y }], preventDefault: () => { blocked = true; }, stopPropagation: () => { blocked = true; }, get blocked() { return blocked; } };
     };
     const [first, ...rest] = points;
-    listeners.get("touchstart")!(event(first![0], first![1]));
-    for (const [x, y] of rest) {
+    listeners.get("touchstart")!({ ...event(first![0], first![1]), target });
+    for (const [index, [x, y]] of rest.entries()) {
+      if (index === 1) midway?.();
       const move = event(x, y);
       listeners.get("touchmove")!(move);
       if (!move.blocked) reached++;
@@ -84,5 +90,24 @@ describe("watchDrawerSwipe", () => {
 
   test("a swipe to the left closes the open drawer", () => {
     expect(stroke([[300, 400], [270, 400], [200, 400]], true)).toEqual({ reached: 0, calls: [false] });
+  });
+
+  test("a stroke that turns to scrolling before the drawer moved goes back to the page", () => {
+    expect(stroke([[4, 300], [15, 302], [15, 360], [15, 430]])).toEqual({ reached: 2, calls: [] });
+  });
+
+  test("a swipe over a dialog, the palette or a sheet leaves the drawer under it alone", () => {
+    modal = {};
+    expect(stroke([[4, 400], [24, 400], [90, 400]])).toEqual({ reached: 2, calls: [] });
+  });
+
+  test("a swipe on a code block scrolled sideways scrolls it back instead", () => {
+    const code = { scrollLeft: 40, scrollWidth: 900, clientWidth: 350, parentElement: null };
+    const text = { scrollLeft: 0, scrollWidth: 0, clientWidth: 0, parentElement: code };
+    expect(stroke([[4, 400], [24, 400], [90, 400]], false, text)).toEqual({ reached: 2, calls: [] });
+  });
+
+  test("a stroke that goes on after the screen turned wide leaves the drawer alone", () => {
+    expect(stroke([[4, 400], [24, 400], [90, 400]], false, null, () => { narrow.matches = false; })).toEqual({ reached: 1, calls: [] });
   });
 });

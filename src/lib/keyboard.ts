@@ -38,11 +38,15 @@ export function dismissKeyboardOn(node: HTMLElement): () => void {
     const touch = event.touches[0];
     // a drag that starts on a text selection moves its handles; it is not a request to read
     const selecting = (window.getSelection()?.toString() ?? "").length > 0;
-    start = event.touches.length === 1 && touch && keyboardUp() && !selecting ? { x: touch.clientX, y: touch.clientY } : null;
+    // a field in the transcript (a prompt card's own answer) keeps its keyboard while a finger drags on it
+    const onField = (event.target as Element | null)?.closest?.("input, textarea, select, [contenteditable='true']") != null;
+    start = event.touches.length === 1 && touch && keyboardUp() && !selecting && !onField ? { x: touch.clientX, y: touch.clientY } : null;
   };
   const onTouchMove = (event: TouchEvent): void => {
     const touch = event.touches[0];
     if (start === null || !touch) return;
+    // a long press that began a selection mid-stroke drags its handles, not the transcript
+    if ((window.getSelection()?.toString() ?? "").length > 0) { start = null; return; }
     if (dragDismisses(touch.clientX - start.x, touch.clientY - start.y)) {
       start = null;
       dismissKeyboard();
