@@ -8,6 +8,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Fixed
+- **Add PC** on a Windows host now says that Windows hosts are not supported yet, instead of
+  failing with the host shell's "'sh' is not recognized" (#189).
 - A pane waiting for another web bridge no longer frees its input for a moment and reports the
   wait twice when herdr's refusal of a retry arrives slowly (a busy PC).
 
