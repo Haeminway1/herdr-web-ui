@@ -30,7 +30,9 @@ const syncHeight = (): void => {
 };
 
 if (viewport) {
-  viewport.addEventListener("resize", syncHeight);
+  // A focused field removed with its pane need not report focusout: the keyboard
+  // closing (a resize) re-reads focus, so the flag cannot outlive it.
+  viewport.addEventListener("resize", () => syncKeyboard());
   viewport.addEventListener("scroll", syncHeight);
 }
 

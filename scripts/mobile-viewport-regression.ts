@@ -70,6 +70,23 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     await blur();
     await shell(false, "", 844);
     await page.locator("#qa-next-field").evaluate((node) => node.remove());
+    // WebKit need not report focusout when a focused field leaves the page with its pane:
+    // the keyboard closing (a viewport resize) must still clear keyboard sizing.
+    await page.evaluate(() => {
+      const field = document.createElement("textarea");
+      document.body.append(field);
+      field.focus();
+    });
+    await shell(true, "500px", 500);
+    await page.evaluate(() => {
+      const swallow = (event: Event) => event.stopImmediatePropagation();
+      window.addEventListener("focusout", swallow, { capture: true });
+      document.activeElement!.remove();
+      window.removeEventListener("focusout", swallow, { capture: true });
+    });
+    await height(795);
+    await shell(false, "", 844);
+    await height(500);
     // Rotation without a keyboard uses the dynamic viewport even if visualViewport differs.
     await page.setViewportSize({ width: 844, height: 390 });
     await height(365);
