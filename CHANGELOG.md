@@ -9,8 +9,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ### Fixed
 - A pane herdr reports waiting for input always gets a card in the chat, even when no reader
-  knows its screen: a marked menu there is offered as options answered from the cursor, and
-  otherwise the screen's last lines come with Enter and Esc. Such screens are logged once.
+  knows its screen: a marked menu there is offered as options answered from the cursor, a
+  `(y/n)` question as Yes and No, and otherwise the screen's last lines come with Enter and
+  Esc. Each such wait is logged once.
+- **Add PC** on a Windows host now says that Windows hosts are not supported yet, instead of
+  failing with the host shell's "'sh' is not recognized" (#189).
 
 ## [0.3.35] - 2026-09-30
 
