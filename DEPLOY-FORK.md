@@ -10,7 +10,10 @@ This branch runs beside the canonical `devswha.herdr-web-ui` plugin as a second 
 - Releases: plain `vX.Y.Z` tags on the fork only, `patch = upstream patch * 100 + n` (upstream 0.3.34,
   first fork build = v0.3.3401). The built-in updater installs the highest tag that descends from the
   running build. Never push upstream tags to the fork: they would compete with fork numbers.
-- Update: merge the new upstream `main` and PR branches here, run typecheck, unit, `test:ui` and
-  `test:integration` in an isolated herdr session, bump `package.json` and `herdr-plugin.toml`, tag,
-  push. The plugin picks it up within five minutes; every open app shows its reload banner.
+- Update: merge the new upstream `main` and PR branches here, bump `package.json` and `herdr-plugin.toml`,
+  commit, then run `scripts/fork-release.sh X.Y.Z`: it tags and pushes only when typecheck, unit,
+  `test:ui` and `test:integration` all pass. Never tag by hand (2026-10-01: a hand-written gate
+  checked integration only and shipped v0.3.3501 with a failing unit and UI run).
+- Fork-only overlay: identity (plugin id, names, version, config-dir lookup), plan meters on at the
+  top by default, and the two tests that assume upstream's usage defaults adjusted to match. The plugin picks it up within five minutes; every open app shows its reload banner.
 - Retire: once the PRs are merged upstream, uninstall this plugin and use the canonical app.

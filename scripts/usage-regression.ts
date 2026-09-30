@@ -40,6 +40,8 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
   try {
     const asked = await staged(context);
+    // fork deployment: the meters default to on at the top; this check starts from upstream's defaults
+    await context.addInitScript(() => { try { localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ showUsage: false, usagePlacement: "footer" })); } catch { /* no storage */ } });
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
