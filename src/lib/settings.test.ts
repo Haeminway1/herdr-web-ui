@@ -60,7 +60,7 @@ describe("quick replies row", () => {
     expect(DEFAULT_SETTINGS.showQuickReplies).toBe(false);
     expect(sanitizeSettings({ showQuickReplies: true }).showQuickReplies).toBe(true);
     expect(sanitizeSettings({ showQuickReplies: "yes" }).showQuickReplies).toBe(false);
-    expect(DEFAULT_SETTINGS.showUsage).toBe(false);
+    expect(DEFAULT_SETTINGS.showUsage).toBe(true); // fork deployment default
     expect(sanitizeSettings({ showUsage: true }).showUsage).toBe(true);
     expect(sanitizeSettings({ showUsage: 1 }).showUsage).toBe(false);
     expect(DEFAULT_SETTINGS.usageCount).toBe("used");
@@ -109,8 +109,8 @@ describe("agent marks", () => {
 
 describe("plan meter placement", () => {
   it("sits beside Settings until the top of the list is chosen", () => {
-    expect(DEFAULT_SETTINGS.usagePlacement).toBe("footer");
-    expect(sanitizeSettings({ usagePlacement: "top" }).usagePlacement).toBe("top");
-    expect(sanitizeSettings({ usagePlacement: "left" }).usagePlacement).toBe("footer");
+    expect(DEFAULT_SETTINGS.usagePlacement).toBe("top"); // fork deployment default
+    expect(sanitizeSettings({ usagePlacement: "footer" }).usagePlacement).toBe("footer");
+    expect(sanitizeSettings({ usagePlacement: "left" }).usagePlacement).toBe("top");
   });
 });
