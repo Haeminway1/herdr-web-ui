@@ -175,7 +175,9 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 
 ### Shell
 - `.app` is a full-viewport column: `.app-header` over `.app-body`; the body is sidebar plus
-  `.terminal-host`. `--app-height` follows `visualViewport` so the soft keyboard does not cover input.
+  `.terminal-host`. While a phone's soft keyboard is up (`data-keyboard`), `--app-height` follows
+  `visualViewport` so the keyboard does not cover input; otherwise the shell is `100dvh`, because an
+  iPhone home screen app reports a visual viewport shorter than the screen without a keyboard.
 - Header anatomy, left to right: mobile drawer toggle / desktop sidebar toggle; flexible context
   title plus PC/workspace/cwd subtitle; segmented Chat/Terminal switch; the connection chip (herdr
   version in its tooltip) and meta actions for palette, notifications, settings and lock. Theme

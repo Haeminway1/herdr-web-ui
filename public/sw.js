@@ -113,13 +113,25 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const url = paneId ? `/?machine=${encodeURIComponent(machineId)}&pane=${encodeURIComponent(paneId)}` : "/";
       const target = windows.find((client) => client.focused) || windows[0];
       if (target) {
-        await target.focus();
-        if (paneId) target.postMessage({ type: "select-pane", pane_id: paneId, machine_id: machineId });
+        const select = () => { if (paneId) target.postMessage({ type: "select-pane", pane_id: paneId, machine_id: machineId }); };
+        // Name the pane before focus(): a focus() that iOS refuses or resolves late must not
+        // swallow it. Selecting is idempotent, so it is sent again once the window is forward,
+        // for a page that was frozen in the background when the first one went out.
+        select();
+        try {
+          await target.focus();
+        } catch (err) {
+          // that window cannot be brought forward: open the app on the pane instead
+          await self.clients.openWindow(url);
+          return;
+        }
+        select();
         return;
       }
-      await self.clients.openWindow(paneId ? `/?machine=${encodeURIComponent(machineId)}&pane=${encodeURIComponent(paneId)}` : "/");
+      await self.clients.openWindow(url);
     })(),
   );
 });
