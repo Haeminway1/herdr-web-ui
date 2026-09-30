@@ -36,7 +36,9 @@ export function dismissKeyboardOn(node: HTMLElement): () => void {
   let start: { x: number; y: number } | null = null;
   const onTouchStart = (event: TouchEvent): void => {
     const touch = event.touches[0];
-    start = event.touches.length === 1 && touch && keyboardUp() ? { x: touch.clientX, y: touch.clientY } : null;
+    // a drag that starts on a text selection moves its handles; it is not a request to read
+    const selecting = (window.getSelection()?.toString() ?? "").length > 0;
+    start = event.touches.length === 1 && touch && keyboardUp() && !selecting ? { x: touch.clientX, y: touch.clientY } : null;
   };
   const onTouchMove = (event: TouchEvent): void => {
     const touch = event.touches[0];

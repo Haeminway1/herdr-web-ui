@@ -31,25 +31,34 @@ export function swipeVerdict(drawerOpen: boolean, startX: number, dx: number, dy
 export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean) => void): () => void {
   const narrow = window.matchMedia("(max-width: 768px)");
   let start: { x: number; y: number; open: boolean } | null = null;
+  // a recognised swipe owns the stroke until the finger lifts, after the drawer moved too
+  let claimed = false;
+  let done = false;
   const onStart = (event: TouchEvent): void => {
     const touch = event.touches[0];
     start = event.touches.length === 1 && touch && narrow.matches ? { x: touch.clientX, y: touch.clientY, open: isOpen() } : null;
+    claimed = false;
+    done = false;
   };
   const onMove = (event: TouchEvent): void => {
     const touch = event.touches[0];
     if (start === null || !touch) return;
-    const verdict = swipeVerdict(start.open, start.x, touch.clientX - start.x, touch.clientY - start.y);
+    const verdict = done ? "claim" : swipeVerdict(start.open, start.x, touch.clientX - start.x, touch.clientY - start.y);
     if (verdict === "pending") return;
-    if (verdict === "ignore") { start = null; return; }
+    if (verdict === "ignore") {
+      // a stroke that was already the drawer's stays so; one that never was goes back to the page
+      if (!claimed) { start = null; return; }
+    }
+    claimed = true;
     // a recognised swipe belongs to the drawer, not to the terminal or list under the finger
     event.preventDefault();
     event.stopPropagation();
-    if (verdict === "open" || verdict === "close") {
+    if (!done && (verdict === "open" || verdict === "close")) {
       setOpen(verdict === "open");
-      start = null;
+      done = true;
     }
   };
-  const onEnd = (): void => { start = null; };
+  const onEnd = (): void => { start = null; claimed = false; done = false; };
   document.addEventListener("touchstart", onStart, { capture: true, passive: true });
   document.addEventListener("touchmove", onMove, { capture: true, passive: false });
   document.addEventListener("touchend", onEnd, { capture: true, passive: true });
