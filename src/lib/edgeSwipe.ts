@@ -44,11 +44,10 @@ export function watchDrawerSwipe(isOpen: () => boolean, setOpen: (open: boolean)
     const touch = event.touches[0];
     if (start === null || !touch) return;
     const verdict = done ? "claim" : swipeVerdict(start.open, start.x, touch.clientX - start.x, touch.clientY - start.y);
-    if (verdict === "pending") return;
-    if (verdict === "ignore") {
-      // a stroke that was already the drawer's stays so; one that never was goes back to the page
-      if (!claimed) { start = null; return; }
-    }
+    // a stroke that was already the drawer's stays so, back near where it started or turned
+    // aside; one that never was waits for a direction, or goes back to the page
+    if (!claimed && verdict === "pending") return;
+    if (!claimed && verdict === "ignore") { start = null; return; }
     claimed = true;
     // a recognised swipe belongs to the drawer, not to the terminal or list under the finger
     event.preventDefault();
