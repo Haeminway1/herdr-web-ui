@@ -769,52 +769,47 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
 /**
  * The last resort, for a pane herdr reports blocked that none of the readers above know (a
  * menu a new agent version draws differently, an agent without a reader): the chat must never
- * leave the user without a way to answer. A marked menu row (`❯`, `›`, `>`) with its sibling
- * rows (the same label column, up to a blank line or a rule) becomes a menu answered from the
- * native cursor; with no such rows, the screen's last lines come with Enter and Esc.
+ * leave the user without a way to answer. It guesses as little as it can. Only a numbered menu
+ * that still owns the screen's end becomes options, each answered by typing its number, so no
+ * cursor position is guessed. Anything else shows the screen's last lines with the keys its
+ * hint lines name, plus Enter and Esc.
  */
 /** a question, allowing a trailing choice hint such as "(y/n)" */
 const ASKED_RE = /\?\s*(?:[([][^)\]]*[)\]])?\s*$/;
 const YES_NO_RE = /[([]\s*y(?:es)?\s*\/\s*n(?:o)?\s*[)\]]/i;
+const ARROWS_RE = /[↑↓]|\barrow/i;
+/** what may follow a menu that still takes the answer: its hint lines, never a new prompt */
+const MENU_TAIL_LINES = 3;
 
 export function parseFallbackPrompt(agent: string, screen: string): InteractivePrompt {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const shown = lines.flatMap((line, index) => cleanLine(line) && !isDivider(line) ? [index] : []);
-  const tail = shown.slice(-16);
-  const labelColumn = (raw: string): number => raw.search(/\S/) + (SELECTED_RE.exec(raw.trimStart())?.[0].length ?? 0);
-  const marked = [...tail].reverse().find((index) => SELECTED_RE.test(cleanLine(lines[index]!)) && cleanLine(lines[index]!).replace(SELECTED_RE, "").trim());
-  if (marked !== undefined) {
-    const column = labelColumn(lines[marked]!);
-    const isRow = (index: number): boolean => {
-      const raw = lines[index];
-      return raw !== undefined && Boolean(cleanLine(raw)) && !isDivider(raw) && labelColumn(raw) === column;
-    };
-    let first = marked;
-    while (isRow(first - 1)) first -= 1;
-    let last = marked;
-    while (isRow(last + 1)) last += 1;
-    const rows = lines.slice(first, last + 1).map((raw) => cleanLine(raw));
-    if (rows.length >= 2 && rows.length <= 12) {
-      const above = lines.slice(Math.max(0, first - 12), first).map(cleanLine).filter((line) => line && !isDivider(line));
-      const asked = [...above].reverse().find((line) => /\?$/.test(line));
-      return publicPrompt(finishPrompt(agent, {
-        kind: "menu", fallback: true, title: "Waiting for your answer", question: asked ?? above.at(-1) ?? "The agent is waiting for your answer.",
-        body: above.join("\n") || null,
-        options: rows.map((row) => ({ label: row.replace(SELECTED_RE, "").replace(/^\d+\.\s+/, "").trim(), description: null })),
-        multi_select: false, custom_option_index: null,
-      }, {
-        responder: "fallback-menu", menuLabels: rows, selectedIndex: rows.findIndex((row) => SELECTED_RE.test(row)),
-        checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
-      }));
-    }
+  const menu = fallbackMenu(lines, shown);
+  if (menu) {
+    const above = shown.filter((index) => index < menu.start).map((index) => cleanLine(lines[index]!));
+    const asked = [...above].reverse().find((line) => ASKED_RE.test(line));
+    return publicPrompt(finishPrompt(agent, {
+      // the body is every line above the rows, so a changed command above a same-looking menu
+      // is another card; the display cap applies after the hash
+      kind: "menu", fallback: true, title: "Waiting for your answer", question: asked ?? above.at(-1) ?? "The agent is waiting for your answer.",
+      body: above.join("\n") || null,
+      options: menu.rows.map((row) => ({ label: row.label, description: row.description ?? null })),
+      multi_select: false, custom_option_index: null,
+    }, {
+      responder: "fallback-menu", menuLabels: menu.rows.map((row) => row.label), selectedIndex: 0,
+      checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+      optionSteps: menu.rows.map((row) => [{ text: String(row.number) }]),
+    }));
   }
-  const last = tail.map((index) => cleanLine(lines[index]!));
+  const last = shown.slice(-16).map((index) => cleanLine(lines[index]!));
+  const hints = last.slice(-2);
   const asked = [...last].reverse().find((line) => ASKED_RE.test(line));
-  // a (y/n) question takes a single letter, which is typed without an Enter: a program reading
-  // a whole line still waits for one, and the card that follows offers it
-  const yesNo = last.some((line) => YES_NO_RE.test(line));
+  // a (y/n) letter is offered only for the prompt at the screen's end, never for a mention
+  // above it; it is typed without an Enter: a program reading a whole line still waits for
+  // one, and the card that follows offers it
   const choices: { label: string; steps: AnswerStep[] }[] = [
-    ...(yesNo ? [{ label: "Yes (y)", steps: [{ text: "y" }] }, { label: "No (n)", steps: [{ text: "n" }] }] : []),
+    ...(hints.some((line) => YES_NO_RE.test(line)) ? [{ label: "Yes (y)", steps: [{ text: "y" }] }, { label: "No (n)", steps: [{ text: "n" }] }] : []),
+    ...(hints.some((line) => ARROWS_RE.test(line)) ? [{ label: "↑", steps: keySteps([KEY.up]) }, { label: "↓", steps: keySteps([KEY.down]) }] : []),
     { label: "Enter", steps: keySteps([KEY.enter]) },
     { label: "Esc", steps: keySteps([KEY.escape]) },
   ];
@@ -831,10 +826,31 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
 }
 
 /**
+ * A numbered menu (`1.` … `n.`, 2 to 9 rows, at most one marked) whose last row is followed only
+ * by a few hint lines: nothing that reads as a new prompt, an input box or another numbered row.
+ * A wrapped label is no guess here, since every row starts with its own number.
+ */
+function fallbackMenu(lines: string[], shown: number[]): { start: number; rows: NumberedRow[] } | null {
+  const lastRow = [...shown].reverse().find((index) => NUMBERED_OPTION_RE.test(cleanLine(lines[index]!)));
+  if (lastRow === undefined) return null;
+  const after = shown.filter((index) => index > lastRow).map((index) => cleanLine(lines[index]!));
+  if (after.length > MENU_TAIL_LINES || after.some((line) => SELECTED_RE.test(line) || NUMBERED_OPTION_RE.test(line))) return null;
+  // up from the last row, through rows and the lines they wrap onto, to a blank line or a rule
+  let start = lastRow;
+  while (start > 0 && cleanLine(lines[start - 1]!) && !isDivider(lines[start - 1]!)) start -= 1;
+  while (start < lastRow && !NUMBERED_OPTION_RE.test(cleanLine(lines[start]!))) start += 1;
+  const rows = parseNumberedRows(lines, start, lastRow + 1);
+  if (!sequentialRows(rows) || rows.length < 2 || rows.length > 9 || rows.filter((row) => row.selected).length > 1) return null;
+  return { start, rows };
+}
+
+/**
  * The panes whose current wait on an unknown screen is logged: once per wait, not per screen,
  * so a screen that keeps changing (a clock, a spinner) cannot log on every poll.
  */
 const fallbackLogged = new Set<string>();
+/** panes whose wait is logged at most; past it a new wait goes unlogged rather than relogging one */
+const FALLBACK_LOGGED_MAX = 256;
 
 /**
  * The question each pane's queue opened on when that was not the card's (a skipped
@@ -860,9 +876,8 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   // Codex's collapsed question queue reads blocked while its main prompt takes a message
   if (agent === "codex" && codexQuestionsCollapsed(screen)) return { agent, prompt: null };
   const prompt = parseFallbackPrompt(agent, screen);
-  if (!fallbackLogged.has(paneId)) {
+  if (!fallbackLogged.has(paneId) && fallbackLogged.size < FALLBACK_LOGGED_MAX) {
     fallbackLogged.add(paneId);
-    if (fallbackLogged.size > 64) fallbackLogged.delete(fallbackLogged.values().next().value!);
     console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
   }
   return { agent, prompt };

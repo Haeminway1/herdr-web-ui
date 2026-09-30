@@ -813,7 +813,7 @@ ${after}`;
 });
 
 describe("the fallback card for a blocked pane no reader knows", () => {
-  test("reads a marked menu it has no reader for, and answers from the native cursor", () => {
+  test("offers a numbered menu at the screen's end as options answered by their number", () => {
     const prompt = parseFallbackPrompt("gjc", `
  Apply these 3 file changes?
  src/a.ts, src/b.ts, src/c.ts
@@ -828,15 +828,30 @@ describe("the fallback card for a blocked pane no reader knows", () => {
     expect(prompt.fallback).toBe(true);
     expect(prompt.question).toBe("Apply these 3 file changes?");
     expect(labels(prompt)).toEqual(["Apply all", "Review each", "Discard"]);
-    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
-    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ text: "3" }]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ text: "1" }]);
     expect(() => answerKeys(prompt, { custom_text: "no" })).toThrow();
   });
 
-  test("keeps a cursor that is not on the first row", () => {
-    const prompt = parseFallbackPrompt("claude", "Continue?\n\n  Yes\n❯ No\n  Later\n");
-    expect(labels(prompt)).toEqual(["Yes", "No", "Later"]);
-    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
+  test("keeps a wrapped label on its own row, since each row starts with its number", () => {
+    const prompt = parseFallbackPrompt("gjc", "Trust this folder?\n\n❯ 1. No, exit and keep this folder\n     untrusted\n  2. Yes, trust folder\n  3. Yes, trust and allow hooks\n");
+    expect(labels(prompt)).toEqual(["No, exit and keep this folder", "Yes, trust folder", "Yes, trust and allow hooks"]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ text: "2" }]);
+  });
+
+  test("guesses no options for an unnumbered menu, offering the keys its hint names", () => {
+    const prompt = parseFallbackPrompt("claude", "Continue?\n\n  Yes\n❯ No\n  Later\n\n ↑/↓ to move · Enter to choose\n");
+    expect(prompt.title).toBe("Waiting for input");
+    expect(prompt.question).toBe("Continue?");
+    expect(labels(prompt)).toEqual(["↑", "↓", "Enter", "Esc"]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }]);
+  });
+
+  test("reads no menu once a new prompt or input box follows it", () => {
+    const done = parseFallbackPrompt("claude", "Pick one\n\n  1. Deny\n❯ 2. Allow\n\n● Done.\n❯ \n");
+    expect(labels(done)).toEqual(["Enter", "Esc"]);
+    const quoted = parseFallbackPrompt("claude", "> quoted example\n❯ Deny\n  Allow all\n");
+    expect(labels(quoted)).toEqual(["Enter", "Esc"]);
   });
 
   test("without a menu, shows the screen's last lines and offers Enter and Esc", () => {
@@ -849,15 +864,18 @@ describe("the fallback card for a blocked pane no reader knows", () => {
     expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["esc"] }]);
   });
 
-  test("offers a (y/n) question as Yes and No, typing the letter alone", () => {
+  test("offers a (y/n) question at the screen's end as Yes and No, typing the letter alone", () => {
     const prompt = parseFallbackPrompt("gjc", " config.json already exists.\n Overwrite it? (y/n)\n Press Enter to keep it, or Esc to abort\n");
     expect(prompt.question).toBe("Overwrite it? (y/n)");
     expect(labels(prompt)).toEqual(["Yes (y)", "No (n)", "Enter", "Esc"]);
     expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ text: "y" }]);
     expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ text: "n" }]);
-    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["enter"] }]);
-    expect(answerKeys(prompt, { option_index: 3 })).toEqual([{ keys: ["esc"] }]);
     expect(labels(parseFallbackPrompt("gjc", "Delete the branch? [Y/n] "))).toEqual(["Yes (y)", "No (n)", "Enter", "Esc"]);
+  });
+
+  test("offers no letters for a (y/n) only mentioned above the prompt", () => {
+    const prompt = parseFallbackPrompt("codex", 'The installer prints "Overwrite config? (y/n)".\nIt then exits.\n\n› Ask Codex to do anything\n  100% context left\n');
+    expect(labels(prompt)).toEqual(["Enter", "Esc"]);
   });
 
   test("takes the question from the line that asks it, not the hint below", () => {
@@ -867,8 +885,10 @@ describe("the fallback card for a blocked pane no reader knows", () => {
   });
 
   test("gives the same id to the same screen, and another to a changed one", () => {
-    const screen = "Pick\n\n❯ One\n  Two\n";
+    const screen = "Pick\n\n❯ 1. One\n  2. Two\n";
     expect(parseFallbackPrompt("omo", screen).id).toBe(parseFallbackPrompt("omo", screen).id);
     expect(parseFallbackPrompt("omo", screen.replace("Two", "Three")).id).not.toBe(parseFallbackPrompt("omo", screen).id);
+    const context = (command: string) => [`$ ${command}`, ...Array.from({ length: 14 }, (_, i) => `line ${i}`), "Run it?", "", "❯ 1. Yes", "  2. No", ""].join("\n");
+    expect(parseFallbackPrompt("gjc", context("rm -rf important")).id).not.toBe(parseFallbackPrompt("gjc", context("rm safe.tmp")).id);
   });
 });
