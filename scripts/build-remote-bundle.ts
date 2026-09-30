@@ -68,8 +68,6 @@ function verifyMachO(path: string): void {
 
 try {
   for (const dir of ["server", "shared", "dist", "node_modules"]) cpSync(join(root, dir), join(stage, dir), { recursive: true, dereference: false, filter: (path) => !path.endsWith(".test.ts") });
-  // dist carries third-party icon paths: their license notices travel with it
-  cpSync(join(root, "THIRD_PARTY_NOTICES.md"), join(stage, "THIRD_PARTY_NOTICES.md"));
   let bunVersion = Bun.version;
   // Use a reproducible LTS runtime instead of the builder's Node: newer local
   // binaries can require extra system libraries absent on an otherwise supported PC.
