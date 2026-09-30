@@ -18,6 +18,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   keep running while it updates.
 
 ### Fixed
+- Subscription usage no longer lists Copilot for everyone signed in to the GitHub CLI. GitHub
+  gives every account Copilot Free, so a Free plan found only through `gh` is left out; a
+  Copilot sign-in in an editor, or a paid plan, still shows.
 - Keep the shell at its full dynamic viewport height until a text field takes the keyboard,
   so an installed iPhone app's shorter idle visual viewport cannot leave a band under the
   composer. Direct terminal typing and pointer changes update keyboard sizing too.
