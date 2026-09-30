@@ -118,6 +118,8 @@ export function PaneTerminal({
   const [outputReady, setOutputReady] = useState(false);
   const [ended, setEnded] = useState(false);
   const [outputError, setOutputError] = useState<string | null>(null);
+  // another web bridge has this pane's terminal: the server waits for it and says attach-resumed
+  const [held, setHeld] = useState(false);
   // one-shot Control from the key bar: the ref is what onData reads, the state is what the bar shows
   const ctrlRef = useRef(false);
   const [ctrlArmed, setCtrlArmed] = useState(false);
@@ -550,6 +552,11 @@ export function PaneTerminal({
           term.options.disableStdin = observeRef.current || prompt !== null;
           setSecret((previous) => previous?.pane === owner && previous.prompt === prompt ? previous : prompt ? { pane: owner, prompt } : null);
         });
+      } else if (message.type === "attach-resumed") {
+        if (message.pane_id === paneRef.current) {
+          setHeld(false);
+          term.options.disableStdin = observeRef.current || secretRef.current !== null;
+        }
       } else if (message.type === "pty-exit") {
         if (message.pane_id === paneRef.current) setEnded(true);
       } else if (message.type === "role-ack") {
@@ -574,6 +581,13 @@ export function PaneTerminal({
         if (!observeRef.current || message.pane_id !== paneRef.current) return;
         if (term.cols !== message.cols || term.rows !== message.rows) term.resize(message.cols, message.rows);
       } else if (message.type === "error") {
+        if (message.code === "attach_held") {
+          // not an end: the server attaches as soon as the other bridge lets go
+          setHeld(true);
+          term.options.disableStdin = true;
+          setConnected(socket.connected);
+          return;
+        }
         if (message.code === "output_stalled" || message.code === "attach_conflict") {
           setOutputError(message.message);
           setEnded(true);
@@ -764,6 +778,7 @@ export function PaneTerminal({
     setEnded(false);
     setOutputReady(false);
     setOutputError(null);
+    setHeld(false);
     secretRef.current = null;
     setSecret(null);
     term.options.disableStdin = observeRef.current;
@@ -984,6 +999,11 @@ export function PaneTerminal({
         </div>
       )}
       <div className="terminal-banners">
+        {paneId !== null && held && (
+          <div className="terminal-banner terminal-banner-warning" role="status">
+            <span>{t("Another app has this pane open. It connects here as soon as that app lets go.")}</span>
+          </div>
+        )}
         {paneId !== null && outputError && (
           <div className="terminal-banner terminal-banner-warning terminal-banner-output-error" role="status">
             <span>{outputError}</span>
@@ -1110,7 +1130,7 @@ export function PaneTerminal({
           agent={agent}
           agentStatus={agentStatus}
           metadata={chatMetadata?.pane === paneId ? chatMetadata.value : null}
-          connected={connected}
+          connected={connected && !held}
           queueMode={busy}
           answerHint={answering === null ? null
             : pendingAnswer?.promptId === answering.id ? t("Confirm your answer in the card above, or type another…") : answerHint(answering)}
@@ -1119,7 +1139,7 @@ export function PaneTerminal({
           onUploadImage={uploadImage}
         />
       )}
-      {paneId !== null && !secretActive && !observing && !ended && inputLine && <TerminalInput key={paneId} connected={connected} onSend={sendTerminalLine} onEnter={pressEnter} />}
+      {paneId !== null && !secretActive && !observing && !ended && inputLine && <TerminalInput key={paneId} connected={connected && !held} onSend={sendTerminalLine} onEnter={pressEnter} />}
       {paneId !== null && !secretActive && !observing && !chatView && <KeyBar onKey={pressKey} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl}
         {...(coarse ? { directTyping, onToggleDirect: toggleDirect } : {})} />}
     </div>

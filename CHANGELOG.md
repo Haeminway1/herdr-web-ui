@@ -18,6 +18,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   keep running while it updates.
 
 ### Fixed
+- A pane whose terminal another web bridge on the same herdr has open (two installs side by
+  side) now waits for it instead of ending with "Another web bridge is attached": it says so,
+  keeps the chat readable, and attaches by itself as soon as the other bridge lets go.
 - Subscription usage no longer lists Copilot for everyone signed in to the GitHub CLI. GitHub
   gives every account Copilot Free, so a Free plan found only through `gh` is left out; a
   Copilot sign-in in an editor, or a paid plan, still shows.

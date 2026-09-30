@@ -443,6 +443,8 @@ export type ServerMessage =
   /** raw PTY bytes: append to the terminal, never repaint over it */
   | { type: "pty-data"; pane_id: string; data: string; flow?: { stream_id: string; offset: number } }
   | { type: "pty-exit"; pane_id: string; code: number | null }
+  /** a pane that waited for another web bridge to let go of its terminal (error `attach_held`) is attached again */
+  | { type: "attach-resumed"; pane_id: string }
   /** the shared pty's grid changed: observe clients adopt it, interact clients drive it */
   | { type: "pane-geometry"; pane_id: string; cols: number; rows: number }
   | { type: "role-ack"; mode: ClientRole }

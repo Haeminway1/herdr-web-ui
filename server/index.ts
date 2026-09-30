@@ -74,6 +74,9 @@ const ATTACH_RETRY_MS = 50;
 const ATTACH_RETRY_MAX_MS = 500;
 /** a refused attach says so within milliseconds of its first bytes: those are held this long */
 const ATTACH_HOLD_MS = 100;
+/** how often a terminal another web bridge holds is tried again, while clients here still want it */
+const ATTACH_HELD_RETRY_MS = 3_000;
+const ATTACH_HELD_MESSAGE = "Another web bridge has this pane open. It connects here as soon as that bridge lets go.";
 /** The gap between a composer message's text and its Enter (see submitText). */
 export const SUBMIT_DELAY_MS = 120;
 /**
@@ -157,6 +160,8 @@ interface PaneAttachment {
   /** bounded tail so a client joining late still sees the current screen */
   replay: ReplayBuffer;
   stalled: Map<Client, number>;
+  /** another web bridge holds herdr's one attach slot for this terminal: waiting for it to let go */
+  held?: boolean;
 }
 
 function send(client: Client, message: ServerMessage): number {
@@ -201,10 +206,13 @@ export function createServer(
     alertTiming?: Partial<AlertTiming>;
     /** ATTACH_RETRY_FOR_MS; tests shorten it */
     attachRetryForMs?: number;
+    /** ATTACH_HELD_RETRY_MS; tests shorten it */
+    attachHeldRetryMs?: number;
   } = {},
 ): { port: number; hostname: string; stop: () => void } {
   const attachments = new Map<string, PaneAttachment>();
   const retryFor = options.attachRetryForMs ?? ATTACH_RETRY_FOR_MS;
+  const heldRetry = options.attachHeldRetryMs ?? ATTACH_HELD_RETRY_MS;
   /** attachments still resolving their terminal, so concurrent attaches share one pty */
   const pendingAttachments = new Map<string, Promise<PaneAttachment>>();
   // herdr releases its exclusive attach slot only after the old process exits.
@@ -484,7 +492,14 @@ export function createServer(
           if (attachments.get(paneId) !== attachment) return;
           output = (output + data).slice(-1024);
           if (held === null) return forward(data);
-          if (held === "") holdTimer = setTimeout(release, ATTACH_HOLD_MS);
+          if (held === "") holdTimer = setTimeout(() => {
+            // the attach took: a pane that waited for another bridge is this bridge's again
+            if (attachment.held) {
+              attachment.held = false;
+              broadcast(paneId, { type: "attach-resumed", pane_id: paneId });
+            }
+            release();
+          }, ATTACH_HOLD_MS);
           held += data;
         },
         onExit: (code) => {
@@ -509,8 +524,31 @@ export function createServer(
             }, Math.min(ATTACH_RETRY_MS * 2 ** (retries - 1), ATTACH_RETRY_MAX_MS));
             return;
           }
+          if (code !== 0 && /already has an attached client|retry with --takeover/.test(output)) {
+            held = null; // herdr's refusal is not the pane's output: never painted, and it repeats
+            // Another web bridge holds herdr's one attach slot (two bridges on one herdr, e.g. a
+            // second install beside the first). Its attach is left alone; this pane waits for it
+            // to let go, trying again while anyone here still has it open, instead of ending.
+            if (!attachment.held) broadcast(paneId, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE });
+            attachment.held = true;
+            setTimeout(() => {
+              if (attachments.get(paneId) !== attachment) return;
+              if (attachment.clients.size === 0) {
+                closeAttachment(paneId);
+                return;
+              }
+              try {
+                attachment.pty = start();
+              } catch (error) {
+                const message = spawnFailure(paneId, error);
+                broadcast(paneId, { type: "error", code: "command_failed", message });
+                broadcast(paneId, { type: "pty-exit", pane_id: paneId, code: null });
+                closeAttachment(paneId);
+              }
+            }, heldRetry);
+            return;
+          }
           release();
-          if (code !== 0 && /already has an attached client|retry with --takeover/.test(output)) broadcast(paneId, { type: "error", code: "attach_conflict", message: "Another web bridge is attached to this pane. Disconnect its browser or reuse that bridge; the existing attach was left unchanged." });
           broadcast(paneId, { type: "pty-exit", pane_id: paneId, code });
           closeAttachment(paneId);
         },
@@ -1175,6 +1213,8 @@ export function createServer(
               // hand the newcomer the current screen it would otherwise have missed
               const replay = attachment.replay.text();
               if (!alreadyAttached && replay) sendOutput(client, message.pane_id, replay);
+              // a pane waiting for another web bridge to let go says so to each newcomer, too
+              if (!alreadyAttached && attachment.held) send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE });
               reconcileOutput(message.pane_id);
               if (client.data.closing) break;
               if (client.data.mode === "interact") {
