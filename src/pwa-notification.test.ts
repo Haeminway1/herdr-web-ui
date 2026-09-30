@@ -13,13 +13,17 @@ function deferred() {
 }
 
 /** Execute the shipped worker, including its asynchronous notificationclick listener. */
-function notifications(windows: WindowClient[], matchAll = async () => windows) {
+function notifications(
+  windows: WindowClient[],
+  matchAll = async () => windows,
+  openWindow: (url: string) => Promise<WindowClient | null> = async () => null,
+) {
   const listeners = new Map<string, (event: unknown) => void>();
   const opened: string[] = [];
   let closed = 0;
   const self = {
     addEventListener: (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
-    clients: { matchAll, openWindow: async (url: string) => { opened.push(url); } },
+    clients: { matchAll, openWindow: async (url: string) => { opened.push(url); return openWindow(url); } },
   };
   new Function("self", readFileSync(join(import.meta.dir, "..", "public", "sw.js"), "utf8"))(self);
   const click = (paneId: string | null = "pane-a", machineId = "local"): Promise<void> => {
@@ -201,5 +205,70 @@ describe("notification clicks", () => {
     expect(newer.selected.at(-1)).toEqual({ type: "select-pane", pane_id: "pane-b", machine_id: "remote" });
     expect(older.selected).toEqual([{ type: "select-pane", pane_id: "pane-a", machine_id: "local" }]);
     expect(worker.opened).toEqual([]);
+  });
+
+  for (const fallback of [false, true]) {
+    it(`a delayed ${fallback ? "focus fallback" : "cold app"} window shows the latest tap when it opens last`, async () => {
+      const opening = deferred();
+      const ready = deferred();
+      let foreground = "";
+      let focuses = 0;
+      const refused = client(async () => { focuses++; throw new Error("NotAllowedError"); });
+      const newer = client(async () => { focuses++; foreground = "newer"; }, true);
+      const opened = client();
+      let lookups = 0;
+      const worker = notifications([], async () => {
+        if (++lookups > 1) return [newer];
+        return fallback ? [refused] : [];
+      }, async () => {
+        opening.resolve();
+        await ready.promise;
+        foreground = "opened";
+        return opened;
+      });
+      const first = worker.click("older pane/?", "first&pc");
+      await opening.promise;
+      const selection = { type: "select-pane", pane_id: "latest pane/?", machine_id: "remote&pc" };
+      // A frozen open must not hold up a later click on an existing window.
+      await worker.click(selection.pane_id, selection.machine_id);
+      expect(foreground).toBe("newer");
+      ready.resolve();
+      await first;
+      expect(foreground).toBe("opened");
+      expect(opened.selected.at(-1)).toEqual(selection);
+      expect(newer.selected.at(-1)).toEqual(selection);
+      expect(worker.opened).toEqual(["/?machine=first%26pc&pane=older%20pane%2F%3F"]);
+      expect(focuses).toBe(fallback ? 2 : 1);
+    });
+  }
+
+  it("repairs an opened window while the newest notification's client lookup is still pending", async () => {
+    const opening = deferred();
+    const ready = deferred();
+    const lookup = deferred();
+    const opened = client();
+    const newer = client();
+    let lookups = 0;
+    const worker = notifications([], async () => {
+      if (++lookups === 1) return [];
+      await lookup.promise;
+      return [newer];
+    }, async () => {
+      opening.resolve();
+      await ready.promise;
+      return opened;
+    });
+    const first = worker.click("pane-a");
+    await opening.promise;
+    const selection = { type: "select-pane", pane_id: "pane-b", machine_id: "second/pc" };
+    const second = worker.click(selection.pane_id, selection.machine_id);
+    ready.resolve();
+    await first;
+    expect(opened.selected.at(-1)).toEqual(selection);
+    expect(newer.selected).toEqual([]);
+    lookup.resolve();
+    await second;
+    expect(newer.selected.at(-1)).toEqual(selection);
+    expect(worker.opened).toEqual(["/?machine=local&pane=pane-a"]);
   });
 });

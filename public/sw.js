@@ -121,6 +121,12 @@ self.addEventListener("notificationclick", (event) => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       if (click !== latestNotificationClick) return;
       const url = paneId ? `/?machine=${encodeURIComponent(machineId)}&pane=${encodeURIComponent(paneId)}` : "/";
+      const selectLatest = (client) => { if (client && latestNotificationSelection) client.postMessage(latestNotificationSelection); };
+      const open = async () => {
+        // An opening can also finish after a newer tap. Repair that returned
+        // window, while its URL still selects the original pane on a cold start.
+        selectLatest(await self.clients.openWindow(url));
+      };
       const target = windows.find((client) => client.focused) || windows[0];
       if (target) {
         const select = () => { if (paneId) target.postMessage({ type: "select-pane", pane_id: paneId, machine_id: machineId }); };
@@ -132,16 +138,16 @@ self.addEventListener("notificationclick", (event) => {
           await target.focus();
         } catch (err) {
           // that window cannot be brought forward: open the app on the pane instead
-          if (click === latestNotificationClick) await self.clients.openWindow(url);
+          if (click === latestNotificationClick) await open();
           return;
         }
         // Different windows finish focus independently. A late older focus can put
         // its window in front after a newer tap focused another one. Give whichever
         // window just came forward the latest selection, without another focus loop.
-        if (latestNotificationSelection) target.postMessage(latestNotificationSelection);
+        selectLatest(target);
         return;
       }
-      await self.clients.openWindow(url);
+      await open();
     })(),
   );
 });
