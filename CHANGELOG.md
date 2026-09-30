@@ -14,6 +14,65 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   original **Amber**.
 - Settings → Appearance can show Clawd, Claude Code's mascot, on Claude panes and the Codex
   logo (a blue cloud with a prompt) on Codex panes instead of the provider logos.
+
+### Fixed
+- A pane herdr reports waiting for input gets a card in the chat even when no reader knows its
+  screen (Codex's collapsed question queue keeps its own handling). A numbered menu that still
+  takes the answer is offered as its options, each answered by typing its number; anything
+  else shows the screen's last lines with Enter and Esc, plus Yes and No for a `(y/n)` prompt
+  and arrows when its hint names them. An answer to a changed screen is refused. Each such
+  wait is logged once.
+- **Add PC** on a Windows host now says that Windows hosts are not supported yet, instead of
+  failing with the host shell's "'sh' is not recognized" (#189).
+- A pane waiting for another web bridge no longer frees its input for a moment and reports the
+  wait twice when herdr's refusal of a retry arrives slowly (a busy PC).
+
+## [0.3.35] - 2026-09-30
+
+### Added
+- A Korean README (`README.ko.md`), linked from the English, Simplified Chinese and
+  Japanese READMEs.
+
+### Changed
+- Remote PCs without their own herdr get herdr 0.9.3 in the bundled runtime (was 0.9.1),
+  along with this release's event-stream recovery for the remote bridge. The runtime is
+  version 8: a connected PC's bridge asks for **Update bridge…** once, and herdr sessions
+  keep running while it updates.
+
+### Fixed
+- Claude Code's unnumbered menus, such as the folder-trust check on a folder it has not seen
+  ("Enter to confirm · Esc to cancel"), show as a card in the chat and can be answered there.
+  herdr reported the pane INPUT, but no card appeared. An answer presses Enter only once the
+  cursor is on the row it answers; a menu whose rows cannot be told apart gets no card.
+- The iPhone home-screen app starts below the status bar instead of drawing beneath it, so the
+  header text is no longer blurred on iOS 27 (#164). iOS reads this when the app is added, so an
+  existing install keeps the blur until it is removed from the Home Screen and added again; send
+  or copy unsent drafts and queued messages first. See [the testing guide](docs/ios-home-screen-testing.md).
+- A Codex pane no longer reads RUN for good after its first turn. herdr reports Codex as
+  `unknown` at rest, and that was taken for more work; the agent that worked reading `unknown`
+  is now a finish (DONE until seen, with its done alert). Late session snapshots no longer
+  end a newer turn, and DONE follows the agent that finished.
+- Subscription usage no longer lists Copilot for everyone signed in to the GitHub CLI. GitHub
+  gives every account Copilot Free, so a Free plan found only through `gh` is left out; a
+  Copilot sign-in in an editor, or a paid plan, still shows.
+- A local or remote PC refresh no longer replaces a newer pane status with an older
+  snapshot. Status and session changes received during a refresh queue a fresh load.
+- The installed iPhone app no longer leaves a band under the composer. The shell keeps its
+  full height until a text field takes the keyboard, and the keyboard sizing also follows
+  direct terminal typing and pointer changes, and clears when a focused field goes away.
+- Tapping an alert opens its PC and pane, also when the tap starts the app or focusing the
+  window is refused; the newest tap wins over an older one still opening.
+- A pane whose terminal another web bridge on the same herdr has open (two installs side by
+  side) now waits for it instead of ending with "Another web bridge is attached": it says so,
+  keeps the chat readable, and attaches by itself as soon as the other bridge lets go.
+
+## [0.3.34] - 2026-09-30
+
+### Added
+- On a phone, a swipe in from the left edge opens the workspace list and a swipe to the left
+  closes it.
+- While typing in the chat on a phone, a tap on the transcript, a drag down it, or the new
+  **Hide keyboard** button puts the keyboard away to read; the draft stays in the composer.
 - A pane herdr could not restore after a restart (herdr 0.9.3+, e.g. its folder was
   removed) is marked NOT RESTORED in the sidebar, and selecting it shows herdr's reason
   instead of a terminal that ends at once. The server no longer tries to attach it.
@@ -41,24 +100,28 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   `HERDR_WEB_UI_REF` still picks another branch or tag.
 
 ### Fixed
-- Enforce device permissions and request origins consistently, persist device changes before reporting success, and stop alerts after device access is revoked.
-- Show remote conversation images and full tool output, including Codex output inherited from earlier rollouts.
+- Enforce device permissions and request origins consistently, persist device changes
+  before reporting success, and stop alerts after device access is revoked. A device that
+  can only watch can no longer read files on a connected PC through a path with an empty
+  segment, and an alert subscription made before any pairing stops once pairing closes the
+  open network.
+- Show remote conversation images and full tool output, including Codex output inherited
+  from earlier rollouts.
 - Dragging terminal text copies the visible selection immediately, including when an
   installed app's asynchronous clipboard permission is blocked. Scrollback copies
   reserve clipboard access during the release gesture; delayed or empty selection
   responses cannot erase a newer copy.
-- Show remote conversation images and full tool output, including Codex output inherited from earlier rollouts.
-- Settle sent composer drafts across pane switches and cancel all delayed completion alerts when work resumes.
-
+- Settle sent composer drafts across pane switches and cancel all delayed completion
+  alerts when work resumes.
 - Closing the selected pane with the sidebar's X no longer puts the keyboard on the pane
   selected in its place. On a phone it came up over the drawer, in the way of closing the
   next pane. A pane or lens the user picks still takes the keyboard.
 - Pane statuses and web push recover when herdr drops the app's event stream: herdr 0.9.2
   and newer close a listener that falls behind, and herdr restarts do the same. Every
   stream now reconnects at once, keeps trying while herdr restarts, and reads back what
-  it missed from herdr, so a
-  pane created meanwhile is no longer left without status or alerts for up to a minute,
-  and an alert for a pane that has since gone quiet is called off instead of sent.
+  it missed from herdr, so a pane created meanwhile is no longer left without status or
+  alerts for up to a minute, and an alert for a pane that has since gone quiet is called
+  off instead of sent.
 
 ## [0.3.33] - 2026-09-29
 

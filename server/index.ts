@@ -68,12 +68,27 @@ const MAX_REPLAY_BYTES = 256 * 1024;
  * 400-line read of an idle Codex pane took about a second, refusing every attach meanwhile.
  */
 const ATTACH_READ_RACE_RE = /has a read in progress; retry/;
+/**
+ * herdr's refusal when another client holds the terminal's one attach slot. It is the attach's
+ * last line, after its teardown: the same words earlier in the pane's own output are not it.
+ */
+const ATTACH_HELD_RE = /terminal attach failed: [^\r\n]*(?:already has an attached client|retry with --takeover)[^\r\n]*\s*$/;
 /** how long refused attaches are retried: herdr's longest read of that kind */
 const ATTACH_RETRY_FOR_MS = 20_000;
 const ATTACH_RETRY_MS = 50;
 const ATTACH_RETRY_MAX_MS = 500;
 /** a refused attach says so within milliseconds of its first bytes: those are held this long */
 const ATTACH_HOLD_MS = 100;
+/** how often a terminal another web bridge holds is tried again, while clients here still want it */
+const ATTACH_HELD_RETRY_MS = 3_000;
+/**
+ * herdr refusing an attach, its line (maybe not all of it yet) the last output, before the
+ * exit has come. The same words earlier in the pane's own output, with more after them, are not it.
+ */
+const ATTACH_REFUSING_RE = /terminal attach failed[^\r\n]*\s*$/;
+/** how long a refusal's exit is waited for before its output is taken for the pane's own */
+const ATTACH_REFUSAL_EXIT_MS = 2_000;
+const ATTACH_HELD_MESSAGE = "Another web bridge has this pane open. It connects here as soon as that bridge lets go.";
 /** The gap between a composer message's text and its Enter (see submitText). */
 export const SUBMIT_DELAY_MS = 120;
 /**
@@ -157,6 +172,10 @@ interface PaneAttachment {
   /** bounded tail so a client joining late still sees the current screen */
   replay: ReplayBuffer;
   stalled: Map<Client, number>;
+  /** another web bridge holds herdr's one attach slot for this terminal: waiting for it to let go */
+  held?: boolean;
+  /** the next try at a held terminal; a closed attachment cancels it */
+  heldRetry?: ReturnType<typeof setTimeout>;
 }
 
 function send(client: Client, message: ServerMessage): number {
@@ -201,10 +220,13 @@ export function createServer(
     alertTiming?: Partial<AlertTiming>;
     /** ATTACH_RETRY_FOR_MS; tests shorten it */
     attachRetryForMs?: number;
+    /** ATTACH_HELD_RETRY_MS; tests shorten it */
+    attachHeldRetryMs?: number;
   } = {},
 ): { port: number; hostname: string; stop: () => void } {
   const attachments = new Map<string, PaneAttachment>();
   const retryFor = options.attachRetryForMs ?? ATTACH_RETRY_FOR_MS;
+  const heldRetry = options.attachHeldRetryMs ?? ATTACH_HELD_RETRY_MS;
   /** attachments still resolving their terminal, so concurrent attaches share one pty */
   const pendingAttachments = new Map<string, Promise<PaneAttachment>>();
   // herdr releases its exclusive attach slot only after the old process exits.
@@ -381,6 +403,7 @@ export function createServer(
     const attachment = attachments.get(paneId);
     if (!attachment) return;
     attachments.delete(paneId);
+    clearTimeout(attachment.heldRetry);
     // its members hold nothing on this pane any more (a pty that exited leaves them on
     // the "terminal ended" screen): a stale entry would read as a live claim in
     // releaseUnclaimed and keep a later, empty pty on this pane running
@@ -463,6 +486,7 @@ export function createServer(
       // its first bytes wait ATTACH_HOLD_MS: a refusal (herdr's setup, teardown and message)
       // is dropped then, never painted into the clients' terminal
       let held: string | null = "";
+      let heldSince = 0;
       let holdTimer: ReturnType<typeof setTimeout> | undefined;
       const release = (): void => {
         clearTimeout(holdTimer);
@@ -470,6 +494,24 @@ export function createServer(
         const data = held;
         held = null;
         if (data) forward(data);
+      };
+      const took = (): void => {
+        // a closed attachment's kill skips onExit, which would clear this timer: a newer
+        // attachment on the pane must not hear this one's resume
+        if (attachments.get(paneId) !== attachment) return;
+        // a refusal whose exit comes late (a busy PC) is not an attach: onExit handles it, and
+        // resuming here would free the input, then report attach_held a second time. A pane
+        // whose own output only ends like one is painted once that exit is overdue.
+        if (ATTACH_REFUSING_RE.test(output) && Date.now() - heldSince < ATTACH_REFUSAL_EXIT_MS) {
+          holdTimer = setTimeout(took, ATTACH_HOLD_MS);
+          return;
+        }
+        // the attach took: a pane that waited for another bridge is this bridge's again
+        if (attachment.held) {
+          attachment.held = false;
+          broadcast(paneId, { type: "attach-resumed", pane_id: paneId });
+        }
+        release();
       };
       return new PtySession({
         command: process.env["HERDR_WEB_HERDR_BIN"] || "herdr",
@@ -484,7 +526,10 @@ export function createServer(
           if (attachments.get(paneId) !== attachment) return;
           output = (output + data).slice(-1024);
           if (held === null) return forward(data);
-          if (held === "") holdTimer = setTimeout(release, ATTACH_HOLD_MS);
+          if (held === "") {
+            heldSince = Date.now();
+            holdTimer = setTimeout(took, ATTACH_HOLD_MS);
+          }
           held += data;
         },
         onExit: (code) => {
@@ -509,8 +554,34 @@ export function createServer(
             }, Math.min(ATTACH_RETRY_MS * 2 ** (retries - 1), ATTACH_RETRY_MAX_MS));
             return;
           }
+          if (code !== 0 && ATTACH_HELD_RE.test(output)) {
+            held = null; // herdr's refusal is not the pane's output: never painted, and it repeats
+            // waiting for the other bridge is not a read race: the next one gets its full budget
+            refusedSince = null;
+            retries = 0;
+            // Another web bridge holds herdr's one attach slot (two bridges on one herdr, e.g. a
+            // second install beside the first). Its attach is left alone; this pane waits for it
+            // to let go, trying again while anyone here still has it open, instead of ending.
+            if (!attachment.held) broadcast(paneId, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: paneId });
+            attachment.held = true;
+            attachment.heldRetry = setTimeout(() => {
+              if (attachments.get(paneId) !== attachment) return;
+              if (attachment.clients.size === 0) {
+                closeAttachment(paneId);
+                return;
+              }
+              try {
+                attachment.pty = start();
+              } catch (error) {
+                const message = spawnFailure(paneId, error);
+                broadcast(paneId, { type: "error", code: "command_failed", message });
+                broadcast(paneId, { type: "pty-exit", pane_id: paneId, code: null });
+                closeAttachment(paneId);
+              }
+            }, heldRetry);
+            return;
+          }
           release();
-          if (code !== 0 && /already has an attached client|retry with --takeover/.test(output)) broadcast(paneId, { type: "error", code: "attach_conflict", message: "Another web bridge is attached to this pane. Disconnect its browser or reuse that bridge; the existing attach was left unchanged." });
           broadcast(paneId, { type: "pty-exit", pane_id: paneId, code });
           closeAttachment(paneId);
         },
@@ -726,7 +797,7 @@ export function createServer(
 
       if (pathname === "/api/session") {
         try {
-          return jsonResponse({ snapshot: completions.present(await labelOmoPanes(await sessionSnapshot())) });
+          return jsonResponse({ snapshot: await completions.readSnapshot(sessionSnapshot, labelOmoPanes) });
         } catch (error) {
           return errorResponse(error);
         }
@@ -1124,7 +1195,7 @@ export function createServer(
         if (client.data.relay) { client.data.relay.bind(client as ServerWebSocket<unknown>); return; }
         clients.add(client);
         try {
-          send(client, { type: "snapshot", snapshot: completions.present(await labelOmoPanes(await sessionSnapshot())), features: SERVER_FEATURES });
+          send(client, { type: "snapshot", snapshot: await completions.readSnapshot(sessionSnapshot, labelOmoPanes), features: SERVER_FEATURES });
         } catch (error) {
           const code = error instanceof HerdrError ? error.code : "snapshot_failed";
           send(client, { type: "error", code, message: error instanceof Error ? error.message : String(error) });
@@ -1175,6 +1246,8 @@ export function createServer(
               // hand the newcomer the current screen it would otherwise have missed
               const replay = attachment.replay.text();
               if (!alreadyAttached && replay) sendOutput(client, message.pane_id, replay);
+              // a pane waiting for another web bridge to let go says so to each newcomer, too
+              if (!alreadyAttached && attachment.held) send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
               reconcileOutput(message.pane_id);
               if (client.data.closing) break;
               if (client.data.mode === "interact") {
@@ -1216,10 +1289,16 @@ export function createServer(
               // the pty holds a lone ESC ~150ms and a Stop would overtake nothing
               // typing reaches an attached pane only, queued or not
               const attachment = attachments.get(message.pane_id);
-              if (!attachment) break;
+              // another web bridge has this pane's terminal: nothing typed here reaches it
+              if (!attachment || attachment.held) break;
               if (paneQueues.has(message.pane_id)) {
                 const text = message.text;
-                void serialize(message.pane_id, () => { authorizeSocket(client); return paneSendText(message.pane_id, text); }).catch(() => undefined);
+                void serialize(message.pane_id, () => {
+                  // held while this waited its turn: it goes nowhere, as unqueued typing would
+                  if (attachments.get(message.pane_id)?.held) return;
+                  authorizeSocket(client);
+                  return paneSendText(message.pane_id, text);
+                }).catch(() => undefined);
               } else {
                 attachment.pty.write(message.text);
                 lastTyped.set(message.pane_id, Date.now());
@@ -1247,7 +1326,19 @@ export function createServer(
                 send(client, { type: "error", code: "read_only", message: "this connection is in observe mode" });
                 break;
               }
-              await serialize(message.pane_id, () => { authorizeSocket(client); return paneSendKeys(message.pane_id, message.keys); });
+              if (attachments.get(message.pane_id)?.held) {
+                send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
+                break;
+              }
+              await serialize(message.pane_id, () => {
+                // held while this waited its turn (the attach was refused after the check above)
+                if (attachments.get(message.pane_id)?.held) {
+                  send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
+                  return;
+                }
+                authorizeSocket(client);
+                return paneSendKeys(message.pane_id, message.keys);
+              });
               break;
             }
             case "secret": {
@@ -1294,9 +1385,18 @@ export function createServer(
                 result(false, "read_only", "this connection is in observe mode");
                 break;
               }
+              // another web bridge has this pane's terminal: its user types there, not this one
+              if (attachments.get(message.pane_id)?.held) {
+                result(false, "attach_held", ATTACH_HELD_MESSAGE);
+                break;
+              }
               const arrivedAt = Date.now();
               try {
-                await serialize(message.pane_id, () => submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client)));
+                await serialize(message.pane_id, () => {
+                  // held while this waited its turn (the attach was refused after the check above)
+                  if (attachments.get(message.pane_id)?.held) throw new HerdrError("attach_held", ATTACH_HELD_MESSAGE);
+                  return submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client));
+                });
                 result(true);
               } catch (error) {
                 result(false, error instanceof HerdrError ? error.code : "submit_failed", error instanceof Error ? error.message : String(error));

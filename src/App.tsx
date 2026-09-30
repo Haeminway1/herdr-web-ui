@@ -31,6 +31,7 @@ import {
   type NotificationState,
 } from "./lib/notifications.ts";
 import { ensurePushSubscription, pushSupported, removePushSubscription } from "./lib/push.ts";
+import { onNotificationTarget } from "./lib/notificationTarget.ts";
 import { useUpdates } from "./lib/updates.ts";
 import { UpdateNotice } from "./components/UpdateControls.tsx";
 import { FilesDialog } from "./components/FilesDialog.tsx";
@@ -39,6 +40,7 @@ import { OpenFileContext } from "./lib/filePaths.ts";
 import { useFileViewer } from "./lib/useFileViewer.ts";
 import { useT } from "./lib/i18n.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
+import { watchDrawerSwipe } from "./lib/edgeSwipe.ts";
 
 const APP_TITLE = "herdr web ui";
 const POLL_MS = 5000;
@@ -160,6 +162,9 @@ export function App() {
   // phone's keyboard (over the drawer the close was tapped in) until the user picks a pane or lens
   const [autoSelected, setAutoSelected] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerOpenRef = useRef(drawerOpen); drawerOpenRef.current = drawerOpen;
+  // on a phone the drawer follows a swipe in from the left edge, and a swipe back (lib/edgeSwipe.ts)
+  useEffect(() => watchDrawerSwipe(() => drawerOpenRef.current, setDrawerOpen), []);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [view, setViewState] = useState<PaneView>("terminal");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -423,15 +428,7 @@ export function App() {
   }, []);
 
   // a tapped notification focuses this window and names the pane (public/sw.js)
-  useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
-    const onMessage = (event: MessageEvent) => {
-      const data = event.data as { type?: unknown; pane_id?: unknown; machine_id?: unknown } | null;
-      if (data?.type === "select-pane" && typeof data.pane_id === "string") selectTargetRef.current(typeof data.machine_id === "string" ? data.machine_id : "local", data.pane_id);
-    };
-    navigator.serviceWorker.addEventListener("message", onMessage);
-    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
-  }, []);
+  useEffect(() => onNotificationTarget((target) => selectTargetRef.current(target.machine_id, target.pane_id)), []);
 
   // the ?pane= a notification opened us with has done its job once it selected the pane
   useEffect(() => {

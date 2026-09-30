@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { InteractivePrompt } from "../shared/protocol.ts";
 
-import { answerKeys, codexQuestionsCollapsed, codexQueuedPrompt, parseInteractivePrompt } from "./prompt.ts";
+import { answerKeys, codexQuestionsCollapsed, codexQueuedPrompt, parseFallbackPrompt, parseInteractivePrompt } from "./prompt.ts";
 
 const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
 
@@ -702,5 +702,212 @@ cancel
 
   test("does not take an answered menu above later output for an open one", () => {
     expect(parseInteractivePrompt("claude", narrow + "\n● Done.\n\n> ")).toBeNull();
+  });
+});
+
+describe("Claude's unnumbered menus", () => {
+  // Claude Code 2.1.285 on a folder it has not seen, as herdr's pane read shows it (live)
+  const trust = (selected: 0 | 1 = 0, after = "") => `
+❯ claude --model claude-haiku-4-5-20251001
+
+────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /home/user/projects/new-app
+
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+ project, or work from your team). If not, take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ${selected === 0 ? "❯" : " "} No, exit
+ ${selected === 1 ? "❯" : " "} Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+${after}`;
+
+  test("reads the folder-trust check as a menu with its question and both rows", () => {
+    const prompt = parseInteractivePrompt("claude", trust())!;
+    expect(prompt).not.toBeNull();
+    expect(prompt.kind).toBe("menu");
+    expect(prompt.title).toBe("Accessing workspace");
+    expect(prompt.question).toBe("Is this a project you created or one you trust?");
+    expect(labels(prompt)).toEqual(["No, exit", "Yes, I trust this folder"]);
+    expect(prompt.body).toContain("Claude Code'll be able to read, edit, and execute files here.");
+  });
+
+  test("answers from the native cursor, and keeps its id when only the cursor moves", () => {
+    const prompt = parseInteractivePrompt("claude", trust())!;
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    const moved = parseInteractivePrompt("claude", trust(1))!;
+    expect(moved.id).toBe(prompt.id);
+    expect(answerKeys(moved, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
+    expect(() => answerKeys(prompt, { custom_text: "maybe" })).toThrow();
+  });
+
+  test("is gone once the menu is answered and Claude draws under it", () => {
+    expect(parseInteractivePrompt("claude", trust(1, " ▐▛███▛█   Claude Code v2.1.285\n❯ Try \"fix typecheck errors\"\n"))).toBeNull();
+  });
+
+  test("keeps a label a narrow pane wrapped as one row", () => {
+    // 24 columns: the panel's sentences and the second row both reach the edge and wrap
+    const narrow = (selected: 0 | 1) => `
+ Accessing workspace:
+
+ Quick safety check: Is
+ this a project you
+ created or one you
+ trust?
+
+ ${selected === 0 ? "❯" : " "} No, exit
+ ${selected === 1 ? "❯" : " "} Yes, I trust this
+   folder
+
+ Enter to confirm · Esc
+ to cancel
+`;
+    const prompt = parseInteractivePrompt("claude", narrow(0))!;
+    expect(labels(prompt)).toEqual(["No, exit", "Yes, I trust this folder"]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+    expect(labels(parseInteractivePrompt("claude", narrow(1)))).toEqual(["No, exit", "Yes, I trust this folder"]);
+  });
+
+  test("never takes the next row for a wrapped label when a row is the widest line", () => {
+    // nothing else on screen reaches as far as the first row, so it says nothing of the pane's
+    // width: the line under it may be its tail or the next row, and a guess answers the wrong row
+    const two = (selected: 0 | 1) => `
+ Trust?
+
+ ${selected === 0 ? "❯" : " "} Yes, trust this folder and continue
+ ${selected === 1 ? "❯" : " "} No, exit
+
+ Enter to confirm · Esc to cancel
+`;
+    expect(parseInteractivePrompt("claude", two(0))).toBeNull();
+    // with the cursor on it, the second line is a row for certain
+    expect(labels(parseInteractivePrompt("claude", two(1)))).toEqual(["Yes, trust this folder and continue", "No, exit"]);
+    // merged, this would show two options and answer the second with one Down, the real `Yes`
+    const three = `
+ Trust?
+
+ ❯ No, exit and keep this folder untrusted
+   Yes
+   Yes, and allow hooks too
+
+ Enter to confirm · Esc to cancel
+`;
+    expect(parseInteractivePrompt("claude", three)).toBeNull();
+    const panel = ` Trust? The first row is not the widest line here, so this one tells the width.\n${three.slice(" Trust?\n".length + 1)}`;
+    const prompt = parseInteractivePrompt("claude", panel);
+    expect(labels(prompt)).toEqual(["No, exit and keep this folder untrusted", "Yes", "Yes, and allow hooks too"]);
+    expect(answerKeys(prompt!, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  test("leaves numbered rows and a menu without one selected row to the other readers", () => {
+    expect(parseInteractivePrompt("claude", "Pick one\n\n❯ 1. First\n  2. Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
+    expect(parseInteractivePrompt("claude", "Pick one\n\n  First\n  Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
+  });
+});
+
+describe("the fallback card for a blocked pane no reader knows", () => {
+  test("offers a numbered menu at the screen's end as options answered by their number", () => {
+    const prompt = parseFallbackPrompt("gjc", `
+ Apply these 3 file changes?
+ src/a.ts, src/b.ts, src/c.ts
+
+ › 1. Apply all
+   2. Review each
+   3. Discard
+
+ ↵ choose · esc back
+`);
+    expect(prompt.kind).toBe("menu");
+    expect(prompt.fallback).toBe(true);
+    expect(prompt.question).toBe("Apply these 3 file changes?");
+    expect(prompt.body).toBe("src/a.ts, src/b.ts, src/c.ts");
+    expect(labels(prompt)).toEqual(["Apply all", "Review each", "Discard"]);
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ text: "3" }]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ text: "1" }]);
+    expect(() => answerKeys(prompt, { custom_text: "no" })).toThrow();
+  });
+
+  test("keeps a wrapped label on its own row, since each row starts with its number", () => {
+    const prompt = parseFallbackPrompt("gjc", "Trust this folder?\n\n❯ 1. No, exit and keep this folder\n     untrusted\n  2. Yes, trust folder\n  3. Yes, trust and allow hooks\n\n Enter to confirm\n");
+    expect(labels(prompt)).toEqual(["No, exit and keep this folder untrusted", "Yes, trust folder", "Yes, trust and allow hooks"]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ text: "2" }]);
+  });
+
+  test("guesses no options for an unnumbered menu, offering the keys its hint names", () => {
+    const prompt = parseFallbackPrompt("claude", "Continue?\n\n  Yes\n❯ No\n  Later\n\n ↑/↓ to move · Enter to choose\n");
+    expect(prompt.title).toBe("Waiting for input");
+    expect(prompt.question).toBe("Continue?");
+    expect(labels(prompt)).toEqual(["↑", "↓", "Enter", "Esc"]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }]);
+  });
+
+  test("reads no menu once a new prompt or input box follows it", () => {
+    const done = parseFallbackPrompt("claude", "Pick one\n\n  1. Deny\n❯ 2. Allow\n\n● Done.\n❯ \n");
+    expect(labels(done)).toEqual(["Enter", "Esc"]);
+    const quoted = parseFallbackPrompt("claude", "> quoted example\n❯ Deny\n  Allow all\n");
+    expect(labels(quoted)).toEqual(["Enter", "Esc"]);
+  });
+
+  test("reads a numbered list as no menu without a hint to choose, or before an input field", () => {
+    expect(labels(parseFallbackPrompt("gjc", "My plan:\n\n1. Inspect files\n2. Remove backups\n\nPassword:\n"))).toEqual(["Enter", "Esc"]);
+    expect(labels(parseFallbackPrompt("gjc", "Pick:\n1. A\n2. B\nEnter a number\nChoice: 2\n"))).toEqual(["Enter", "Esc"]);
+    expect(labels(parseFallbackPrompt("gjc", "Access?\n1. Read only (r)\n2. Full access (f)\nType r or f, then Enter\n"))).toEqual(["Enter", "Esc"]);
+    expect(labels(parseFallbackPrompt("gjc", "Pick\n1. One\n❯ \n2. Two\nEnter to select\n"))).toEqual(["Enter", "Esc"]);
+  });
+
+  test("offers no letters or arrows for an input box, a quote or a word", () => {
+    expect(labels(parseFallbackPrompt("claude", 'The installer prints "Overwrite? (y/n)".\n❯ \n'))).toEqual(["Enter", "Esc"]);
+    expect(labels(parseFallbackPrompt("claude", "Done.\n❯ Explain why the installer asks (y/n)\n"))).toEqual(["Enter", "Esc"]);
+    expect(labels(parseFallbackPrompt("claude", "Use arrow functions in the patch.\nArrowhead metadata loaded\n"))).toEqual(["Enter", "Esc"]);
+  });
+
+  test("without a menu, shows the screen's last lines and offers Enter and Esc", () => {
+    const prompt = parseFallbackPrompt("codex", "Working on it\n\nPress any key to review the diff (q to quit)\n");
+    expect(prompt.title).toBe("Waiting for input");
+    expect(prompt.question).toBe("Press any key to review the diff (q to quit)");
+    expect(prompt.body).toContain("Working on it");
+    expect(labels(prompt)).toEqual(["Enter", "Esc"]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["esc"] }]);
+  });
+
+  test("offers a (y/n) question at the screen's end as Yes and No, typing the letter alone", () => {
+    const prompt = parseFallbackPrompt("gjc", " config.json already exists.\n Overwrite it? (y/n)\n Press Enter to keep it, or Esc to abort\n");
+    expect(prompt.question).toBe("Overwrite it? (y/n)");
+    expect(labels(prompt)).toEqual(["Yes (y)", "No (n)", "Enter", "Esc"]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ text: "y" }]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ text: "n" }]);
+    expect(labels(parseFallbackPrompt("gjc", "Delete the branch? [Y/n] "))).toEqual(["Yes (y)", "No (n)", "Enter", "Esc"]);
+  });
+
+  test("offers no letters for a (y/n) only mentioned above the prompt", () => {
+    const prompt = parseFallbackPrompt("codex", 'The installer prints "Overwrite config? (y/n)".\nIt then exits.\n\n› Ask Codex to do anything\n  100% context left\n');
+    expect(labels(prompt)).toEqual(["Enter", "Esc"]);
+  });
+
+  test("takes the question from the line that asks it, not the hint below", () => {
+    const prompt = parseFallbackPrompt("gjc", "Found 3 stale caches.\nClear them now?\nPress Enter to continue, Esc to skip\n");
+    expect(prompt.question).toBe("Clear them now?");
+    expect(prompt.body).toBe("Found 3 stale caches.\nPress Enter to continue, Esc to skip");
+    expect(labels(prompt)).toEqual(["Enter", "Esc"]);
+  });
+
+  test("gives the same id to the same screen, and another to a changed one", () => {
+    const screen = "Pick\n\n❯ 1. One\n  2. Two\n\n Enter to select\n";
+    expect(parseFallbackPrompt("omo", screen).id).toBe(parseFallbackPrompt("omo", screen).id);
+    expect(parseFallbackPrompt("omo", screen.replace("Two", "Three")).id).not.toBe(parseFallbackPrompt("omo", screen).id);
+    const context = (command: string) => [`$ ${command}`, ...Array.from({ length: 14 }, (_, i) => `line ${i}`), "Run it?", "", "❯ 1. Yes", "  2. No", "", " Enter to select"].join("\n");
+    expect(parseFallbackPrompt("gjc", context("rm -rf important")).id).not.toBe(parseFallbackPrompt("gjc", context("rm safe.tmp")).id);
+    const keys = (command: string) => [`$ ${command}`, ...Array.from({ length: 18 }, (_, i) => `line ${i}`), "Proceed? (y/n)"].join("\n");
+    expect(parseFallbackPrompt("gjc", keys("rm -rf important")).id).not.toBe(parseFallbackPrompt("gjc", keys("rm safe.tmp")).id);
+    const footer = (end: string) => `Pick\n\n❯ 1. One\n  2. Two\n\n ${end}\n`;
+    expect(parseFallbackPrompt("gjc", footer("Enter to select")).id).not.toBe(parseFallbackPrompt("gjc", footer("Enter to select · done")).id);
   });
 });

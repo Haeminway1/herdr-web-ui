@@ -27,6 +27,8 @@ interface Runtime {
   attempts: number;
   generation: number;
   refreshing: boolean;
+  refreshQueued: boolean;
+  snapshotRevision: number;
   terminals: Set<() => void>;
 }
 interface JobState {
@@ -63,12 +65,22 @@ export class MachineActionRequired extends Error {
   constructor(message: string, readonly action: MachineAction) { super(message); }
 }
 
+export const UNSUPPORTED_HOST = "Only Linux and macOS PCs (x64 or arm64) are supported. Windows hosts are not supported yet.";
+
+/** Windows OpenSSH runs the probe in cmd or PowerShell, which answer that `sh` "is not recognized". */
+export function hostProbeError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bsh\b.*is not recognized/is.test(message) ? new Error(UNSUPPORTED_HOST) : error instanceof Error ? error : new Error(message);
+}
+
 export class MachineManager {
   private machines = new Map<string, Runtime>();
   private jobs = new Map<string, JobState>();
   private listeners = new Set<(event: MachineEvent) => void>();
   private stopped = false;
   private localBusy = false;
+  private localRefreshQueued = false;
+  private localRevision = 0;
   private localTimer: ReturnType<typeof setInterval>;
   private saveTimer?: ReturnType<typeof setTimeout>;
   private statePath: string;
@@ -104,7 +116,7 @@ export class MachineManager {
     this.localTimer = setInterval(() => void this.refreshLocal(), 5000);
     this.localTimer.unref();
   }
-  private runtime(machine: Machine): Runtime { return { machine, attempts: 0, generation: 0, refreshing: false, terminals: new Set() }; }
+  private runtime(machine: Machine): Runtime { return { machine, attempts: 0, generation: 0, refreshing: false, refreshQueued: false, snapshotRevision: 0, terminals: new Set() }; }
   list(): Machine[] { return [this.local, ...[...this.machines.values()].map((r) => r.machine)]; }
   subscribe(listener: (event: MachineEvent) => void): () => void {
     this.listeners.add(listener);
@@ -116,6 +128,10 @@ export class MachineManager {
     for (const listener of this.listeners) listener(event ?? { type: "machines", machines: this.list() });
   }
   localMessage(message: ServerMessage): void {
+    if (["pane-status", "session-changed", "pane-exited"].includes(message.type)) {
+      this.localRevision++;
+      if (this.localBusy) this.localRefreshQueued = true;
+    }
     this.emit({ type: "machine-message", machine_id: LOCAL_MACHINE, message });
     if (message.type === "pane-status" && this.local.snapshot) {
       this.local.snapshot = { ...this.local.snapshot, panes: this.local.snapshot.panes.map((p) => p.pane_id === message.pane_id ? { ...p, agent_status: message.agent_status } : p) };
@@ -123,11 +139,27 @@ export class MachineManager {
     if (message.type === "session-changed" || message.type === "pane-exited") void this.refreshLocal();
   }
   async refreshLocal(): Promise<void> {
-    if (this.localBusy || this.stopped) return;
+    if (this.stopped) return;
+    if (this.localBusy) { this.localRefreshQueued = true; return; }
     this.localBusy = true;
-    try { this.local.snapshot = this.completions.present(await labelOmoPanes(await sessionSnapshot())); this.local.state = "connected"; this.local.error = null; }
-    catch (e) { this.local.state = "error"; this.local.error = String(e instanceof Error ? e.message : e); }
-    finally { this.localBusy = false; this.emit(); }
+    try {
+      do {
+        this.localRefreshQueued = false;
+        const revision = this.localRevision;
+        try {
+          const snapshot = await this.completions.readSnapshot(sessionSnapshot, labelOmoPanes);
+          if (this.stopped) break;
+          // A newer event already patched the roster. Never publish this older load.
+          if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
+          this.local.snapshot = snapshot; this.local.state = "connected"; this.local.error = null;
+        } catch (e) {
+          if (this.stopped) break;
+          if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
+          this.local.state = "error"; this.local.error = String(e instanceof Error ? e.message : e);
+        }
+        this.emit();
+      } while (this.localRefreshQueued && !this.stopped);
+    } finally { this.localBusy = false; }
   }
   private saveSoon(): void {
     if (this.saveTimer || this.stopped) return;
@@ -287,9 +319,10 @@ export class MachineManager {
     const generation = runtime.generation;
     const ssh = runtime.ssh!;
     const session = runtime.machine.target!.session;
-    const inspection = await ssh.run(REMOTE_PATH + `printf '%s\\n' "$(uname -s)" "$(uname -m)" "$(cd -P "$HOME" && pwd -P)" "\${XDG_CONFIG_HOME:-$HOME/.config}" "$(command -v herdr || true)"; test -x "$HOME/${BUNDLE_DIR}/bin/bun" && printf 'bundle-ready\\n' || true; for d in "$HOME/.local/share/herdr-web-ui/remote-v"*; do if test -x "$d/bin/bun"; then printf 'bundle-older\\n'; break; fi; done; for f in "$HOME/.config/herdr-web-ui/bridges/"*.json; do test ! -f "$f" || cat "$f"; printf '\\n'; done`);
+    const inspection = await ssh.run(REMOTE_PATH + `printf '%s\\n' "$(uname -s)" "$(uname -m)" "$(cd -P "$HOME" && pwd -P)" "\${XDG_CONFIG_HOME:-$HOME/.config}" "$(command -v herdr || true)"; test -x "$HOME/${BUNDLE_DIR}/bin/bun" && printf 'bundle-ready\\n' || true; for d in "$HOME/.local/share/herdr-web-ui/remote-v"*; do if test -x "$d/bin/bun"; then printf 'bundle-older\\n'; break; fi; done; for f in "$HOME/.config/herdr-web-ui/bridges/"*.json; do test ! -f "$f" || cat "$f"; printf '\\n'; done`).catch((error: unknown) => { throw hostProbeError(error); });
     const [os, arch, home, xdgConfig, herdrPath, ...lines] = inspection.split("\n");
-    if (!home?.startsWith("/") || !["Linux", "Darwin"].includes(os ?? "") || !["x86_64", "aarch64", "arm64"].includes(arch ?? "")) throw new Error("Only Linux/macOS x64 and arm64 PCs are supported");
+    if (!["Linux", "Darwin"].includes(os ?? "") || !["x86_64", "aarch64", "arm64"].includes(arch ?? "")) throw new Error(UNSUPPORTED_HOST);
+    if (!home?.startsWith("/")) throw new Error("The SSH account's home directory ($HOME) could not be read on this PC");
     const platform = `${os === "Darwin" ? "darwin" : "linux"}-${arch === "x86_64" ? "x64" : "arm64"}`;
     if (herdrPath) {
       const version = await ssh.run(`${shellQuote(herdrPath)} --version`);
@@ -315,7 +348,7 @@ export class MachineManager {
     const installs: string[] = [];
     if (job?.update) installs.push("Download and verify the bridge runtime, then restart this bridge (herdr sessions keep running)");
     if (!descriptor && !hasBundle) installs.push("Private web bridge bundle (Bun, Node and node-pty; no build tools needed)");
-    if (!descriptor && !herdrPath) installs.push("Bundled herdr 0.9.1 (existing installations are preserved)");
+    if (!descriptor && !herdrPath) installs.push("Bundled herdr 0.9.3 (existing installations are preserved)");
     if (!descriptor && job) installs.push("Start the loopback bridge and, only if absent, the herdr daemon");
     if (ssh.usedSecret) installs.push("Register a dedicated SSH public key for automatic reconnection");
     if (installs.length) {
@@ -391,20 +424,40 @@ export class MachineManager {
     return () => runtime?.terminals.delete(close);
   }
   private async refresh(runtime: Runtime): Promise<void> {
-    if (!runtime.endpoint || runtime.refreshing) return;
+    if (!runtime.endpoint || this.stopped) return;
+    if (runtime.refreshing) { runtime.refreshQueued = true; return; }
     runtime.refreshing = true;
     const endpoint = runtime.endpoint;
     const generation = runtime.generation;
     try {
-      const r = await fetch(endpoint.url + "/api/session", { headers: { authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(15_000) });
-      if (!r.ok) throw new Error(`Remote herdr unavailable (${r.status})`);
-      const { snapshot } = await r.json() as { snapshot: SessionSnapshot };
-      if (generation !== runtime.generation || this.stopped) return;
-      runtime.machine.snapshot = snapshot; runtime.machine.error = null;
-      this.saveSoon();
-      this.push.seed(snapshot.panes, runtime.machine.id, runtime.machine.name);
-      this.emit();
-    } finally { runtime.refreshing = false; }
+      do {
+        runtime.refreshQueued = false;
+        const revision = runtime.snapshotRevision;
+        try {
+          const r = await fetch(endpoint.url + "/api/session", { headers: { authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(15_000) });
+          if (!r.ok) throw new Error(`Remote herdr unavailable (${r.status})`);
+          const { snapshot } = await r.json() as { snapshot: SessionSnapshot };
+          if (generation !== runtime.generation || this.stopped) return;
+          if (revision !== runtime.snapshotRevision) { runtime.refreshQueued = true; continue; }
+          runtime.machine.snapshot = snapshot; runtime.machine.error = null;
+          this.saveSoon();
+          this.push.seed(snapshot.panes, runtime.machine.id, runtime.machine.name);
+          this.emit();
+        } catch (e) {
+          if (generation !== runtime.generation || this.stopped) return;
+          if (revision !== runtime.snapshotRevision) { runtime.refreshQueued = true; continue; }
+          throw e;
+        }
+      } while (runtime.refreshQueued && generation === runtime.generation && !this.stopped);
+    } finally {
+      runtime.refreshing = false;
+      // A reconnect can request its first load while the old connection is still
+      // finishing. Start that queued load with the new generation's error handler.
+      if (runtime.refreshQueued && generation !== runtime.generation && runtime.endpoint && !this.stopped) {
+        const nextGeneration = runtime.generation;
+        void this.refresh(runtime).catch((e) => this.lost(runtime, nextGeneration, e));
+      }
+    }
   }
   private async observe(runtime: Runtime): Promise<void> {
     const generation = runtime.generation;
@@ -419,6 +472,7 @@ export class MachineManager {
       if (generation !== runtime.generation || this.stopped) return;
       let message: ServerMessage;
       try { message = JSON.parse(String(event.data)); } catch { return; }
+      if (["snapshot", "pane-status", "pane-exited", "session-changed"].includes(message.type)) runtime.snapshotRevision++;
       if (message.type === "snapshot") { runtime.machine.snapshot = message.snapshot; this.push.seed(message.snapshot.panes, runtime.machine.id, runtime.machine.name); this.emit(); }
       if (message.type === "pane-status") {
         if (runtime.machine.snapshot) runtime.machine.snapshot = { ...runtime.machine.snapshot, panes: runtime.machine.snapshot.panes.map((p) => p.pane_id === message.pane_id ? { ...p, agent_status: message.agent_status } : p) };
@@ -477,6 +531,7 @@ export class MachineManager {
   }
   private disconnect(runtime: Runtime): void {
     runtime.generation++;
+    runtime.refreshQueued = false;
     clearTimeout(runtime.retry); clearInterval(runtime.poll);
     runtime.abort?.abort(); runtime.abort = undefined;
     runtime.observer?.close(); runtime.observer = undefined;

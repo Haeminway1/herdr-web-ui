@@ -197,13 +197,16 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 
 ### Shell
 - `.app` is a full-viewport column: `.app-header` over `.app-body`; the body is sidebar plus
-  `.terminal-host`. `--app-height` follows `visualViewport` so the soft keyboard does not cover input.
+  `.terminal-host`. While a phone's soft keyboard is up (`data-keyboard`), `--app-height` follows
+  `visualViewport` so the keyboard does not cover input; otherwise the shell is `100dvh`, because an
+  iPhone home screen app reports a visual viewport shorter than the screen without a keyboard.
 - Header anatomy, left to right: mobile drawer toggle / desktop sidebar toggle; flexible context
   title plus PC/workspace/cwd subtitle; segmented Chat/Terminal switch; the connection chip (herdr
   version in its tooltip) and meta actions for palette, notifications, settings and lock. Theme
   lives in Settings and the palette; the herdr version also sits in the sidebar footer.
 - The sidebar is fixed-width on desktop and a `<=768px` drawer. The desktop collapse removes its
-  column; the drawer uses a scrim and keeps safe-area insets.
+  column; the drawer uses a scrim and keeps safe-area insets. On touch, a mostly horizontal swipe in
+  from the left `24px` edge opens the drawer and a swipe to the left closes it (`56px` of travel).
 - The terminal stack contains a positioned terminal surface, then composer or key bar. The xterm
   mount stays alive under the chat lens; changing views never creates a second connection.
 - At `<=480px`, labels shed in priority order: version, brand name, context subtitle, connection
@@ -338,6 +341,9 @@ Comfortable values are `:root`; the final column is the complete compact overrid
   `@` completions query `GET /api/pane/files`. Arrow keys navigate, Enter/Tab accepts, Escape closes.
 - Paste, picker or drag/drop accepts up to four png/jpeg/gif/webp files per action. Each gets a local
   preview, uploads through `POST /api/pane/image`, and inserts a removable editable `@path` mention.
+- While a phone's keyboard is up, **Hide keyboard** sits just before the report action, which
+  keeps its place at the end of the status line; a tap on the transcript or a drag down it (`32px`)
+  also puts the keyboard away. Each only blurs the field, so the draft stays.
 - Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. IME Enter
   is ignored. While working, Stop sends Escape and Queue stores the next message.
 
