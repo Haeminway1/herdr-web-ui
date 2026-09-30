@@ -139,11 +139,11 @@ export class MachineManager {
         this.localRefreshQueued = false;
         const revision = this.localRevision;
         try {
-          const snapshot = await labelOmoPanes(await sessionSnapshot());
+          const snapshot = await this.completions.readSnapshot(sessionSnapshot, labelOmoPanes);
           if (this.stopped) break;
           // A newer event already patched the roster. Never publish this older load.
           if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
-          this.local.snapshot = this.completions.present(snapshot); this.local.state = "connected"; this.local.error = null;
+          this.local.snapshot = snapshot; this.local.state = "connected"; this.local.error = null;
         } catch (e) {
           if (this.stopped) break;
           if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
