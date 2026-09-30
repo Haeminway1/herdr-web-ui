@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent } from "react";
 import { RefreshCw } from "lucide-react";
 
 import "./UsageMeters.css";
@@ -72,12 +72,15 @@ function Provider({ usage, now, count }: { usage: ProviderUsage; now: number; co
 export function UsageMeters() {
   const t = useT();
   const { settings } = useSettings();
-  const { report, loading, refresh } = useUsage(settings.showUsage && settings.usagePlacement === "footer");
+  const footer = settings.showUsage && settings.usagePlacement === "footer";
+  const { report, loading, refresh } = useUsage(footer);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const rootRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLButtonElement>(null);
 
+  // moved to the top of the list, the popover closes: its clock and listener go with it
+  useEffect(() => { if (!footer) setOpen(false); }, [footer]);
   useEffect(() => {
     if (!open) return;
     setNow(Date.now());
@@ -106,7 +109,7 @@ export function UsageMeters() {
   const count = settings.usageCount;
   // an account hidden in Settings is left out of the strip and the popover alike
   const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
-  if (!settings.showUsage || settings.usagePlacement !== "footer" || shown.length === 0) return null;
+  if (!footer || shown.length === 0) return null;
   const folded = shown.length > MAX_CHIPS ? shown.length - (MAX_CHIPS - 1) : 0;
   const chips = folded > 0 ? shown.slice(0, MAX_CHIPS - 1) : shown;
   const summary = shown.map((usage) => {
@@ -156,6 +159,7 @@ export function UsagePanel() {
   const { report, loading, refresh } = useUsage(top);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const detailId = useId();
   useEffect(() => {
     if (!top) return;
     setNow(Date.now());
@@ -168,7 +172,7 @@ export function UsagePanel() {
   if (!top || shown.length === 0) return null;
   return (
     <section className="usage-panel" aria-label={t("Subscription usage")}>
-      <button type="button" className="usage-panel-rows" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button type="button" className="usage-panel-rows" aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={() => setOpen(!open)}>
         {shown.map((usage) => {
           const window = tightestWindow(usage);
           const value = window ? meterPercent(window, count) : 0;
@@ -178,7 +182,9 @@ export function UsagePanel() {
               <AgentMark agent={PROVIDER_MARK[usage.id]} size={16} />
               <span className="usage-panel-name">
                 {PROVIDER_NAME[usage.id]}
-                {usage.plan && <span className="usage-plan">{usage.plan}</span>}
+                {usage.plan && <span className="usage-plan" title={usage.plan}>{usage.plan}</span>}
+                {/* two accounts of one provider are told apart by the account */}
+                {usage.account && <span className="usage-account" title={usage.account}>{usage.account}</span>}
               </span>
               <span className="usage-panel-value">{window ? meterText(window, count) : "—"}</span>
               <span className="usage-bar" aria-hidden="true"><span style={{ width: value > 0 ? `max(4px, ${value}%)` : 0 }} /></span>
@@ -188,7 +194,7 @@ export function UsagePanel() {
         })}
       </button>
       {open && (
-        <div className="usage-panel-detail">
+        <div id={detailId} className="usage-panel-detail">
           <header className="usage-popover-head">
             <span>{t("Subscription usage")}</span>
             <button type="button" className="icon-button" aria-label={t("Refresh")} title={t("Refresh")} aria-busy={loading} onClick={() => { if (!loading) refresh(); }}>

@@ -235,6 +235,11 @@
 
 /* The same meters as a panel at the top of the sidebar: a row per account, the bar under it */
 .usage-panel {
+  flex-shrink: 0;
+  /* many accounts, or every limit open, scroll here: the PCs below keep most of the sidebar */
+  max-height: 40%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-bottom: var(--hairline) solid var(--border);
   padding: var(--space-2) var(--space-3);
 }
@@ -264,7 +269,7 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   column-gap: var(--space-2);
-  row-gap: 3px;
+  row-gap: var(--space-1);
 }
 
 .usage-panel-row .usage-bar,
@@ -277,9 +282,21 @@
   align-items: baseline;
   gap: var(--space-1);
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
   color: var(--text-strong);
+}
+
+/* a long plan or account gives way before the value does */
+.usage-panel-name .usage-plan {
+  display: block;
+  line-height: calc(var(--chip-h) - 2 * var(--hairline));
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .usage-panel-value {
