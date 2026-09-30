@@ -864,6 +864,20 @@ async function closeOpenQuestion(paneId: string): Promise<void> {
   if (parsePrompt("codex", screen)?.responder === "codex-async-question") await paneSendKeys(paneId, [KEY.closeQueue]);
 }
 
+/**
+ * Before the Enter on one of Claude's unnumbered menus: the card's own menu, with the cursor on
+ * the row it answers. Its rows are read from the screen alone, a wrapped label is a guess, and
+ * a key typed in the pane meanwhile moves the cursor too; the folder-trust check is one of these.
+ */
+async function cursorSettled(paneId: string, id: string, index: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const { prompt } = await readPrompt(paneId);
+    if (prompt?.id === id && parsedByPublicPrompt.get(prompt)?.selectedIndex === index) return true;
+    await Bun.sleep(50);
+  }
+  return false;
+}
+
 function promptChanged(): Response {
   return jsonResponse({ error: { code: "prompt_changed", message: "The interactive prompt changed; reopen it and try again." } }, 409);
 }
@@ -922,8 +936,10 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       try {
         // the keys for the question as it shows in the open queue
         if (target !== prompt) steps = answerKeys(target, body);
+        const confirm = parsedByPublicPrompt.get(target)?.responder === "claude-confirm";
         for (let index = 0; index < steps.length; index += 1) {
           const step = steps[index]!;
+          if (confirm && index === steps.length - 1 && !await cursorSettled(body.pane_id, target.id, body.option_index!)) return promptChanged();
           if (step.keys) await paneSendKeys(body.pane_id, step.keys);
           else if (step.text !== undefined) await paneSendText(body.pane_id, step.text);
           if (index < steps.length - 1) await Bun.sleep(30);
