@@ -62,7 +62,7 @@ describe("quick replies row", () => {
     expect(sanitizeSettings({ showQuickReplies: "yes" }).showQuickReplies).toBe(false);
     expect(DEFAULT_SETTINGS.showUsage).toBe(true); // fork deployment default
     expect(sanitizeSettings({ showUsage: true }).showUsage).toBe(true);
-    expect(sanitizeSettings({ showUsage: 1 }).showUsage).toBe(false);
+    expect(sanitizeSettings({ showUsage: 1 }).showUsage).toBe(true); // invalid falls back to the fork default
     expect(DEFAULT_SETTINGS.usageCount).toBe("used");
     expect(sanitizeSettings({ usageCount: "left" }).usageCount).toBe("left");
     expect(sanitizeSettings({ usageCount: "half" }).usageCount).toBe("used");
