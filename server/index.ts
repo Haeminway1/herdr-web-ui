@@ -162,6 +162,8 @@ interface PaneAttachment {
   stalled: Map<Client, number>;
   /** another web bridge holds herdr's one attach slot for this terminal: waiting for it to let go */
   held?: boolean;
+  /** the next try at a held terminal; a closed attachment cancels it */
+  heldRetry?: ReturnType<typeof setTimeout>;
 }
 
 function send(client: Client, message: ServerMessage): number {
@@ -389,6 +391,7 @@ export function createServer(
     const attachment = attachments.get(paneId);
     if (!attachment) return;
     attachments.delete(paneId);
+    clearTimeout(attachment.heldRetry);
     // its members hold nothing on this pane any more (a pty that exited leaves them on
     // the "terminal ended" screen): a stale entry would read as a live claim in
     // releaseUnclaimed and keep a later, empty pty on this pane running
@@ -493,6 +496,9 @@ export function createServer(
           output = (output + data).slice(-1024);
           if (held === null) return forward(data);
           if (held === "") holdTimer = setTimeout(() => {
+            // a closed attachment's kill skips onExit, which would clear this timer: a newer
+            // attachment on the pane must not hear this one's resume
+            if (attachments.get(paneId) !== attachment) return;
             // the attach took: a pane that waited for another bridge is this bridge's again
             if (attachment.held) {
               attachment.held = false;
@@ -524,14 +530,19 @@ export function createServer(
             }, Math.min(ATTACH_RETRY_MS * 2 ** (retries - 1), ATTACH_RETRY_MAX_MS));
             return;
           }
-          if (code !== 0 && /already has an attached client|retry with --takeover/.test(output)) {
+          // a refusal comes before the attach took (its first bytes still held back): an attach
+          // that streamed the pane and then failed ends, whatever the pane itself printed
+          if (code !== 0 && held !== null && /already has an attached client|retry with --takeover/.test(output)) {
             held = null; // herdr's refusal is not the pane's output: never painted, and it repeats
+            // waiting for the other bridge is not a read race: the next one gets its full budget
+            refusedSince = null;
+            retries = 0;
             // Another web bridge holds herdr's one attach slot (two bridges on one herdr, e.g. a
             // second install beside the first). Its attach is left alone; this pane waits for it
             // to let go, trying again while anyone here still has it open, instead of ending.
-            if (!attachment.held) broadcast(paneId, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE });
+            if (!attachment.held) broadcast(paneId, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: paneId });
             attachment.held = true;
-            setTimeout(() => {
+            attachment.heldRetry = setTimeout(() => {
               if (attachments.get(paneId) !== attachment) return;
               if (attachment.clients.size === 0) {
                 closeAttachment(paneId);
@@ -1214,7 +1225,7 @@ export function createServer(
               const replay = attachment.replay.text();
               if (!alreadyAttached && replay) sendOutput(client, message.pane_id, replay);
               // a pane waiting for another web bridge to let go says so to each newcomer, too
-              if (!alreadyAttached && attachment.held) send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE });
+              if (!alreadyAttached && attachment.held) send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
               reconcileOutput(message.pane_id);
               if (client.data.closing) break;
               if (client.data.mode === "interact") {
@@ -1256,7 +1267,8 @@ export function createServer(
               // the pty holds a lone ESC ~150ms and a Stop would overtake nothing
               // typing reaches an attached pane only, queued or not
               const attachment = attachments.get(message.pane_id);
-              if (!attachment) break;
+              // another web bridge has this pane's terminal: nothing typed here reaches it
+              if (!attachment || attachment.held) break;
               if (paneQueues.has(message.pane_id)) {
                 const text = message.text;
                 void serialize(message.pane_id, () => { authorizeSocket(client); return paneSendText(message.pane_id, text); }).catch(() => undefined);
@@ -1285,6 +1297,10 @@ export function createServer(
             case "keys": {
               if (client.data.mode === "observe") {
                 send(client, { type: "error", code: "read_only", message: "this connection is in observe mode" });
+                break;
+              }
+              if (attachments.get(message.pane_id)?.held) {
+                send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
                 break;
               }
               await serialize(message.pane_id, () => { authorizeSocket(client); return paneSendKeys(message.pane_id, message.keys); });
@@ -1341,7 +1357,11 @@ export function createServer(
               }
               const arrivedAt = Date.now();
               try {
-                await serialize(message.pane_id, () => submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client)));
+                await serialize(message.pane_id, () => {
+                  // held while this waited its turn (the attach was refused after the check above)
+                  if (attachments.get(message.pane_id)?.held) throw new HerdrError("attach_held", ATTACH_HELD_MESSAGE);
+                  return submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client));
+                });
                 result(true);
               } catch (error) {
                 result(false, error instanceof HerdrError ? error.code : "submit_failed", error instanceof Error ? error.message : String(error));
