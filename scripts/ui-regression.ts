@@ -14,6 +14,7 @@ import { checkNeedsInput } from "./needs-input-regression.ts";
 import { checkSecretInput } from "./secret-input-regression.ts";
 import { checkTerminalCopy } from "./terminal-copy-regression.ts";
 import { checkUsageMeters } from "./usage-regression.ts";
+import { checkNotificationStartup } from "./notification-startup-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
 import { UsageService } from "../server/usage.ts";
 
@@ -186,6 +187,7 @@ try {
   await checkSecretInput(browser, origin);
   await checkTerminalCopy(browser, origin);
   await checkUsageMeters(browser, origin);
+  await checkNotificationStartup(browser, origin, paneA, paneB);
   await checkMobileViewport(browser, origin, paneB);
 
   const report = (state: string) => herdrRpc("pane.report_agent", {
