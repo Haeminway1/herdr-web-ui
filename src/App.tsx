@@ -31,6 +31,7 @@ import {
   type NotificationState,
 } from "./lib/notifications.ts";
 import { ensurePushSubscription, pushSupported, removePushSubscription } from "./lib/push.ts";
+import { onNotificationTarget } from "./lib/notificationTarget.ts";
 import { useUpdates } from "./lib/updates.ts";
 import { UpdateNotice } from "./components/UpdateControls.tsx";
 import { FilesDialog } from "./components/FilesDialog.tsx";
@@ -423,15 +424,7 @@ export function App() {
   }, []);
 
   // a tapped notification focuses this window and names the pane (public/sw.js)
-  useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
-    const onMessage = (event: MessageEvent) => {
-      const data = event.data as { type?: unknown; pane_id?: unknown; machine_id?: unknown } | null;
-      if (data?.type === "select-pane" && typeof data.pane_id === "string") selectTargetRef.current(typeof data.machine_id === "string" ? data.machine_id : "local", data.pane_id);
-    };
-    navigator.serviceWorker.addEventListener("message", onMessage);
-    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
-  }, []);
+  useEffect(() => onNotificationTarget((target) => selectTargetRef.current(target.machine_id, target.pane_id)), []);
 
   // the ?pane= a notification opened us with has done its job once it selected the pane
   useEffect(() => {

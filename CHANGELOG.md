@@ -21,6 +21,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - A pane whose terminal another web bridge on the same herdr has open (two installs side by
   side) now waits for it instead of ending with "Another web bridge is attached": it says so,
   keeps the chat readable, and attaches by itself as soon as the other bridge lets go.
+- The iPhone home-screen app starts below the status bar instead of drawing beneath it, so the
+  header text is no longer blurred on iOS 27 (#164). iOS reads this when the app is added, so an
+  existing install keeps the blur until it is removed from the Home Screen and added again; send
+  or copy unsent drafts and queued messages first. See [the testing guide](docs/ios-home-screen-testing.md).
 - A Codex pane no longer reads RUN for good after its first turn. herdr reports Codex as
   `unknown` at rest, and that was taken for more work; the agent that worked reading `unknown`
   is now a finish (DONE until seen, with its done alert). Late session snapshots no longer
@@ -30,6 +34,13 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   Copilot sign-in in an editor, or a paid plan, still shows.
 - A local or remote PC refresh no longer replaces a newer pane status with an older
   snapshot. Status and session changes received during a refresh queue a fresh load.
+- Keep the shell at its full dynamic viewport height until a text field takes the keyboard,
+  so an installed iPhone app's shorter idle visual viewport cannot leave a band under the
+  composer. Direct terminal typing and pointer changes update keyboard sizing too.
+- Select a notification's pane before bringing the app forward, retry after focus, and open
+  its pane URL if focus is refused. A delayed focus or opening gives the window that comes
+  forward the newest tapped PC and pane, including while the app starts; an older failure
+  cannot open a stale window.
 
 ## [0.3.34] - 2026-09-30
 
