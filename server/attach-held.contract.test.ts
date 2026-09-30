@@ -164,21 +164,22 @@ describe("a terminal another web bridge holds", () => {
 });
 
 describe("an attach classified as held", () => {
-  it("is only a refusal: an attach that streamed the pane and then failed ends", async () => {
+  it("is only herdr's own refusal: an attach that ends on other output ends the terminal", async () => {
     const paneId = await pane();
-    // the pane itself prints herdr's refusal words, then the attach fails for another reason
-    const herdr = scriptedHerdr(["printf 'pane says: retry with --takeover\\r\\n'; sleep 0.5; exit 1"]);
+    // the pane itself prints herdr's refusal (a log, say), then the attach fails for another reason
+    const herdr = scriptedHerdr([`${HELD.replace("; exit 1", "")}; printf 'more pane output\\r\\n'; sleep 0.5; exit 1`]);
     await withHerdr(herdr.path, async () => {
       const client = connect(third.port, paneId);
-      await client.open;
-      client.send({ type: "attach", pane_id: paneId, cols: 100, rows: 30 });
-      await until(() => client.state.exits === 1, "the failed attach ends the terminal");
-      expect(client.state.exitCodes).toEqual([1]);
-      expect(client.state.errors).not.toContain("attach_held");
-      expect(client.state.tail).toContain("retry with --takeover");
-      await Bun.sleep(400);
-      expect(herdr.attempts()).toBe(1);
-      client.ws.close();
+      try {
+        await client.open;
+        client.send({ type: "attach", pane_id: paneId, cols: 100, rows: 30 });
+        await until(() => client.state.exits === 1, "the failed attach ends the terminal");
+        expect(client.state.exitCodes).toEqual([1]);
+        expect(client.state.errors).not.toContain("attach_held");
+        expect(client.state.tail).toContain("already has an attached client");
+        await Bun.sleep(400);
+        expect(herdr.attempts()).toBe(1);
+      } finally { client.ws.close(); }
     });
   }, 30_000);
 
@@ -188,14 +189,15 @@ describe("an attach classified as held", () => {
     const herdr = scriptedHerdr([READ_RACE, HELD, HELD, HELD, READ_RACE, "real"]);
     await withHerdr(herdr.path, async () => {
       const client = connect(third.port, paneId);
-      await client.open;
-      client.send({ type: "attach", pane_id: paneId, cols: 100, rows: 30 });
-      await until(() => client.state.resumed === 1, "attached after the wait and the second read race");
-      await until(() => client.state.frames > 0, "the attach paints");
-      expect(herdr.attempts()).toBe(6);
-      expect(client.state.exits).toBe(0);
-      expect(client.state.errors).toEqual(["attach_held"]);
-      client.ws.close();
+      try {
+        await client.open;
+        client.send({ type: "attach", pane_id: paneId, cols: 100, rows: 30 });
+        await until(() => client.state.resumed === 1, "attached after the wait and the second read race");
+        await until(() => client.state.frames > 0, "the attach paints");
+        expect(herdr.attempts()).toBe(6);
+        expect(client.state.exits).toBe(0);
+        expect(client.state.errors).toEqual(["attach_held"]);
+      } finally { client.ws.close(); }
     });
   }, 30_000);
 });

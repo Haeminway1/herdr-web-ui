@@ -68,6 +68,11 @@ const MAX_REPLAY_BYTES = 256 * 1024;
  * 400-line read of an idle Codex pane took about a second, refusing every attach meanwhile.
  */
 const ATTACH_READ_RACE_RE = /has a read in progress; retry/;
+/**
+ * herdr's refusal when another client holds the terminal's one attach slot. It is the attach's
+ * last line, after its teardown: the same words earlier in the pane's own output are not it.
+ */
+const ATTACH_HELD_RE = /terminal attach failed: [^\r\n]*(?:already has an attached client|retry with --takeover)[^\r\n]*\s*$/;
 /** how long refused attaches are retried: herdr's longest read of that kind */
 const ATTACH_RETRY_FOR_MS = 20_000;
 const ATTACH_RETRY_MS = 50;
@@ -530,9 +535,7 @@ export function createServer(
             }, Math.min(ATTACH_RETRY_MS * 2 ** (retries - 1), ATTACH_RETRY_MAX_MS));
             return;
           }
-          // a refusal comes before the attach took (its first bytes still held back): an attach
-          // that streamed the pane and then failed ends, whatever the pane itself printed
-          if (code !== 0 && held !== null && /already has an attached client|retry with --takeover/.test(output)) {
+          if (code !== 0 && ATTACH_HELD_RE.test(output)) {
             held = null; // herdr's refusal is not the pane's output: never painted, and it repeats
             // waiting for the other bridge is not a read race: the next one gets its full budget
             refusedSince = null;
