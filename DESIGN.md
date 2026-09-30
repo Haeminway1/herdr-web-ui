@@ -70,8 +70,8 @@ tables above are amber, the base blocks; the two opt-in palettes override them i
   Terminal cursor `#4c9aff`, selection `#1f3a66`. It has near-square corners (`--radius-sm/md/lg/xl`
   = `2/3/3/4px`) and no resting card shadow (`--shadow-card: none`).
 - **Charcoal** is a neutral Ghostty-style dark: `--bg` `#0f0f0f`, panel and terminal `#171717`, text
-  `#cbc7c0` / `#8f8a83` / `#f5f2ec`, accent and primary near-white `#e8e4dc` with `#171717` text,
-  muted states (working `#c2a2af`, input `#d77971`, done `#a7b789`, idle `#9a958e`), terminal cursor
+  `#cbc7c0` / `#918c85` / `#f5f2ec`, accent and primary near-white `#e8e4dc` with `#171717` text,
+  muted states (working `#c2a2af`, input `#e0877f`, done `#a7b789`, idle `#9a958e`), terminal cursor
   `#cbc7c0`, selection `#49443d`. It keeps amber's rounded corners and card shadow.
 - In light both use plain paper (`--bg` `#f2f2f0`, panel `#fafaf9`, text `#242424`, primary ink
   `#242424` with `#fafaf9` text): report with a blue `#1f5fcc` accent and cursor, charcoal with an

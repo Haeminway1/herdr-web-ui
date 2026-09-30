@@ -262,7 +262,7 @@
   --border: #262626;
   --border-strong: #363636;
   --text: #cbc7c0;
-  --text-dim: #8f8a83;
+  --text-dim: #918c85;
   --text-strong: #f5f2ec;
   --accent: #e8e4dc;
   --accent-tint: rgba(232, 228, 220, 0.1);
@@ -272,12 +272,12 @@
   --primary-tint: rgba(232, 228, 220, 0.12);
   --status-idle: #9a958e;
   --status-working: #c2a2af;
-  --status-blocked: #d77971;
+  --status-blocked: #e0877f;
   --status-done: #a7b789;
   --status-working-tint: rgba(194, 162, 175, 0.14);
-  --status-blocked-tint: rgba(215, 121, 113, 0.14);
+  --status-blocked-tint: rgba(224, 135, 127, 0.14);
   --status-done-tint: rgba(167, 183, 137, 0.14);
-  --danger-tint: rgba(215, 121, 113, 0.12);
+  --danger-tint: rgba(224, 135, 127, 0.12);
   --danger-text: #f2c9c4;
   --scrim: rgba(0, 0, 0, 0.6);
   --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.35);
