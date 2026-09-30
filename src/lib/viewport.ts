@@ -54,4 +54,7 @@ const syncKeyboard = (): void => {
 document.addEventListener("focusin", syncKeyboard);
 // focus moving from one field to the next blurs first: read where it landed
 document.addEventListener("focusout", () => window.setTimeout(syncKeyboard, 0));
+touch.addEventListener("change", syncKeyboard);
+// The key bar preserves xterm focus while switching modes, so focusin need not fire.
+new MutationObserver(syncKeyboard).observe(root, { attributes: true, subtree: true, attributeFilter: ["data-direct-typing"] });
 syncKeyboard();

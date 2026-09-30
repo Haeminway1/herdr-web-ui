@@ -106,29 +106,33 @@ self.addEventListener("push", (event) => {
 
 // Tap: bring the app forward on that pane - an open window is told which pane
 // (App listens), a closed app opens on /?pane=<id>.
+let latestNotificationClick = 0;
 self.addEventListener("notificationclick", (event) => {
+  const click = ++latestNotificationClick;
   event.notification.close();
   const paneId = event.notification.data ? event.notification.data.pane_id : null;
   const machineId = event.notification.data?.machine_id || "local";
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      if (click !== latestNotificationClick) return;
       const url = paneId ? `/?machine=${encodeURIComponent(machineId)}&pane=${encodeURIComponent(paneId)}` : "/";
       const target = windows.find((client) => client.focused) || windows[0];
       if (target) {
         const select = () => { if (paneId) target.postMessage({ type: "select-pane", pane_id: paneId, machine_id: machineId }); };
         // Name the pane before focus(): a focus() that iOS refuses or resolves late must not
         // swallow it. Selecting is idempotent, so it is sent again once the window is forward,
-        // for a page that was frozen in the background when the first one went out.
+        // for a page that was frozen in the background when the first one went out. A newer
+        // notification tap wins over this one's delayed focus or lookup.
         select();
         try {
           await target.focus();
         } catch (err) {
           // that window cannot be brought forward: open the app on the pane instead
-          await self.clients.openWindow(url);
+          if (click === latestNotificationClick) await self.clients.openWindow(url);
           return;
         }
-        select();
+        if (click === latestNotificationClick) select();
         return;
       }
       await self.clients.openWindow(url);

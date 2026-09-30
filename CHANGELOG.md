@@ -18,10 +18,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   keep running while it updates.
 
 ### Fixed
-- An iPhone home screen app no longer leaves an empty band as tall as the status bar under the
-  composer. The shell follows the visual viewport only while the keyboard is up.
-- Tapping a notification while the app is open in the background opens that pane even when the
-  system is slow or refuses to bring the window forward.
+- Keep the shell at its full dynamic viewport height until a text field takes the keyboard,
+  so an installed iPhone app's shorter idle visual viewport cannot leave a band under the
+  composer. Direct terminal typing and pointer changes update keyboard sizing too.
+- Select a notification's pane before bringing the app forward, retry after focus, and open
+  its pane URL if focus is refused. A delayed earlier tap cannot override a newer selection
+  or open a stale window.
 
 ## [0.3.34] - 2026-09-30
 
