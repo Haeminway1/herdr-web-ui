@@ -107,11 +107,15 @@ self.addEventListener("push", (event) => {
 // Tap: bring the app forward on that pane - an open window is told which pane
 // (App listens), a closed app opens on /?pane=<id>.
 let latestNotificationClick = 0;
+let latestNotificationSelection = null;
 self.addEventListener("notificationclick", (event) => {
   const click = ++latestNotificationClick;
   event.notification.close();
   const paneId = event.notification.data ? event.notification.data.pane_id : null;
   const machineId = event.notification.data?.machine_id || "local";
+  // Remember the intent before any lookup: an older focus can finish while this one
+  // is still finding its window.
+  latestNotificationSelection = paneId ? { type: "select-pane", pane_id: paneId, machine_id: machineId } : null;
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
@@ -121,9 +125,8 @@ self.addEventListener("notificationclick", (event) => {
       if (target) {
         const select = () => { if (paneId) target.postMessage({ type: "select-pane", pane_id: paneId, machine_id: machineId }); };
         // Name the pane before focus(): a focus() that iOS refuses or resolves late must not
-        // swallow it. Selecting is idempotent, so it is sent again once the window is forward,
-        // for a page that was frozen in the background when the first one went out. A newer
-        // notification tap wins over this one's delayed focus or lookup.
+        // swallow it. A page frozen in the background may need the selection again
+        // once its focus completes.
         select();
         try {
           await target.focus();
@@ -132,7 +135,10 @@ self.addEventListener("notificationclick", (event) => {
           if (click === latestNotificationClick) await self.clients.openWindow(url);
           return;
         }
-        if (click === latestNotificationClick) select();
+        // Different windows finish focus independently. A late older focus can put
+        // its window in front after a newer tap focused another one. Give whichever
+        // window just came forward the latest selection, without another focus loop.
+        if (latestNotificationSelection) target.postMessage(latestNotificationSelection);
         return;
       }
       await self.clients.openWindow(url);

@@ -100,7 +100,7 @@ describe("notification clicks", () => {
     await worker.click("pane-b");
     pending.resolve();
     await first;
-    expect(target.selected.map((selection) => selection.pane_id)).toEqual(["pane-a", "pane-b", "pane-b"]);
+    expect(target.selected.map((selection) => selection.pane_id)).toEqual(["pane-a", "pane-b", "pane-b", "pane-b"]);
     expect(worker.opened).toEqual([]);
   });
 
@@ -131,6 +131,75 @@ describe("notification clicks", () => {
     pending.resolve();
     await first;
     expect(target.selected.map((selection) => selection.pane_id)).toEqual(["pane-b", "pane-b"]);
+    expect(worker.opened).toEqual([]);
+  });
+
+  it("an older client foregrounded last shows the newest notification's exact PC and pane", async () => {
+    const pending = deferred();
+    let foreground = "";
+    let focuses = 0;
+    const older = client(async () => { focuses++; await pending.promise; foreground = "older"; });
+    const newer = client(async () => { focuses++; foreground = "newer"; }, true);
+    let lookups = 0;
+    const worker = notifications([older], async () => ++lookups === 1 ? [older] : [newer, older]);
+    const first = worker.click("pane-a", "local");
+    await Promise.resolve();
+    const selection = { type: "select-pane", pane_id: "latest pane/?", machine_id: "remote&pc" };
+    // The newer focus must finish even while the older window's focus is hung.
+    await worker.click(selection.pane_id, selection.machine_id);
+    expect(foreground).toBe("newer");
+    pending.resolve();
+    await first;
+    expect(foreground).toBe("older");
+    expect(older.selected.at(-1)).toEqual(selection);
+    expect(newer.selected.at(-1)).toEqual(selection);
+    expect(focuses).toBe(2); // one focus per tap, no repair focus loop
+    expect(worker.opened).toEqual([]);
+  });
+
+  it("repairs an old focused client while the newest notification's lookup is still pending", async () => {
+    const focus = deferred();
+    const lookup = deferred();
+    let foreground = "";
+    const older = client(async () => { await focus.promise; foreground = "older"; });
+    const newer = client(async () => { foreground = "newer"; }, true);
+    let lookups = 0;
+    const worker = notifications([older], async () => {
+      if (++lookups === 1) return [older];
+      await lookup.promise;
+      return [newer, older];
+    });
+    const first = worker.click("pane-a");
+    await Promise.resolve();
+    const selection = { type: "select-pane", pane_id: "pane-b", machine_id: "second/pc" };
+    const second = worker.click(selection.pane_id, selection.machine_id);
+    focus.resolve();
+    await first;
+    expect(foreground).toBe("older");
+    expect(older.selected.at(-1)).toEqual(selection);
+    expect(newer.selected).toEqual([]);
+    lookup.resolve();
+    await second;
+    expect(foreground).toBe("newer");
+    expect(newer.selected.at(-1)).toEqual(selection);
+    expect(worker.opened).toEqual([]);
+  });
+
+  it("a rejected old client does not reopen its pane after another client was focused", async () => {
+    const pending = deferred();
+    let foreground = "";
+    const older = client(() => pending.promise);
+    const newer = client(async () => { foreground = "newer"; }, true);
+    let lookups = 0;
+    const worker = notifications([older], async () => ++lookups === 1 ? [older] : [newer, older]);
+    const first = worker.click("pane-a");
+    await Promise.resolve();
+    await worker.click("pane-b", "remote");
+    pending.reject(new Error("NotAllowedError"));
+    await first;
+    expect(foreground).toBe("newer");
+    expect(newer.selected.at(-1)).toEqual({ type: "select-pane", pane_id: "pane-b", machine_id: "remote" });
+    expect(older.selected).toEqual([{ type: "select-pane", pane_id: "pane-a", machine_id: "local" }]);
     expect(worker.opened).toEqual([]);
   });
 });
