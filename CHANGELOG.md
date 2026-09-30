@@ -7,6 +7,14 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Added
+- A dark report look is the new default: a near-black blue-grey canvas, hairlines, near-square
+  corners, white primary actions, electric blue only on small marks, and amber / red / green agent
+  states. Settings → Appearance → Colors also offers a neutral Ghostty-style **Charcoal** and the
+  original **Amber**.
+- Settings → Appearance can show Clawd, Claude Code's mascot, on Claude panes and the Codex
+  logo (a blue cloud with a prompt) on Codex panes instead of the provider logos.
+
 ## [0.3.35] - 2026-09-30
 
 ### Added
