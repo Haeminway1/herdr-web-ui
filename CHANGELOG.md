@@ -7,6 +7,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Added
+- Settings → Plan limits → Where puts the plan meters at the top of the sidebar instead of
+  beside Settings: a row per account with its plan, the limit closest to running out, a bar
+  and when it resets. A tap opens every limit.
+
 ## [0.3.35] - 2026-09-30
 
 ### Added
