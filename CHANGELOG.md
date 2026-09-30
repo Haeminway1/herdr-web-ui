@@ -13,6 +13,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   version 8: a connected PC's bridge asks for **Update bridge…** once, and herdr sessions
   keep running while it updates.
 
+### Fixed
+- A Codex pane no longer reads RUN for good after its first turn. herdr reports Codex as
+  `unknown` at rest, and that was taken for more work; the agent that worked reading `unknown`
+  is now a finish (DONE until seen, with its done alert).
+
 ## [0.3.34] - 2026-09-30
 
 ### Added
