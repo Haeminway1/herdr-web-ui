@@ -50,6 +50,21 @@ describe("CompletionTracker", () => {
     expect(tracker.seen("r")).toBe(false);
   });
 
+  it("finishes an agent that reads unknown at rest, as Codex does, and keeps it done until seen", () => {
+    const tracker = new CompletionTracker();
+    // live, herdr 0.9.3: codex/working for a turn, then codex/unknown at rest
+    expect(tracker.observe("p", "working", "codex")).toBe("working");
+    expect(tracker.observe("p", "unknown", "codex")).toBe("done");
+    const codex = (status: string, focused = false) =>
+      ({ ...snapshot([{ id: "p", status, focused }]), panes: [{ pane_id: "p", agent: "codex", agent_status: status, focused }] } as unknown as SessionSnapshot);
+    expect(tracker.present(codex("unknown")).panes[0]!.agent_status).toBe("done");
+    expect(tracker.seen("p")).toBe(true);
+    expect(tracker.present(codex("unknown", true)).panes[0]!.agent_status).toBe("unknown");
+    // the next turn works and finishes the same way
+    expect(tracker.observe("p", "working", "codex")).toBe("working");
+    expect(tracker.observe("p", "unknown", "codex")).toBe("done");
+  });
+
   it("lets an unknown with no agent left be unknown: the agent quit", () => {
     const tracker = new CompletionTracker();
     tracker.observe("p", "working", "gjc");
