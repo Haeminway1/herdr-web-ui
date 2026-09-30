@@ -1,6 +1,7 @@
 import { useId } from "react";
 
 import { AGENT_SVG_MARKS } from "./agentSvgMarks.ts";
+import { useOptionalSettings } from "../lib/settings.ts";
 
 /**
  * Provider marks for the agents herdr names, ported from chatmux's
@@ -14,6 +15,8 @@ export interface AgentMarkProps {
   /** box size in px */
   size?: number;
   className?: string;
+  /** draw this picture instead of the one chosen in settings (the settings' own preview) */
+  variant?: "logo" | "mascot" | "app";
 }
 
 function ClaudeMark({ size }: { size: number }) {
@@ -146,6 +149,48 @@ function OmoMark({ size }: { size: number }) {
   );
 }
 
+/**
+ * Claude Code's mascot, drawn on a 16px grid: the orange block with slit eyes, side arms
+ * and four legs (drawn here, not the official asset). Chosen in Settings → Appearance.
+ */
+function ClaudeCodeMark({ size }: { size: number }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} role="img" aria-label="claude" shapeRendering="crispEdges">
+      <g fill="#D97757">
+        <rect x="3" y="4" width="10" height="6" />
+        <rect x="1" y="6" width="2" height="2" />
+        <rect x="13" y="6" width="2" height="2" />
+        <rect x="4" y="10" width="1" height="2" />
+        <rect x="6" y="10" width="1" height="2" />
+        <rect x="9" y="10" width="1" height="2" />
+        <rect x="11" y="10" width="1" height="2" />
+      </g>
+      <g fill="#1F1F1F">
+        <rect x="5" y="5" width="1" height="2" />
+        <rect x="10" y="5" width="1" height="2" />
+      </g>
+    </svg>
+  );
+}
+
+/** A Codex app-style mark (drawn here, not the official asset): a blue tile with a terminal prompt. Chosen in Settings → Appearance. */
+function CodexAppMark({ size }: { size: number }) {
+  const gradientId = useId();
+  return (
+    <svg viewBox="0 0 64 64" width={size} height={size} role="img" aria-label="codex">
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#5AA2FF" />
+          <stop offset="1" stopColor="#2458E6" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="14" fill={`url(#${gradientId})`} />
+      <path d="M18 22l12 10-12 10" fill="none" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M34 44h13" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** The agent nobody has drawn yet: its initial in a quiet disc. */
 /** A mark kept as SVG markup; its ids get this instance's prefix so copies never collide. */
 function SvgMark({ agent, size }: { agent: string; size: number }) {
@@ -167,14 +212,17 @@ function FallbackMark({ agent, size }: { agent: string; size: number }) {
   );
 }
 
-export function AgentMark({ agent, size = 16, className }: AgentMarkProps) {
+export function AgentMark({ agent, size = 16, className, variant }: AgentMarkProps) {
+  const settings = useOptionalSettings()?.settings;
+  const claudeStyle = variant ?? settings?.claudeMark;
+  const codexStyle = variant ?? settings?.codexMark;
   const mark =
     agent === "claude" ? (
-      <ClaudeMark size={size} />
+      claudeStyle === "mascot" ? <ClaudeCodeMark size={size} /> : <ClaudeMark size={size} />
     ) : agent === "omp" ? (
       <OmpMark size={size} />
     ) : agent === "codex" ? (
-      <CodexMark size={size} />
+      codexStyle === "app" ? <CodexAppMark size={size} /> : <CodexMark size={size} />
     ) : agent === "cursor" ? (
       <CursorMark size={size} />
     ) : agent === "opencode" ? (

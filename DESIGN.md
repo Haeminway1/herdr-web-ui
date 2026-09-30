@@ -6,16 +6,18 @@ value. When a component needs a value that is not here, add it to both first.
 
 ## 1. Atmosphere & Identity
 
-A warm terminal: an amber-phosphor console on lamp-lit graphite (dark) or ledger paper (light),
-with chat-app clarity. Tonal surfaces and hairlines keep the chrome out of the way. There is ONE
-chrome color, amber: selection, focus, the terminal cursor and the user's own action (Send, primary
-buttons). Agent states carry the remaining saturated colors and none of them is amber. The user's
+A dark technical report: a near-black blue-grey canvas, 1px hairlines, near-square panels and no
+resting shadow (dark), or plain paper (light), with chat-app clarity. The user's own action (Send,
+primary buttons) is white on the canvas (ink on paper). Electric blue is kept for small marks: the
+selected row's rail, focus, links and the terminal cursor. Agent states carry the report's meaning
+colors (amber working, red input, green done), none of them blue. Charcoal and the original amber
+look are one setting away. The user's
 chat turns are neutral raised cards, so a long thread never turns into a wall of color. Dark is the
 default, light follows the same hierarchy, and comfortable or compact density changes scale without
 changing information architecture.
 
-The signature is the amber status rail: a 3px bar on the selected pane row (whose mark box also
-takes an amber edge), the same amber on focus, the chosen lens glyph and the terminal cursor, tying
+The signature is the accent status rail: a 3px bar on the selected pane row (whose mark box also
+takes an accent edge), the same accent on focus, the chosen lens glyph and the terminal cursor, tying
 “what I am looking at” to “where I am typing.”
 
 ## 2. Color
@@ -26,52 +28,71 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 
 | Role | Token | Dark | Light |
 |------|-------|------|-------|
-| Surface/base | `--bg` | `#12100e` | `#eeeae2` |
-| Surface/panel | `--bg-panel` | `#181613` | `#faf8f3` |
-| Surface/elevated | `--bg-elevated` | `#211e1a` | `#f2eee6` |
-| Surface/hover | `--bg-hover` | `#2a2621` | `#e8e2d6` |
-| Surface/input | `--bg-input` | `#1c1916` | `#fffdf9` |
-| Border | `--border` | `#2d2924` | `#dcd4c6` |
-| Border/strong | `--border-strong` | `#3e3830` | `#c5baa8` |
-| Text/primary | `--text` | `#d8d0c3` | `#2a251f` |
-| Text/dim | `--text-dim` | `#9b9183` | `#685e52` |
-| Text/strong | `--text-strong` | `#f2ebdf` | `#16120d` |
-| Accent | `--accent` | `#f0a830` | `#8c5000` |
-| Accent/tint | `--accent-tint` | `rgba(240, 168, 48, 0.13)` | `rgba(140, 80, 0, 0.1)` |
-| Primary | `--primary` | `#f0a830` | `#c57d12` |
-| Primary/hover | `--primary-hover` | `#f6bb55` | `#d48c1f` |
-| Primary/text | `--primary-text` | `#1b1407` | `#1b1407` |
-| Primary/tint | `--primary-tint` | `rgba(240, 168, 48, 0.16)` | `rgba(197, 125, 18, 0.14)` |
-| Status/idle | `--status-idle` | `#9b9183` | `#685e52` |
-| Status/working | `--status-working` | `#6cb8d6` | `#155a72` |
-| Status/blocked | `--status-blocked` | `#ff7b70` | `#a82323` |
-| Status/done | `--status-done` | `#93c36b` | `#2f6317` |
-| Working/tint | `--status-working-tint` | `rgba(108, 184, 214, 0.14)` | `rgba(21, 90, 114, 0.12)` |
-| Blocked/tint | `--status-blocked-tint` | `rgba(255, 123, 112, 0.14)` | `rgba(168, 35, 35, 0.12)` |
-| Done/tint | `--status-done-tint` | `rgba(147, 195, 107, 0.14)` | `rgba(47, 99, 23, 0.12)` |
-| Danger/tint | `--danger-tint` | `rgba(255, 123, 112, 0.12)` | `rgba(168, 35, 35, 0.1)` |
-| Danger/text | `--danger-text` | `#ffd9d4` | `#8f1d1d` |
-| Overlay/scrim | `--scrim` | `rgba(8, 6, 4, 0.55)` | `rgba(40, 32, 22, 0.35)` |
-| Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.6)` | `0 0 40px rgba(40, 32, 22, 0.22)` |
-| Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border)` | `0 16px 48px rgba(40, 32, 22, 0.16), 0 0 0 1px var(--border)` |
-| Card shadow | `--shadow-card` | `0 4px 16px rgba(0, 0, 0, 0.35)` | `0 4px 16px rgba(40, 32, 22, 0.07)` |
+| Surface/base | `--bg` | `#0a0d12` | `#f2f2f0` |
+| Surface/panel | `--bg-panel` | `#0f1319` | `#fafaf9` |
+| Surface/elevated | `--bg-elevated` | `#141922` | `#efefed` |
+| Surface/hover | `--bg-hover` | `#1a212c` | `#e6e6e3` |
+| Surface/input | `--bg-input` | `#0c1016` | `#ffffff` |
+| Border | `--border` | `#1e2530` | `#dcdcd8` |
+| Border/strong | `--border-strong` | `#2a3340` | `#c4c4bf` |
+| Text/primary | `--text` | `#b4bdc9` | `#242424` |
+| Text/dim | `--text-dim` | `#8792a3` | `#5f5b56` |
+| Text/strong | `--text-strong` | `#e8ecf2` | `#111111` |
+| Accent | `--accent` | `#4c9aff` | `#1f5fcc` |
+| Accent/tint | `--accent-tint` | `rgba(76, 154, 255, 0.12)` | `rgba(31, 95, 204, 0.1)` |
+| Primary | `--primary` | `#e8ecf2` | `#242424` |
+| Primary/hover | `--primary-hover` | `#ffffff` | `#3a3a3a` |
+| Primary/text | `--primary-text` | `#0a0d12` | `#fafaf9` |
+| Primary/tint | `--primary-tint` | `rgba(232, 236, 242, 0.1)` | `rgba(36, 36, 36, 0.1)` |
+| Status/idle | `--status-idle` | `#8792a3` | `#685e52` |
+| Status/working | `--status-working` | `#f5b544` | `#155a72` |
+| Status/blocked | `--status-blocked` | `#ff6b7a` | `#a82323` |
+| Status/done | `--status-done` | `#3ddc97` | `#2f6317` |
+| Working/tint | `--status-working-tint` | `rgba(245, 181, 68, 0.14)` | `rgba(21, 90, 114, 0.12)` |
+| Blocked/tint | `--status-blocked-tint` | `rgba(255, 107, 122, 0.14)` | `rgba(168, 35, 35, 0.12)` |
+| Done/tint | `--status-done-tint` | `rgba(61, 220, 151, 0.14)` | `rgba(47, 99, 23, 0.12)` |
+| Danger/tint | `--danger-tint` | `rgba(255, 107, 122, 0.12)` | `rgba(168, 35, 35, 0.1)` |
+| Danger/text | `--danger-text` | `#ffd6db` | `#8f1d1d` |
+| Overlay/scrim | `--scrim` | `rgba(4, 6, 10, 0.6)` | `rgba(20, 20, 20, 0.35)` |
+| Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.6)` | `0 0 40px rgba(20, 20, 20, 0.2)` |
+| Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border)` | `0 16px 48px rgba(20, 20, 20, 0.14), 0 0 0 1px var(--border)` |
+| Card shadow | `--shadow-card` | `none` | `0 4px 16px rgba(20, 20, 20, 0.06)` |
+
+### Charcoal and amber palettes
+
+`settings.palette` (`report` default, `charcoal`, `amber`) is written as `data-palette`. Both
+alternatives restore rounded corners (`--radius-sm/md/lg/xl` = `6/8/12/16px`) and the composer's
+card shadow (`0 4px 16px rgba(0, 0, 0, 0.35)` in dark).
+
+- **Charcoal** is a neutral Ghostty-style dark: `--bg` `#0f0f0f`, panel and terminal `#171717`, text
+  `#cbc7c0` / `#8f8a83` / `#f5f2ec`, accent and primary near-white `#e8e4dc` with `#171717` text,
+  muted states (working `#c2a2af`, input `#d77971`, done `#a7b789`, idle `#9a958e`), terminal cursor
+  `#cbc7c0`, selection `#49443d`. In light it keeps the base paper with an ink accent and cursor.
+- **Amber** is the original herdr look: an amber-phosphor console on lamp-lit graphite or ledger
+  paper, ONE amber chrome color that agent states never use (`--bg` `#12100e` / `#eeeae2`, `--accent`
+  `#f0a830` / `#8c5000`, `--primary` `#f0a830` / `#c57d12`, working `#6cb8d6`, input `#ff7b70`, done
+  `#93c36b`, terminal `#181613` / `#d8d0c3` / `#f0a830` / `#4a3d26` in dark and `#faf8f3` / `#2a251f` /
+  `#8c5000` / `#f0d9ae` in light).
+
+`src/styles.css` holds the complete blocks (`[data-theme][data-palette]`).
 
 ### Terminal theme
 
 xterm.js reads a JavaScript theme, so `src/lib/settings.ts` `terminalTheme()` mirrors these four
-CSS tokens verbatim for each resolved theme.
+CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` checks the match).
 
 | Role | Token | Dark | Light | xterm key |
 |------|-------|------|-------|-----------|
-| Background | `--term-bg` | `#181613` | `#faf8f3` | `background` |
-| Foreground | `--term-fg` | `#d8d0c3` | `#2a251f` | `foreground` |
-| Cursor | `--term-cursor` | `#f0a830` | `#8c5000` | `cursor` |
-| Selection | `--term-selection` | `#4a3d26` | `#f0d9ae` | `selectionBackground` |
+| Background | `--term-bg` | `#0f1319` | `#fafaf9` | `background` |
+| Foreground | `--term-fg` | `#c9d1dc` | `#242424` | `foreground` |
+| Cursor | `--term-cursor` | `#4c9aff` | `#1f5fcc` | `cursor` |
+| Selection | `--term-selection` | `#1f3a66` | `#cfe0fb` | `selectionBackground` |
 
 ### Rules
-- Amber is the one chrome color. Accent (selected, focused, informational) and primary (the user's
-  action: Send, primary buttons) are both amber; in light, accent is the darker text-safe ochre and
-  primary the brighter fill carrying ink text. Agent states never use amber.
+- Primary (the user's action: Send, the terminal line's Enter, the unlock button) is white on the
+  dark canvas and ink on paper, carrying the opposite surface as its text. Accent (selected, focused,
+  informational) is electric blue and stays on small marks, never a filled control. Agent states use
+  the meaning colors and never the accent.
 - Agent state is always written as a label as well as colored. Unknown uses dim text and a dashed
   edge rather than inventing a fifth state color.
 - Tints are named tokens; components do not introduce ad hoc translucent state colors.
@@ -107,6 +128,7 @@ CSS tokens verbatim for each resolved theme.
 
 ### Settings
 - `theme`: `dark`, `light`, or `system`; default `dark`.
+- `palette`: `report`, `charcoal` or `amber`; default `report`.
 - `density`: `comfortable` or `compact`; default `comfortable`.
 - Terminal font size is independent: default `13px`, clamped to `10–22px`.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
@@ -132,10 +154,10 @@ All spacing derives from a 4px base.
 
 | Token | Value | Usage |
 |-------|-------|-------|
-| `--radius-sm` | `6px` | Chips and inner controls |
-| `--radius-md` | `8px` | Buttons, inputs, selected rows |
-| `--radius-lg` | `12px` | Menus and chat surfaces |
-| `--radius-xl` | `16px` | Modals and composer |
+| `--radius-sm` | `2px` | Chips and inner controls |
+| `--radius-md` | `3px` | Buttons, inputs, selected rows |
+| `--radius-lg` | `3px` | Menus and chat surfaces |
+| `--radius-xl` | `4px` | Modals and composer |
 | `--radius-pill` | `999px` | Pills and dots |
 
 ### Sizes
@@ -236,7 +258,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
   Drag/drop reorders; `Alt+↑/↓` on the handle is the keyboard equivalent.
 - Every pane row is two lines: agent/shell mark, then the editable title alone on line one (full
   width), and the status chip followed by workspace and cwd on line two. Mark boxes are neutral;
-  the selected row gets the amber rail and an amber-edged mark box. Row actions rename or arm a
+  the selected row gets the accent rail and an accent-edged mark box. Row actions rename or arm a
   3-second, second-click close. Inline server failures stay beside their row.
 - A PC group header is caret, monitor, name, “This PC” for the local machine and a state dot
   (done = connected, working pulse = connecting/reconnecting, blocked = error). Connected says
