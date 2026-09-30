@@ -35,6 +35,13 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   Copilot sign-in in an editor, or a paid plan, still shows.
 - A local or remote PC refresh no longer replaces a newer pane status with an older
   snapshot. Status and session changes received during a refresh queue a fresh load.
+- Keep the shell at its full dynamic viewport height until a text field takes the keyboard,
+  so an installed iPhone app's shorter idle visual viewport cannot leave a band under the
+  composer. Direct terminal typing and pointer changes update keyboard sizing too.
+- Select a notification's pane before bringing the app forward, retry after focus, and open
+  its pane URL if focus is refused. A delayed focus or opening gives the window that comes
+  forward the newest tapped PC and pane, including while the app starts; an older failure
+  cannot open a stale window.
 
 ## [0.3.34] - 2026-09-30
 
