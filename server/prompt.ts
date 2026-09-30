@@ -596,10 +596,24 @@ function parseClaudeConfirm(screen: string): ParsedPrompt | null {
   let start = end;
   while (start > 0 && cleanLine(lines[start - 1]!) && !isDivider(lines[start - 1]!)) start -= 1;
   if (end < 0 || start < 0) return null;
-  const rows = lines.slice(start, end + 1).map((raw, offset) => {
-    const line = cleanLine(raw);
-    return { label: line.replace(SELECTED_RE, "").trim(), selected: SELECTED_RE.test(line), lineIndex: start + offset };
-  });
+  // A narrow pane wraps a long label onto the next line, at the label's own indent, so the
+  // indent cannot tell a wrapped label from the next row. Words wrap only when the next one no
+  // longer fits: a line under a row (without its own ❯) continues that row when its first word
+  // would not have fitted after it. The widest line on screen stands for the pane's width.
+  const width = Math.max(...lines.map((line) => line.trimEnd().length));
+  const wrappedFrom = (above: string, line: string): boolean =>
+    above.trimEnd().length + 1 + (line.split(/\s+/)[0]?.length ?? 0) > width;
+  const rows: { label: string; selected: boolean; lineIndex: number }[] = [];
+  for (let index = start; index <= end; index += 1) {
+    const line = cleanLine(lines[index]!);
+    const selected = SELECTED_RE.test(line);
+    const previous = rows.at(-1);
+    if (previous && !selected && wrappedFrom(lines[index - 1]!, line)) {
+      previous.label = normalizeText(`${previous.label} ${line}`);
+      continue;
+    }
+    rows.push({ label: line.replace(SELECTED_RE, "").trim(), selected, lineIndex: index });
+  }
   if (rows.length < 2 || rows.length > 9 || rows.filter((row) => row.selected).length !== 1) return null;
   if (rows.some((row) => !row.label || NUMBERED_OPTION_RE.test(row.label))) return null;
   // the panel above the rows: its first line names it, a sentence ending in "?" asks

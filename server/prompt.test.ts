@@ -752,6 +752,29 @@ ${after}`;
     expect(parseInteractivePrompt("claude", trust(1, " ▐▛███▛█   Claude Code v2.1.285\n❯ Try \"fix typecheck errors\"\n"))).toBeNull();
   });
 
+  test("keeps a label a narrow pane wrapped as one row", () => {
+    // 24 columns: the panel's sentences and the second row both reach the edge and wrap
+    const narrow = (selected: 0 | 1) => `
+ Accessing workspace:
+
+ Quick safety check: Is
+ this a project you
+ created or one you
+ trust?
+
+ ${selected === 0 ? "❯" : " "} No, exit
+ ${selected === 1 ? "❯" : " "} Yes, I trust this
+   folder
+
+ Enter to confirm · Esc
+ to cancel
+`;
+    const prompt = parseInteractivePrompt("claude", narrow(0))!;
+    expect(labels(prompt)).toEqual(["No, exit", "Yes, I trust this folder"]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+    expect(labels(parseInteractivePrompt("claude", narrow(1)))).toEqual(["No, exit", "Yes, I trust this folder"]);
+  });
+
   test("leaves numbered rows and a menu without one selected row to the other readers", () => {
     expect(parseInteractivePrompt("claude", "Pick one\n\n❯ 1. First\n  2. Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
     expect(parseInteractivePrompt("claude", "Pick one\n\n  First\n  Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
