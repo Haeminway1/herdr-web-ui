@@ -1334,6 +1334,11 @@ export function createServer(
                 result(false, "read_only", "this connection is in observe mode");
                 break;
               }
+              // another web bridge has this pane's terminal: its user types there, not this one
+              if (attachments.get(message.pane_id)?.held) {
+                result(false, "attach_held", ATTACH_HELD_MESSAGE);
+                break;
+              }
               const arrivedAt = Date.now();
               try {
                 await serialize(message.pane_id, () => submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client)));
