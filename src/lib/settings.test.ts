@@ -181,8 +181,8 @@ describe("agent marks", () => {
 
 describe("plan meter placement", () => {
   it("sits beside Settings until the top of the list is chosen", () => {
-    expect(DEFAULT_SETTINGS.usagePlacement).toBe("footer");
-    expect(sanitizeSettings({ usagePlacement: "top" }).usagePlacement).toBe("top");
-    expect(sanitizeSettings({ usagePlacement: "left" }).usagePlacement).toBe("footer");
+    expect(DEFAULT_SETTINGS.usagePlacement).toBe("top");
+    expect(sanitizeSettings({ usagePlacement: "footer" }).usagePlacement).toBe("footer");
+    expect(sanitizeSettings({ usagePlacement: "left" }).usagePlacement).toBe("top");
   });
 });
