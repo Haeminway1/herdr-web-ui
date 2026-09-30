@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { InteractivePrompt } from "../shared/protocol.ts";
 
-import { answerKeys, codexQuestionsCollapsed, codexQueuedPrompt, parseInteractivePrompt } from "./prompt.ts";
+import { answerKeys, codexQuestionsCollapsed, codexQueuedPrompt, parseFallbackPrompt, parseInteractivePrompt } from "./prompt.ts";
 
 const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
 
@@ -809,5 +809,48 @@ ${after}`;
   test("leaves numbered rows and a menu without one selected row to the other readers", () => {
     expect(parseInteractivePrompt("claude", "Pick one\n\n❯ 1. First\n  2. Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
     expect(parseInteractivePrompt("claude", "Pick one\n\n  First\n  Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
+  });
+});
+
+describe("the fallback card for a blocked pane no reader knows", () => {
+  test("reads a marked menu it has no reader for, and answers from the native cursor", () => {
+    const prompt = parseFallbackPrompt("gjc", `
+ Apply these 3 file changes?
+ src/a.ts, src/b.ts, src/c.ts
+
+ › 1. Apply all
+   2. Review each
+   3. Discard
+
+ ↵ choose · esc back
+`);
+    expect(prompt.kind).toBe("menu");
+    expect(prompt.question).toBe("Apply these 3 file changes?");
+    expect(labels(prompt)).toEqual(["Apply all", "Review each", "Discard"]);
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    expect(() => answerKeys(prompt, { custom_text: "no" })).toThrow();
+  });
+
+  test("keeps a cursor that is not on the first row", () => {
+    const prompt = parseFallbackPrompt("claude", "Continue?\n\n  Yes\n❯ No\n  Later\n");
+    expect(labels(prompt)).toEqual(["Yes", "No", "Later"]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
+  });
+
+  test("without a menu, shows the screen's last lines and offers Enter and Esc", () => {
+    const prompt = parseFallbackPrompt("codex", "Working on it\n\nPress any key to review the diff (q to quit)\n");
+    expect(prompt.title).toBe("Waiting for input");
+    expect(prompt.question).toBe("Press any key to review the diff (q to quit)");
+    expect(prompt.body).toContain("Working on it");
+    expect(labels(prompt)).toEqual(["Enter", "Esc"]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["esc"] }]);
+  });
+
+  test("gives the same id to the same screen, and another to a changed one", () => {
+    const screen = "Pick\n\n❯ One\n  Two\n";
+    expect(parseFallbackPrompt("omo", screen).id).toBe(parseFallbackPrompt("omo", screen).id);
+    expect(parseFallbackPrompt("omo", screen.replace("Two", "Three")).id).not.toBe(parseFallbackPrompt("omo", screen).id);
   });
 });
