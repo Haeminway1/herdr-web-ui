@@ -20,7 +20,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ### Fixed
 - Claude Code's unnumbered menus, such as the folder-trust check on a folder it has not seen
   ("Enter to confirm · Esc to cancel"), show as a card in the chat and can be answered there.
-  herdr reported the pane INPUT, but no card appeared.
+  herdr reported the pane INPUT, but no card appeared. An answer presses Enter only once the
+  cursor is on the row it answers; a menu whose rows cannot be told apart gets no card.
 - The iPhone home-screen app starts below the status bar instead of drawing beneath it, so the
   header text is no longer blurred on iOS 27 (#164). iOS reads this when the app is added, so an
   existing install keeps the blur until it is removed from the Home Screen and added again; send
