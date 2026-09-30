@@ -764,7 +764,7 @@ export function createServer(
 
       if (pathname === "/api/session") {
         try {
-          return jsonResponse({ snapshot: completions.present(await labelOmoPanes(await sessionSnapshot())) });
+          return jsonResponse({ snapshot: await completions.readSnapshot(sessionSnapshot, labelOmoPanes) });
         } catch (error) {
           return errorResponse(error);
         }
@@ -1162,7 +1162,7 @@ export function createServer(
         if (client.data.relay) { client.data.relay.bind(client as ServerWebSocket<unknown>); return; }
         clients.add(client);
         try {
-          send(client, { type: "snapshot", snapshot: completions.present(await labelOmoPanes(await sessionSnapshot())), features: SERVER_FEATURES });
+          send(client, { type: "snapshot", snapshot: await completions.readSnapshot(sessionSnapshot, labelOmoPanes), features: SERVER_FEATURES });
         } catch (error) {
           const code = error instanceof HerdrError ? error.code : "snapshot_failed";
           send(client, { type: "error", code, message: error instanceof Error ? error.message : String(error) });
