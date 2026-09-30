@@ -58,7 +58,9 @@ type Responder =
   | "omp-approval"
   | "claude-approval"
   | "claude-plan"
-  | "claude-confirm";
+  | "claude-confirm"
+  | "fallback-menu"
+  | "fallback-keys";
 
 type ParsedPrompt = InteractivePrompt & {
   responder: Responder;
@@ -761,6 +763,59 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
 }
 
 /**
+ * The last resort, for a pane herdr reports blocked that none of the readers above know (a
+ * menu a new agent version draws differently, an agent without a reader): the chat must never
+ * leave the user without a way to answer. A marked menu row (`❯`, `›`, `>`) with its sibling
+ * rows (the same label column, up to a blank line or a rule) becomes a menu answered from the
+ * native cursor; with no such rows, the screen's last lines come with Enter and Esc.
+ */
+export function parseFallbackPrompt(agent: string, screen: string): InteractivePrompt {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  const shown = lines.flatMap((line, index) => cleanLine(line) && !isDivider(line) ? [index] : []);
+  const tail = shown.slice(-16);
+  const labelColumn = (raw: string): number => raw.search(/\S/) + (SELECTED_RE.exec(raw.trimStart())?.[0].length ?? 0);
+  const marked = [...tail].reverse().find((index) => SELECTED_RE.test(cleanLine(lines[index]!)) && cleanLine(lines[index]!).replace(SELECTED_RE, "").trim());
+  if (marked !== undefined) {
+    const column = labelColumn(lines[marked]!);
+    const isRow = (index: number): boolean => {
+      const raw = lines[index];
+      return raw !== undefined && Boolean(cleanLine(raw)) && !isDivider(raw) && labelColumn(raw) === column;
+    };
+    let first = marked;
+    while (isRow(first - 1)) first -= 1;
+    let last = marked;
+    while (isRow(last + 1)) last += 1;
+    const rows = lines.slice(first, last + 1).map((raw) => cleanLine(raw));
+    if (rows.length >= 2 && rows.length <= 12) {
+      const above = lines.slice(Math.max(0, first - 12), first).map(cleanLine).filter((line) => line && !isDivider(line));
+      const asked = [...above].reverse().find((line) => /\?$/.test(line));
+      return publicPrompt(finishPrompt(agent, {
+        kind: "menu", title: "Waiting for your answer", question: asked ?? above.at(-1) ?? "The agent is waiting for your answer.",
+        body: above.join("\n") || null,
+        options: rows.map((row) => ({ label: row.replace(SELECTED_RE, "").replace(/^\d+\.\s+/, "").trim(), description: null })),
+        multi_select: false, custom_option_index: null,
+      }, {
+        responder: "fallback-menu", menuLabels: rows, selectedIndex: rows.findIndex((row) => SELECTED_RE.test(row)),
+        checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+      }));
+    }
+  }
+  const last = tail.map((index) => cleanLine(lines[index]!));
+  return publicPrompt(finishPrompt(agent, {
+    kind: "menu", title: "Waiting for input", question: last.at(-1) ?? "The agent is waiting for input.",
+    body: last.join("\n") || null,
+    options: [{ label: "Enter", description: null }, { label: "Esc", description: null }],
+    multi_select: false, custom_option_index: null,
+  }, {
+    responder: "fallback-keys", menuLabels: ["Enter", "Esc"], selectedIndex: 0,
+    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: 1,
+  }));
+}
+
+/** each pane's last fallback card, so a screen no reader knows is logged once, not every poll */
+const fallbackLogged = new Map<string, string>();
+
+/**
  * The question each pane's queue opened on when that was not the card's (a skipped
  * question leaves the rollout's newest-first guess behind): the next card shows it.
  */
@@ -774,11 +829,35 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   const pane = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
   if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
   const agent = pane.agent ?? "";
-  if (agent !== "claude" && agent !== "omp" && agent !== "codex") return { agent, prompt: null };
+  const known = await readKnownPrompt(paneId, pane, agent, codexHome);
+  if (known.prompt !== null || pane.agent_status !== "blocked" || !agent) {
+    fallbackLogged.delete(paneId);
+    return { agent, prompt: known.prompt };
+  }
+  // herdr says the agent waits on the user and no reader knows the screen: the fallback card
+  const screen = known.screen ?? (await paneRead({ paneId, source: "visible", format: "text" })).text;
+  // Codex's collapsed question queue reads blocked while its main prompt takes a message
+  if (agent === "codex" && codexQuestionsCollapsed(screen)) return { agent, prompt: null };
+  const prompt = parseFallbackPrompt(agent, screen);
+  if (fallbackLogged.get(paneId) !== prompt.id) {
+    fallbackLogged.set(paneId, prompt.id);
+    if (fallbackLogged.size > 64) fallbackLogged.delete(fallbackLogged.keys().next().value!);
+    console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
+  }
+  return { agent, prompt };
+}
+
+async function readKnownPrompt(
+  paneId: string,
+  pane: { cwd?: string | null },
+  agent: string,
+  codexHome?: string,
+): Promise<{ prompt: InteractivePrompt | null; screen?: string }> {
+  if (agent !== "claude" && agent !== "omp" && agent !== "codex") return { prompt: null };
   const screen = await paneRead({ paneId, source: "visible", format: "text" });
   const prompt = parseInteractivePrompt(agent, screen.text);
   const count = agent === "codex" && prompt === null ? queuedQuestionCount(screen.text) : 0;
-  if (count === 0 || !pane.cwd) return { agent, prompt };
+  if (count === 0 || !pane.cwd) return { prompt, screen: screen.text };
   let rollout = queueRollouts.get(paneId);
   if (!rollout || Date.now() - rollout.at > QUEUE_ROLLOUT_MS) {
     rollout = { path: await codexTranscriptPath(paneId, pane.cwd, codexHome), at: Date.now() };
@@ -790,11 +869,11 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
     const front = queueFronts.get(paneId);
     if (front && front.rollout !== rollout.path) queueFronts.delete(paneId);
     return {
-      agent,
       prompt: rollout.path ? codexQueuedPrompt(screen.text, await unansweredCodexQuestions(rollout.path), front?.rollout === rollout.path ? front : null) : null,
+      screen: screen.text,
     };
   } catch {
-    return { agent, prompt: null }; // the rollout went away
+    return { prompt: null, screen: screen.text }; // the rollout went away
   }
 }
 
