@@ -16,6 +16,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [0.3.34] - 2026-09-30
 
 ### Added
+- On a phone, a swipe in from the left edge opens the workspace list and a swipe to the left
+  closes it.
+- While typing in the chat on a phone, a tap on the transcript, a drag down it, or the new
+  **Hide keyboard** button puts the keyboard away to read; the draft stays in the composer.
 - A pane herdr could not restore after a restart (herdr 0.9.3+, e.g. its folder was
   removed) is marked NOT RESTORED in the sidebar, and selecting it shows herdr's reason
   instead of a terminal that ends at once. The server no longer tries to attach it.
