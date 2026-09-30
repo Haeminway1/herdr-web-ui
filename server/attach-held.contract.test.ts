@@ -37,13 +37,14 @@ async function until(check: () => boolean, label: string, timeout = 15_000): Pro
 function connect(port: number, paneId: string) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   sockets.push(ws);
-  const state = { frames: 0, errors: [] as string[], exits: 0, resumed: 0 };
+  const state = { frames: 0, errors: [] as string[], exits: 0, resumed: 0, submits: [] as { ok: boolean; code?: string }[] };
   ws.addEventListener("message", (event) => {
     const frame = JSON.parse(String(event.data)) as ServerMessage;
     if (frame.type === "error") state.errors.push(frame.code);
     if (frame.type === "pty-exit" && frame.pane_id === paneId) state.exits++;
     if (frame.type === "attach-resumed" && frame.pane_id === paneId) state.resumed++;
     if (frame.type === "pty-data" && frame.pane_id === paneId) state.frames++;
+    if (frame.type === "submit-result" && frame.pane_id === paneId) state.submits.push({ ok: frame.ok, code: frame.code });
   });
   const send = (message: ClientMessage) => ws.send(JSON.stringify(message));
   const open = until(() => ws.readyState === WebSocket.OPEN, "socket open");
@@ -74,6 +75,10 @@ describe("a terminal another web bridge holds", () => {
     expect(b.state.errors).not.toContain("attach_conflict");
     // the first bridge's attach was left alone
     expect(a.state.exits).toBe(0);
+    // nothing is typed through the waiting bridge into a pane the other one has
+    b.send({ type: "submit", id: 1, pane_id: paneId, text: "echo held", payload: "echo held" });
+    await until(() => b.state.submits.length === 1, "submit answered while held");
+    expect(b.state.submits[0]).toEqual({ ok: false, code: "attach_held" });
 
     // the first bridge lets go: the second attaches on its next try
     a.send({ type: "detach", pane_id: paneId });

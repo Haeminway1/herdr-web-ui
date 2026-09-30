@@ -122,7 +122,10 @@ export function PaneTerminal({
   const [ended, setEnded] = useState(false);
   const [outputError, setOutputError] = useState<string | null>(null);
   // another web bridge has this pane's terminal: the server waits for it and says attach-resumed
-  const [held, setHeld] = useState(false);
+  const [held, setHeldState] = useState(false);
+  // what the socket handlers read mid-stream: stdin, onData and the composer's submit
+  const heldRef = useRef(false);
+  const setHeld = useCallback((next: boolean) => { heldRef.current = next; setHeldState(next); }, []);
   // one-shot Control from the key bar: the ref is what onData reads, the state is what the bar shows
   const ctrlRef = useRef(false);
   const [ctrlArmed, setCtrlArmed] = useState(false);
@@ -568,7 +571,7 @@ export function PaneTerminal({
         const nowObserving = message.mode === "observe";
         observeRef.current = nowObserving;
         setObserving(nowObserving);
-        term.options.disableStdin = nowObserving || secretRef.current !== null;
+        term.options.disableStdin = nowObserving || secretRef.current !== null || heldRef.current;
         onRoleAckRef.current?.(message.mode);
         if (!nowObserving) {
           try {
@@ -606,6 +609,9 @@ export function PaneTerminal({
       outputGeneration++;
       setOutputReady(false);
       setConnected(false);
+      // the reconnect attaches afresh: it says attach_held again if the other bridge still has
+      // the pane, and a pane it gets straight away sends no attach-resumed to clear this
+      setHeld(false);
     });
     socket.connect();
 
@@ -613,7 +619,7 @@ export function PaneTerminal({
 
     const onData = term.onData((data) => {
       const current = paneRef.current;
-      if (!current || observeRef.current || secretRef.current !== null) return;
+      if (!current || observeRef.current || secretRef.current !== null || heldRef.current) return;
       if (!socket.connected) {
         // policy: commands typed into a dead connection are never auto-sent on
         // reconnect - they wait in a draft the user reviews (see the banner below)
@@ -865,7 +871,7 @@ export function PaneTerminal({
     const term = termRef.current;
     const socket = socketRef.current;
     const pane = paneRef.current;
-    if (!term || !socket || pane === null || secretRef.current !== null) return false;
+    if (!term || !socket || pane === null || secretRef.current !== null || heldRef.current) return false;
     const sent = socket.submit(pane, composerMessage(text), composerPayload(text, term.modes.bracketedPasteMode));
     if (sent === null) return false;
     term.scrollToBottom();
@@ -1096,7 +1102,7 @@ export function PaneTerminal({
             />
             <div className="composer-queue-actions">
               <button type="button" className="composer-queue-send"
-                disabled={!connected || secretActive || queueSending !== null || queued.some((item) => queueStore.isSending(item.id)) || heldByOpenQueue || message.text.trim().length === 0}
+                disabled={!connected || held || secretActive || queueSending !== null || queued.some((item) => queueStore.isSending(item.id)) || heldByOpenQueue || message.text.trim().length === 0}
                 title={heldByOpenQueue ? t("Codex has a question open in the terminal: answer it above first") : undefined}
                 onClick={() => {
                   if (sendingRef.current || !queueStore.beginSend(queueOwner, message.id)) return;
