@@ -12,6 +12,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   beside Settings: a row per account with its plan, the limit closest to running out, a bar
   and when it resets. A tap opens every limit.
 
+### Fixed
+- **Add PC** on a Windows host now says that Windows hosts are not supported yet, instead of
+  failing with the host shell's "'sh' is not recognized" (#189).
+
 ## [0.3.35] - 2026-09-30
 
 ### Added
