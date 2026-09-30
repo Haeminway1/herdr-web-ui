@@ -13,6 +13,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   otherwise the screen's last lines come with Enter and Esc. Such screens are logged once.
 
 ### Added
+- Settings → Plan limits → Where puts the plan meters at the top of the sidebar instead of
+  beside Settings: a row per account with its plan, the limit closest to running out, a bar
+  and when it resets. A tap opens every limit.
 - A dark report look is the new default: a near-black blue-grey canvas, hairlines, near-square
   corners, white primary actions, electric blue only on small marks, and amber / red / green agent
   states. Settings → Appearance → Colors also offers a neutral Ghostty-style **Charcoal** and the
