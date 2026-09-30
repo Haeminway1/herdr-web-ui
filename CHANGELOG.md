@@ -8,6 +8,16 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
+- A dark report look is the new default: a near-black blue-grey canvas, hairlines, near-square
+  corners, white primary actions, electric blue only on small marks, and amber / red / green agent
+  states. Settings → Appearance → Colors also offers a neutral Ghostty-style **Charcoal** and the
+  original **Amber**.
+- Settings → Appearance can show the Claude Code mascot on Claude panes and a blue Codex
+  app-style tile on Codex panes instead of the provider logos.
+- On a phone, a swipe in from the left edge opens the workspace list and a swipe to the left
+  closes it.
+- While typing in the chat on a phone, a tap on the transcript, a drag down it, or the new
+  **Hide keyboard** button puts the keyboard away to read; the draft stays in the composer.
 - A pane herdr could not restore after a restart (herdr 0.9.3+, e.g. its folder was
   removed) is marked NOT RESTORED in the sidebar, and selecting it shows herdr's reason
   instead of a terminal that ends at once. The server no longer tries to attach it.
@@ -35,6 +45,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   `HERDR_WEB_UI_REF` still picks another branch or tag.
 
 ### Fixed
+- An iPhone home screen app no longer leaves an empty band as tall as the status bar under the
+  composer. The shell follows the visual viewport only while the keyboard is up.
+- Tapping a notification while the app is open in the background opens that pane even when the
+  system is slow or refuses to bring the window forward.
 - Enforce device permissions and request origins consistently, persist device changes before reporting success, and stop alerts after device access is revoked.
 - Show remote conversation images and full tool output, including Codex output inherited from earlier rollouts.
 - Dragging terminal text copies the visible selection immediately, including when an
