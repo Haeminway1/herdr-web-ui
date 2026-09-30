@@ -599,10 +599,16 @@ function parseClaudeConfirm(screen: string): ParsedPrompt | null {
   // A narrow pane wraps a long label onto the next line, at the label's own indent, so the
   // indent cannot tell a wrapped label from the next row. Words wrap only when the next one no
   // longer fits: a line under a row (without its own ❯) continues that row when its first word
-  // would not have fitted after it. The widest line on screen stands for the pane's width.
-  const width = Math.max(...lines.map((line) => line.trimEnd().length));
-  const wrappedFrom = (above: string, line: string): boolean =>
-    above.trimEnd().length + 1 + (line.split(/\s+/)[0]?.length ?? 0) > width;
+  // would not have fitted after it. The widest line off the rows stands for the pane's width; a
+  // row wider than all of them says nothing of it, and the line under it could be either, so a
+  // screen like that gets no card rather than one that answers a row it does not show.
+  const width = Math.max(0, ...lines.filter((_, index) => index < start || index > end).map((line) => line.trimEnd().length));
+  let unsure = false;
+  const wrappedFrom = (above: string, line: string): boolean => {
+    if (above.trimEnd().length + 1 + (line.split(/\s+/)[0]?.length ?? 0) <= width) return false;
+    if (above.trimEnd().length > width) unsure = true;
+    return true;
+  };
   const rows: { label: string; selected: boolean; lineIndex: number }[] = [];
   for (let index = start; index <= end; index += 1) {
     const line = cleanLine(lines[index]!);
@@ -614,6 +620,7 @@ function parseClaudeConfirm(screen: string): ParsedPrompt | null {
     }
     rows.push({ label: line.replace(SELECTED_RE, "").trim(), selected, lineIndex: index });
   }
+  if (unsure) return null;
   if (rows.length < 2 || rows.length > 9 || rows.filter((row) => row.selected).length !== 1) return null;
   if (rows.some((row) => !row.label || NUMBERED_OPTION_RE.test(row.label))) return null;
   // the panel above the rows: its first line names it, a sentence ending in "?" asks

@@ -775,6 +775,37 @@ ${after}`;
     expect(labels(parseInteractivePrompt("claude", narrow(1)))).toEqual(["No, exit", "Yes, I trust this folder"]);
   });
 
+  test("never takes the next row for a wrapped label when a row is the widest line", () => {
+    // nothing else on screen reaches as far as the first row, so it says nothing of the pane's
+    // width: the line under it may be its tail or the next row, and a guess answers the wrong row
+    const two = (selected: 0 | 1) => `
+ Trust?
+
+ ${selected === 0 ? "❯" : " "} Yes, trust this folder and continue
+ ${selected === 1 ? "❯" : " "} No, exit
+
+ Enter to confirm · Esc to cancel
+`;
+    expect(parseInteractivePrompt("claude", two(0))).toBeNull();
+    // with the cursor on it, the second line is a row for certain
+    expect(labels(parseInteractivePrompt("claude", two(1)))).toEqual(["Yes, trust this folder and continue", "No, exit"]);
+    // merged, this would show two options and answer the second with one Down, the real `Yes`
+    const three = `
+ Trust?
+
+ ❯ No, exit and keep this folder untrusted
+   Yes
+   Yes, and allow hooks too
+
+ Enter to confirm · Esc to cancel
+`;
+    expect(parseInteractivePrompt("claude", three)).toBeNull();
+    const panel = ` Trust? The first row is not the widest line here, so this one tells the width.\n${three.slice(" Trust?\n".length + 1)}`;
+    const prompt = parseInteractivePrompt("claude", panel);
+    expect(labels(prompt)).toEqual(["No, exit and keep this folder untrusted", "Yes", "Yes, and allow hooks too"]);
+    expect(answerKeys(prompt!, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
   test("leaves numbered rows and a menu without one selected row to the other readers", () => {
     expect(parseInteractivePrompt("claude", "Pick one\n\n❯ 1. First\n  2. Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
     expect(parseInteractivePrompt("claude", "Pick one\n\n  First\n  Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
