@@ -1020,15 +1020,20 @@ describe("web push", () => {
   it("reports a Codex unknown after work as done over WS and HTTP and delivers its completion push", async () => {
     // Exercise the real collector -> CompletionTracker -> PushService path using
     // manually reported statuses in owned panes. No Codex request or real device.
-    const created = await workspaceCreate({ cwd: tmpdir(), label: "herdr-web-ui-test-codex-finish" });
-    const probe = await workspaceCreate({ cwd: tmpdir(), label: "herdr-web-ui-test-codex-probe" });
-    const paneId = created.root_pane.pane_id;
-    const probeId = probe.root_pane.pane_id;
-    const dir = mkdtempSync(join(tmpdir(), "herdr-web-ui-codex-finish-"));
-    const device = await startFakePushService();
+    let created: Awaited<ReturnType<typeof workspaceCreate>> | undefined;
+    let probe: Awaited<ReturnType<typeof workspaceCreate>> | undefined;
+    let dir: string | undefined;
+    let cleanupDevice: FakePushService | undefined;
     let bridge: ReturnType<typeof createServer> | undefined;
     let watcher: RecordingSocket | undefined;
     try {
+      created = await workspaceCreate({ cwd: tmpdir(), label: "herdr-web-ui-test-codex-finish" });
+      probe = await workspaceCreate({ cwd: tmpdir(), label: "herdr-web-ui-test-codex-probe" });
+      const paneId = created.root_pane.pane_id;
+      const probeId = probe.root_pane.pane_id;
+      dir = mkdtempSync(join(tmpdir(), "herdr-web-ui-codex-finish-"));
+      const device = await startFakePushService();
+      cleanupDevice = device;
       await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "unknown" });
       bridge = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: dir, machines: false,
         alertTiming: { short: 0, long: 0, longTurn: 0 } });
@@ -1085,16 +1090,16 @@ describe("web push", () => {
       await device.waitFor((message) => message.payload.pane_id === paneId && finishes().length === 3, "handoff completion push", 5_000);
       expect(finishes()).toHaveLength(3);
     } finally {
-      if (bridge) await fetch(`http://127.0.0.1:${bridge.port}/api/push/subscribe`, {
+      if (bridge && cleanupDevice) await fetch(`http://127.0.0.1:${bridge.port}/api/push/subscribe`, {
         method: "DELETE", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ endpoint: device.subscription.endpoint }),
+        body: JSON.stringify({ endpoint: cleanupDevice.subscription.endpoint }),
       }).catch(() => undefined);
       watcher?.close();
       bridge?.stop();
-      device.stop();
-      rmSync(dir, { recursive: true, force: true });
-      await workspaceClose(created.workspace.workspace_id).catch(() => undefined);
-      await workspaceClose(probe.workspace.workspace_id).catch(() => undefined);
+      cleanupDevice?.stop();
+      if (dir) rmSync(dir, { recursive: true, force: true });
+      if (created) await workspaceClose(created.workspace.workspace_id).catch(() => undefined);
+      if (probe) await workspaceClose(probe.workspace.workspace_id).catch(() => undefined);
     }
   }, 40_000);
 
