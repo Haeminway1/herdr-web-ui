@@ -704,3 +704,110 @@ cancel
     expect(parseInteractivePrompt("claude", narrow + "\n● Done.\n\n> ")).toBeNull();
   });
 });
+
+describe("Claude's unnumbered menus", () => {
+  // Claude Code 2.1.285 on a folder it has not seen, as herdr's pane read shows it (live)
+  const trust = (selected: 0 | 1 = 0, after = "") => `
+❯ claude --model claude-haiku-4-5-20251001
+
+────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /home/user/projects/new-app
+
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+ project, or work from your team). If not, take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ${selected === 0 ? "❯" : " "} No, exit
+ ${selected === 1 ? "❯" : " "} Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+${after}`;
+
+  test("reads the folder-trust check as a menu with its question and both rows", () => {
+    const prompt = parseInteractivePrompt("claude", trust())!;
+    expect(prompt).not.toBeNull();
+    expect(prompt.kind).toBe("menu");
+    expect(prompt.title).toBe("Accessing workspace");
+    expect(prompt.question).toBe("Is this a project you created or one you trust?");
+    expect(labels(prompt)).toEqual(["No, exit", "Yes, I trust this folder"]);
+    expect(prompt.body).toContain("Claude Code'll be able to read, edit, and execute files here.");
+  });
+
+  test("answers from the native cursor, and keeps its id when only the cursor moves", () => {
+    const prompt = parseInteractivePrompt("claude", trust())!;
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    const moved = parseInteractivePrompt("claude", trust(1))!;
+    expect(moved.id).toBe(prompt.id);
+    expect(answerKeys(moved, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
+    expect(() => answerKeys(prompt, { custom_text: "maybe" })).toThrow();
+  });
+
+  test("is gone once the menu is answered and Claude draws under it", () => {
+    expect(parseInteractivePrompt("claude", trust(1, " ▐▛███▛█   Claude Code v2.1.285\n❯ Try \"fix typecheck errors\"\n"))).toBeNull();
+  });
+
+  test("keeps a label a narrow pane wrapped as one row", () => {
+    // 24 columns: the panel's sentences and the second row both reach the edge and wrap
+    const narrow = (selected: 0 | 1) => `
+ Accessing workspace:
+
+ Quick safety check: Is
+ this a project you
+ created or one you
+ trust?
+
+ ${selected === 0 ? "❯" : " "} No, exit
+ ${selected === 1 ? "❯" : " "} Yes, I trust this
+   folder
+
+ Enter to confirm · Esc
+ to cancel
+`;
+    const prompt = parseInteractivePrompt("claude", narrow(0))!;
+    expect(labels(prompt)).toEqual(["No, exit", "Yes, I trust this folder"]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+    expect(labels(parseInteractivePrompt("claude", narrow(1)))).toEqual(["No, exit", "Yes, I trust this folder"]);
+  });
+
+  test("never takes the next row for a wrapped label when a row is the widest line", () => {
+    // nothing else on screen reaches as far as the first row, so it says nothing of the pane's
+    // width: the line under it may be its tail or the next row, and a guess answers the wrong row
+    const two = (selected: 0 | 1) => `
+ Trust?
+
+ ${selected === 0 ? "❯" : " "} Yes, trust this folder and continue
+ ${selected === 1 ? "❯" : " "} No, exit
+
+ Enter to confirm · Esc to cancel
+`;
+    expect(parseInteractivePrompt("claude", two(0))).toBeNull();
+    // with the cursor on it, the second line is a row for certain
+    expect(labels(parseInteractivePrompt("claude", two(1)))).toEqual(["Yes, trust this folder and continue", "No, exit"]);
+    // merged, this would show two options and answer the second with one Down, the real `Yes`
+    const three = `
+ Trust?
+
+ ❯ No, exit and keep this folder untrusted
+   Yes
+   Yes, and allow hooks too
+
+ Enter to confirm · Esc to cancel
+`;
+    expect(parseInteractivePrompt("claude", three)).toBeNull();
+    const panel = ` Trust? The first row is not the widest line here, so this one tells the width.\n${three.slice(" Trust?\n".length + 1)}`;
+    const prompt = parseInteractivePrompt("claude", panel);
+    expect(labels(prompt)).toEqual(["No, exit and keep this folder untrusted", "Yes", "Yes, and allow hooks too"]);
+    expect(answerKeys(prompt!, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  test("leaves numbered rows and a menu without one selected row to the other readers", () => {
+    expect(parseInteractivePrompt("claude", "Pick one\n\n❯ 1. First\n  2. Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
+    expect(parseInteractivePrompt("claude", "Pick one\n\n  First\n  Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
+  });
+});

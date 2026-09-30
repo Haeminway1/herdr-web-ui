@@ -443,6 +443,8 @@ export type ServerMessage =
   /** raw PTY bytes: append to the terminal, never repaint over it */
   | { type: "pty-data"; pane_id: string; data: string; flow?: { stream_id: string; offset: number } }
   | { type: "pty-exit"; pane_id: string; code: number | null }
+  /** a pane that waited for another web bridge to let go of its terminal (error `attach_held`) is attached again */
+  | { type: "attach-resumed"; pane_id: string }
   /** the shared pty's grid changed: observe clients adopt it, interact clients drive it */
   | { type: "pane-geometry"; pane_id: string; cols: number; rows: number }
   | { type: "role-ack"; mode: ClientRole }
@@ -455,7 +457,8 @@ export type ServerMessage =
   | { type: "pane-exited"; pane_id: string }
   /** session structure changed (pane created/closed): refetch /api/session */
   | { type: "session-changed" }
-  | { type: "error"; code: string; message: string };
+  /** `pane_id` names the pane an error is about, when it is about one (`attach_held`) */
+  | { type: "error"; code: string; message: string; pane_id?: string };
 
 /** herdr's default socket, under XDG_CONFIG_HOME when set, as herdr itself resolves it. */
 export const HERDR_SOCKET_PATH = `${process.env["XDG_CONFIG_HOME"] || `${process.env["HOME"] ?? ""}/.config`}/herdr/herdr.sock`;

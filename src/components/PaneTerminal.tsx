@@ -118,6 +118,11 @@ export function PaneTerminal({
   const [outputReady, setOutputReady] = useState(false);
   const [ended, setEnded] = useState(false);
   const [outputError, setOutputError] = useState<string | null>(null);
+  // another web bridge has this pane's terminal: the server waits for it and says attach-resumed
+  const [held, setHeldState] = useState(false);
+  // what the socket handlers read mid-stream: stdin, onData and the composer's submit
+  const heldRef = useRef(false);
+  const setHeld = useCallback((next: boolean) => { heldRef.current = next; setHeldState(next); }, []);
   // one-shot Control from the key bar: the ref is what onData reads, the state is what the bar shows
   const ctrlRef = useRef(false);
   const [ctrlArmed, setCtrlArmed] = useState(false);
@@ -547,9 +552,14 @@ export function PaneTerminal({
           }
           const prompt = secretPrompt(lines.join("\n"), term.cols);
           secretRef.current = prompt;
-          term.options.disableStdin = observeRef.current || prompt !== null;
+          term.options.disableStdin = observeRef.current || prompt !== null || heldRef.current;
           setSecret((previous) => previous?.pane === owner && previous.prompt === prompt ? previous : prompt ? { pane: owner, prompt } : null);
         });
+      } else if (message.type === "attach-resumed") {
+        if (message.pane_id === paneRef.current) {
+          setHeld(false);
+          term.options.disableStdin = observeRef.current || secretRef.current !== null;
+        }
       } else if (message.type === "pty-exit") {
         if (message.pane_id === paneRef.current) setEnded(true);
       } else if (message.type === "role-ack") {
@@ -558,7 +568,7 @@ export function PaneTerminal({
         const nowObserving = message.mode === "observe";
         observeRef.current = nowObserving;
         setObserving(nowObserving);
-        term.options.disableStdin = nowObserving || secretRef.current !== null;
+        term.options.disableStdin = nowObserving || secretRef.current !== null || heldRef.current;
         onRoleAckRef.current?.(message.mode);
         if (!nowObserving) {
           try {
@@ -574,6 +584,15 @@ export function PaneTerminal({
         if (!observeRef.current || message.pane_id !== paneRef.current) return;
         if (term.cols !== message.cols || term.rows !== message.rows) term.resize(message.cols, message.rows);
       } else if (message.type === "error") {
+        if (message.code === "attach_held") {
+          // a pane this terminal already left: its wait is not this pane's
+          if (message.pane_id !== undefined && message.pane_id !== paneRef.current) return;
+          // not an end: the server attaches as soon as the other bridge lets go
+          setHeld(true);
+          term.options.disableStdin = true;
+          setConnected(socket.connected);
+          return;
+        }
         if (message.code === "output_stalled" || message.code === "attach_conflict") {
           setOutputError(message.message);
           setEnded(true);
@@ -589,6 +608,9 @@ export function PaneTerminal({
       outputGeneration++;
       setOutputReady(false);
       setConnected(false);
+      // the reconnect attaches afresh: it says attach_held again if the other bridge still has
+      // the pane, and a pane it gets straight away sends no attach-resumed to clear this
+      setHeld(false);
     });
     socket.connect();
 
@@ -596,7 +618,7 @@ export function PaneTerminal({
 
     const onData = term.onData((data) => {
       const current = paneRef.current;
-      if (!current || observeRef.current || secretRef.current !== null) return;
+      if (!current || observeRef.current || secretRef.current !== null || heldRef.current) return;
       if (!socket.connected) {
         // policy: commands typed into a dead connection are never auto-sent on
         // reconnect - they wait in a draft the user reviews (see the banner below)
@@ -764,6 +786,7 @@ export function PaneTerminal({
     setEnded(false);
     setOutputReady(false);
     setOutputError(null);
+    setHeld(false);
     secretRef.current = null;
     setSecret(null);
     term.options.disableStdin = observeRef.current;
@@ -830,7 +853,7 @@ export function PaneTerminal({
   const sendDraft = useCallback(() => {
     const socket = socketRef.current;
     const pane = paneRef.current;
-    if (!socket || !pane || draft.text.length === 0 || !socket.connected || secretRef.current !== null) return;
+    if (!socket || !pane || draft.text.length === 0 || !socket.connected || secretRef.current !== null || heldRef.current) return;
     socket.sendInput(pane, draft.text);
     setDraft(EMPTY_DRAFT);
   }, [draft]);
@@ -847,7 +870,7 @@ export function PaneTerminal({
     const term = termRef.current;
     const socket = socketRef.current;
     const pane = paneRef.current;
-    if (!term || !socket || pane === null || secretRef.current !== null) return false;
+    if (!term || !socket || pane === null || secretRef.current !== null || heldRef.current) return false;
     const sent = socket.submit(pane, composerMessage(text), composerPayload(text, term.modes.bracketedPasteMode));
     if (sent === null) return false;
     term.scrollToBottom();
@@ -961,7 +984,8 @@ export function PaneTerminal({
   const uploadImage = useCallback((file: File) => uploadPaneImage(paneId ?? "", file), [paneId]);
 
   return (
-    <div className={`terminal-stack${chatView ? " is-chat" : ""}`}>
+    // data-direct-typing: xterm's own field raises the soft keyboard here (lib/viewport.ts)
+    <div className={`terminal-stack${chatView ? " is-chat" : ""}`} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}>
       {paneId === null && restoreError !== null && (
         <div className="terminal-placeholder is-restore-error" role="status">
           <div className="terminal-placeholder-inner">
@@ -984,6 +1008,11 @@ export function PaneTerminal({
         </div>
       )}
       <div className="terminal-banners">
+        {paneId !== null && held && (
+          <div className="terminal-banner terminal-banner-warning" role="status">
+            <span>{t("Another app has this pane open. It connects here as soon as that app lets go.")}</span>
+          </div>
+        )}
         {paneId !== null && outputError && (
           <div className="terminal-banner terminal-banner-warning terminal-banner-output-error" role="status">
             <span>{outputError}</span>
@@ -1010,7 +1039,7 @@ export function PaneTerminal({
               <span className="draft-dropped">{t(draft.droppedSpecial === 1 ? "{count} special key dropped" : "{count} special keys dropped", { count: draft.droppedSpecial })}</span>
             )}
             <span className="draft-actions">
-              <button type="button" className="draft-send" disabled={draft.text.length === 0 || observing || secretActive} onClick={sendDraft}>
+              <button type="button" className="draft-send" disabled={draft.text.length === 0 || observing || secretActive || held} onClick={sendDraft}>
                 {t("Send")}
               </button>
               <button type="button" className="draft-discard" onClick={discardDraft}>
@@ -1072,7 +1101,7 @@ export function PaneTerminal({
             />
             <div className="composer-queue-actions">
               <button type="button" className="composer-queue-send"
-                disabled={!connected || secretActive || queueSending !== null || queued.some((item) => queueStore.isSending(item.id)) || heldByOpenQueue || message.text.trim().length === 0}
+                disabled={!connected || held || secretActive || queueSending !== null || queued.some((item) => queueStore.isSending(item.id)) || heldByOpenQueue || message.text.trim().length === 0}
                 title={heldByOpenQueue ? t("Codex has a question open in the terminal: answer it above first") : undefined}
                 onClick={() => {
                   if (sendingRef.current || !queueStore.beginSend(queueOwner, message.id)) return;
@@ -1110,7 +1139,7 @@ export function PaneTerminal({
           agent={agent}
           agentStatus={agentStatus}
           metadata={chatMetadata?.pane === paneId ? chatMetadata.value : null}
-          connected={connected}
+          connected={connected && !held}
           queueMode={busy}
           answerHint={answering === null ? null
             : pendingAnswer?.promptId === answering.id ? t("Confirm your answer in the card above, or type another…") : answerHint(answering)}
@@ -1119,7 +1148,7 @@ export function PaneTerminal({
           onUploadImage={uploadImage}
         />
       )}
-      {paneId !== null && !secretActive && !observing && !ended && inputLine && <TerminalInput key={paneId} connected={connected} onSend={sendTerminalLine} onEnter={pressEnter} />}
+      {paneId !== null && !secretActive && !observing && !ended && inputLine && <TerminalInput key={paneId} connected={connected && !held} onSend={sendTerminalLine} onEnter={pressEnter} />}
       {paneId !== null && !secretActive && !observing && !chatView && <KeyBar onKey={pressKey} ctrlArmed={ctrlArmed} onToggleCtrl={toggleCtrl}
         {...(coarse ? { directTyping, onToggleDirect: toggleDirect } : {})} />}
     </div>
