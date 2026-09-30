@@ -18,6 +18,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   keep running while it updates.
 
 ### Fixed
+- The iPhone home-screen app starts below the status bar instead of drawing beneath it, so the
+  header text is no longer blurred on iOS 27 (#164). iOS reads this when the app is added, so an
+  existing install keeps the blur until it is removed from the Home Screen and added again; send
+  or copy unsent drafts and queued messages first. See [the testing guide](docs/ios-home-screen-testing.md).
 - A Codex pane no longer reads RUN for good after its first turn. herdr reports Codex as
   `unknown` at rest, and that was taken for more work; the agent that worked reading `unknown`
   is now a finish (DONE until seen, with its done alert). Late session snapshots no longer
