@@ -1271,7 +1271,12 @@ export function createServer(
               if (!attachment || attachment.held) break;
               if (paneQueues.has(message.pane_id)) {
                 const text = message.text;
-                void serialize(message.pane_id, () => { authorizeSocket(client); return paneSendText(message.pane_id, text); }).catch(() => undefined);
+                void serialize(message.pane_id, () => {
+                  // held while this waited its turn: it goes nowhere, as unqueued typing would
+                  if (attachments.get(message.pane_id)?.held) return;
+                  authorizeSocket(client);
+                  return paneSendText(message.pane_id, text);
+                }).catch(() => undefined);
               } else {
                 attachment.pty.write(message.text);
                 lastTyped.set(message.pane_id, Date.now());
@@ -1303,7 +1308,15 @@ export function createServer(
                 send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
                 break;
               }
-              await serialize(message.pane_id, () => { authorizeSocket(client); return paneSendKeys(message.pane_id, message.keys); });
+              await serialize(message.pane_id, () => {
+                // held while this waited its turn (the attach was refused after the check above)
+                if (attachments.get(message.pane_id)?.held) {
+                  send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
+                  return;
+                }
+                authorizeSocket(client);
+                return paneSendKeys(message.pane_id, message.keys);
+              });
               break;
             }
             case "secret": {
