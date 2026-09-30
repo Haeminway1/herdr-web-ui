@@ -7,6 +7,18 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Added
+- A dark report look is the new default: a near-black blue-grey canvas, hairlines, near-square
+  corners, white primary actions, electric blue only on small marks, and amber / red / green agent
+  states. Settings → Appearance → Colors also offers a neutral Ghostty-style **Charcoal** and the
+  original **Amber**.
+- Settings → Appearance can show the Claude Code mascot on Claude panes and a blue Codex
+  app-style tile on Codex panes instead of the provider logos.
+- On a phone, a swipe in from the left edge opens the workspace list and a swipe to the left
+  closes it.
+- While typing in the chat on a phone, a tap on the transcript, a drag down it, or the new
+  **Hide keyboard** button puts the keyboard away to read; the draft stays in the composer.
+
 ### Changed
 - Remote PCs without their own herdr get herdr 0.9.3 in the bundled runtime (was 0.9.1),
   along with this release's event-stream recovery for the remote bridge. The runtime is
@@ -14,6 +26,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   keep running while it updates.
 
 ### Fixed
+- An iPhone home screen app no longer leaves an empty band as tall as the status bar under the
+  composer. The shell follows the visual viewport only while the keyboard is up.
+- Tapping a notification while the app is open in the background opens that pane even when the
+  system is slow or refuses to bring the window forward.
 - A Codex pane no longer reads RUN for good after its first turn. herdr reports Codex as
   `unknown` at rest, and that was taken for more work; the agent that worked reading `unknown`
   is now a finish (DONE until seen, with its done alert).
@@ -21,10 +37,6 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [0.3.34] - 2026-09-30
 
 ### Added
-- On a phone, a swipe in from the left edge opens the workspace list and a swipe to the left
-  closes it.
-- While typing in the chat on a phone, a tap on the transcript, a drag down it, or the new
-  **Hide keyboard** button puts the keyboard away to read; the draft stays in the composer.
 - A pane herdr could not restore after a restart (herdr 0.9.3+, e.g. its folder was
   removed) is marked NOT RESTORED in the sidebar, and selecting it shows herdr's reason
   instead of a terminal that ends at once. The server no longer tries to attach it.
