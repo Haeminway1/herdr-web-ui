@@ -49,6 +49,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   composer. The shell follows the visual viewport only while the keyboard is up.
 - Tapping a notification while the app is open in the background opens that pane even when the
   system is slow or refuses to bring the window forward.
+- A Codex pane no longer reads RUN for good after its first turn. herdr reports Codex as
+  `unknown` at rest, and that was taken for more work; the agent that worked reading `unknown`
+  is now a finish (DONE until seen, with its done alert).
 - Enforce device permissions and request origins consistently, persist device changes before reporting success, and stop alerts after device access is revoked.
 - Show remote conversation images and full tool output, including Codex output inherited from earlier rollouts.
 - Dragging terminal text copies the visible selection immediately, including when an

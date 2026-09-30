@@ -22,8 +22,13 @@ import { herdrSocketPath } from "./herdr/client.ts";
  * So each pane's "worked since it was last idle" is kept here, and an idle that follows
  * work is reported as `done` until the pane works again or focus moves onto it (`seen`):
  * what herdr itself reports for an agent it did not lose in a pane it has not in front.
- * And the `unknown` in between, while an agent is still there, is reported as `working`
- * (omo's whole turn read `unknown`, and the sidebar showed no RUN).
+ * And the `unknown` in between, while another agent is there, is reported as `working`
+ * (omo's whole turn read `claude/unknown` after `pi/working`, and the sidebar showed no RUN).
+ *
+ * The agent that worked reading `unknown` itself is a finish, not more work: Codex, which
+ * herdr follows through its integration, reads `codex/working` for a turn and then
+ * `codex/unknown` at rest (live, herdr 0.9.3). Reported as working, every Codex pane that
+ * ever worked read RUN for good, and no done alert came.
  *
  * herdr keeps its own `done` across a restart of this server; what is kept here was lost
  * with it, and every omo or gjc pane that had finished read READY again after an update.
@@ -33,8 +38,8 @@ import { herdrSocketPath } from "./herdr/client.ts";
  * and seen at herdr's terminal?) is unknown, and a DONE nobody needs is an alert too.
  */
 export class CompletionTracker {
-  /** panes that worked (or were blocked) since they were last idle, done or seen */
-  private readonly worked = new Set<string>();
+  /** panes that worked (or were blocked) since they were last idle, done or seen, with the agent that did */
+  private readonly worked = new Map<string, string | null>();
   /** panes reported here as `done` while herdr says `idle` */
   private readonly finished = new Set<string>();
   /** what the file holds, so it is written only when that changes */
@@ -80,7 +85,7 @@ export class CompletionTracker {
       if (status !== pane.agent_status) statuses.set(pane.pane_id, status);
     }
     const live = new Set(snapshot.panes.map((pane) => pane.pane_id));
-    for (const pane of [...this.worked, ...this.finished]) if (!live.has(pane)) this.forget(pane);
+    for (const pane of [...this.worked.keys(), ...this.finished]) if (!live.has(pane)) this.forget(pane);
     this.save();
     if (statuses.size === 0) return snapshot;
     return {
@@ -123,7 +128,7 @@ export class CompletionTracker {
     switch (status) {
       case "working":
       case "blocked":
-        this.worked.add(paneId);
+        this.worked.set(paneId, agent);
         this.finished.delete(paneId);
         return status;
       case "done":
@@ -134,14 +139,19 @@ export class CompletionTracker {
         if (this.worked.delete(paneId)) this.finished.add(paneId);
         return this.finished.has(paneId) ? "done" : status;
       default:
-        // `unknown` right after work, with an agent still there, is the work going on under
-        // another identity; with no agent left, the pane is a shell again
-        if (!this.worked.has(paneId)) return status;
-        if (agent === null) {
+        if (this.worked.has(paneId)) {
+          // with no agent left, the pane is a shell again
+          if (agent === null) {
+            this.worked.delete(paneId);
+            return status;
+          }
+          // `unknown` right after work under another identity is the work going on there
+          if (this.worked.get(paneId) !== agent) return "working";
+          // the agent that worked is at rest: it finished
           this.worked.delete(paneId);
-          return status;
+          this.finished.add(paneId);
         }
-        return "working";
+        return this.finished.has(paneId) && agent !== null ? "done" : status;
     }
   }
 }
