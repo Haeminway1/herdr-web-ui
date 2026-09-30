@@ -25,6 +25,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - Subscription usage no longer lists Copilot for everyone signed in to the GitHub CLI. GitHub
   gives every account Copilot Free, so a Free plan found only through `gh` is left out; a
   Copilot sign-in in an editor, or a paid plan, still shows.
+- A local or remote PC refresh no longer replaces a newer pane status with an older
+  snapshot. Status and session changes received during a refresh queue a fresh load.
 
 ## [0.3.34] - 2026-09-30
 
