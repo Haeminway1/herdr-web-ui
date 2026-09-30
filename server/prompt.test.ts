@@ -849,6 +849,23 @@ describe("the fallback card for a blocked pane no reader knows", () => {
     expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["esc"] }]);
   });
 
+  test("offers a (y/n) question as Yes and No, typing the letter alone", () => {
+    const prompt = parseFallbackPrompt("gjc", " config.json already exists.\n Overwrite it? (y/n)\n Press Enter to keep it, or Esc to abort\n");
+    expect(prompt.question).toBe("Overwrite it? (y/n)");
+    expect(labels(prompt)).toEqual(["Yes (y)", "No (n)", "Enter", "Esc"]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ text: "y" }]);
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ text: "n" }]);
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 3 })).toEqual([{ keys: ["esc"] }]);
+    expect(labels(parseFallbackPrompt("gjc", "Delete the branch? [Y/n] "))).toEqual(["Yes (y)", "No (n)", "Enter", "Esc"]);
+  });
+
+  test("takes the question from the line that asks it, not the hint below", () => {
+    const prompt = parseFallbackPrompt("gjc", "Found 3 stale caches.\nClear them now?\nPress Enter to continue, Esc to skip\n");
+    expect(prompt.question).toBe("Clear them now?");
+    expect(labels(prompt)).toEqual(["Enter", "Esc"]);
+  });
+
   test("gives the same id to the same screen, and another to a changed one", () => {
     const screen = "Pick\n\n❯ One\n  Two\n";
     expect(parseFallbackPrompt("omo", screen).id).toBe(parseFallbackPrompt("omo", screen).id);

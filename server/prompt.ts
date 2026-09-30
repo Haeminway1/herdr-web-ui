@@ -69,6 +69,8 @@ type ParsedPrompt = InteractivePrompt & {
   checkedOptionIndices: number[];
   customMenuIndex: number | null;
   rejectWithEscapeIndex: number | null;
+  /** each option's own steps, for a card whose options are not rows of a menu */
+  optionSteps?: AnswerStep[][];
 };
 
 type AnswerStep = { keys?: string[]; text?: string };
@@ -759,6 +761,7 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
   if (!Number.isInteger(index) || index! < 0 || index! >= parsed.options.length || parsed.multi_select) {
     throw new InvalidAnswer("A valid option index is required.");
   }
+  if (parsed.optionSteps) return parsed.optionSteps[index!]!;
   if (parsed.rejectWithEscapeIndex === index) return keySteps([KEY.escape]);
   return keySteps([...navigationKeys(index! - parsed.selectedIndex), KEY.enter]);
 }
@@ -770,6 +773,10 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
  * rows (the same label column, up to a blank line or a rule) becomes a menu answered from the
  * native cursor; with no such rows, the screen's last lines come with Enter and Esc.
  */
+/** a question, allowing a trailing choice hint such as "(y/n)" */
+const ASKED_RE = /\?\s*(?:[([][^)\]]*[)\]])?\s*$/;
+const YES_NO_RE = /[([]\s*y(?:es)?\s*\/\s*n(?:o)?\s*[)\]]/i;
+
 export function parseFallbackPrompt(agent: string, screen: string): InteractivePrompt {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const shown = lines.flatMap((line, index) => cleanLine(line) && !isDivider(line) ? [index] : []);
@@ -802,19 +809,32 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
     }
   }
   const last = tail.map((index) => cleanLine(lines[index]!));
+  const asked = [...last].reverse().find((line) => ASKED_RE.test(line));
+  // a (y/n) question takes a single letter, which is typed without an Enter: a program reading
+  // a whole line still waits for one, and the card that follows offers it
+  const yesNo = last.some((line) => YES_NO_RE.test(line));
+  const choices: { label: string; steps: AnswerStep[] }[] = [
+    ...(yesNo ? [{ label: "Yes (y)", steps: [{ text: "y" }] }, { label: "No (n)", steps: [{ text: "n" }] }] : []),
+    { label: "Enter", steps: keySteps([KEY.enter]) },
+    { label: "Esc", steps: keySteps([KEY.escape]) },
+  ];
   return publicPrompt(finishPrompt(agent, {
-    kind: "menu", fallback: true, title: "Waiting for input", question: last.at(-1) ?? "The agent is waiting for input.",
+    kind: "menu", fallback: true, title: "Waiting for input", question: asked ?? last.at(-1) ?? "The agent is waiting for input.",
     body: last.join("\n") || null,
-    options: [{ label: "Enter", description: null }, { label: "Esc", description: null }],
+    options: choices.map(({ label }) => ({ label, description: null })),
     multi_select: false, custom_option_index: null,
   }, {
-    responder: "fallback-keys", menuLabels: ["Enter", "Esc"], selectedIndex: 0,
-    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: 1,
+    responder: "fallback-keys", menuLabels: choices.map(({ label }) => label), selectedIndex: 0,
+    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+    optionSteps: choices.map(({ steps }) => steps),
   }));
 }
 
-/** each pane's last fallback card, so a screen no reader knows is logged once, not every poll */
-const fallbackLogged = new Map<string, string>();
+/**
+ * The panes whose current wait on an unknown screen is logged: once per wait, not per screen,
+ * so a screen that keeps changing (a clock, a spinner) cannot log on every poll.
+ */
+const fallbackLogged = new Set<string>();
 
 /**
  * The question each pane's queue opened on when that was not the card's (a skipped
@@ -840,9 +860,9 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   // Codex's collapsed question queue reads blocked while its main prompt takes a message
   if (agent === "codex" && codexQuestionsCollapsed(screen)) return { agent, prompt: null };
   const prompt = parseFallbackPrompt(agent, screen);
-  if (fallbackLogged.get(paneId) !== prompt.id) {
-    fallbackLogged.set(paneId, prompt.id);
-    if (fallbackLogged.size > 64) fallbackLogged.delete(fallbackLogged.keys().next().value!);
+  if (!fallbackLogged.has(paneId)) {
+    fallbackLogged.add(paneId);
+    if (fallbackLogged.size > 64) fallbackLogged.delete(fallbackLogged.values().next().value!);
     console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
   }
   return { agent, prompt };
