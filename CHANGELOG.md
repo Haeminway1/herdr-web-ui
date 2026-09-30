@@ -8,12 +8,14 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
-- A dark report look is the new default: a near-black blue-grey canvas, hairlines, near-square
-  corners, white primary actions, electric blue only on small marks, and amber / red / green agent
-  states. Settings → Appearance → Colors also offers a neutral Ghostty-style **Charcoal** and the
-  original **Amber**.
+- Settings → Appearance → Colors offers two opt-in palettes beside herdr's amber, which stays
+  the default: **Dark report** (a near-black blue-grey canvas, hairlines, near-square corners,
+  white primary actions, electric blue only on small marks, and amber / red / green agent states)
+  and a neutral Ghostty-style **Charcoal**
+  ([#188](https://github.com/devswha/herdr-web-ui/pull/188) by @Haeminway1).
 - Settings → Appearance can show Clawd, Claude Code's mascot, on Claude panes and the Codex
-  logo (a blue cloud with a prompt) on Codex panes instead of the provider logos.
+  logo (a blue cloud with a prompt) on Codex panes instead of the provider logos, which stay the
+  default ([#188](https://github.com/devswha/herdr-web-ui/pull/188) by @Haeminway1).
 
 ### Fixed
 - A pane herdr reports waiting for input gets a card in the chat even when no reader knows its

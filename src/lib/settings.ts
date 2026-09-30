@@ -14,8 +14,8 @@ export type ResolvedTheme = "dark" | "light";
 export type Density = "compact" | "comfortable";
 /** what the plan meters count: the share of a limit used, or what is left of it */
 export type UsageCount = "used" | "left";
-/** report: the dark technical report look (the default); charcoal: neutral Ghostty-style dark; amber: the original herdr look */
-export type Palette = "report" | "charcoal" | "amber";
+/** amber: the herdr look (the default); report: the dark technical report look; charcoal: neutral Ghostty-style dark */
+export type Palette = "amber" | "report" | "charcoal";
 /** which picture an agent's mark shows: its provider logo, or its app's own icon */
 export type ClaudeMarkStyle = "logo" | "mascot";
 export type CodexMarkStyle = "logo" | "app";
@@ -63,7 +63,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   density: "comfortable",
-  palette: "report",
+  palette: "amber",
   claudeMark: "logo",
   codexMark: "logo",
   terminalFontSize: 13,
@@ -134,7 +134,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
     codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,
-    palette: record["palette"] === "report" || record["palette"] === "charcoal" || record["palette"] === "amber" ? record["palette"] : DEFAULT_SETTINGS.palette,
+    palette: record["palette"] === "amber" || record["palette"] === "report" || record["palette"] === "charcoal" ? record["palette"] : DEFAULT_SETTINGS.palette,
     terminalFontSize: typeof font === "number" && Number.isFinite(font) ? clampFont(font) : DEFAULT_SETTINGS.terminalFontSize,
     chatFontSize: typeof chatFont === "number" && Number.isFinite(chatFont)
       ? Math.min(CHAT_FONT_MAX, Math.max(CHAT_FONT_MIN, Math.round(chatFont)))
@@ -186,6 +186,10 @@ type TerminalColors = { background: string; foreground: string; cursor: string; 
 
 /** The xterm theme for a resolved theme and palette: the `--term-*` tokens of src/styles.css, verbatim. */
 const TERMINAL_THEMES: Record<Palette, Record<ResolvedTheme, TerminalColors>> = {
+  amber: {
+    light: { background: "#faf8f3", foreground: "#2a251f", cursor: "#8c5000", selectionBackground: "#f0d9ae" },
+    dark: { background: "#181613", foreground: "#d8d0c3", cursor: "#f0a830", selectionBackground: "#4a3d26" },
+  },
   report: {
     light: { background: "#fafaf9", foreground: "#242424", cursor: "#1f5fcc", selectionBackground: "#cfe0fb" },
     dark: { background: "#0f1319", foreground: "#c9d1dc", cursor: "#4c9aff", selectionBackground: "#1f3a66" },
@@ -194,21 +198,17 @@ const TERMINAL_THEMES: Record<Palette, Record<ResolvedTheme, TerminalColors>> = 
     light: { background: "#fafaf9", foreground: "#242424", cursor: "#242424", selectionBackground: "#dedad3" },
     dark: { background: "#171717", foreground: "#cbc7c0", cursor: "#cbc7c0", selectionBackground: "#49443d" },
   },
-  amber: {
-    light: { background: "#faf8f3", foreground: "#2a251f", cursor: "#8c5000", selectionBackground: "#f0d9ae" },
-    dark: { background: "#181613", foreground: "#d8d0c3", cursor: "#f0a830", selectionBackground: "#4a3d26" },
-  },
 };
 
-export function terminalTheme(theme: ResolvedTheme, palette: Palette = "report"): TerminalColors {
+export function terminalTheme(theme: ResolvedTheme, palette: Palette = "amber"): TerminalColors {
   return TERMINAL_THEMES[palette][theme];
 }
 
 /** `<meta name="theme-color">` follows the panel surface so the PWA title bar matches. */
 const THEME_COLOR: Record<Palette, Record<ResolvedTheme, string>> = {
+  amber: { dark: "#181613", light: "#faf8f3" },
   report: { dark: "#0f1319", light: "#fafaf9" },
   charcoal: { dark: "#171717", light: "#fafaf9" },
-  amber: { dark: "#181613", light: "#faf8f3" },
 };
 
 function applyToDocument(settings: Settings, resolved: ResolvedTheme, language: Language): void {

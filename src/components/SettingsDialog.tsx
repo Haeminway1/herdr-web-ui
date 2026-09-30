@@ -153,9 +153,9 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
               </div>
             </div>
             <div className="settings-row">
-              <div><span className="settings-label">{t("Colors")}</span><span className="settings-description">{t("Dark report, neutral charcoal, or herdr's original amber")}</span></div>
+              <div><span className="settings-label">{t("Colors")}</span><span className="settings-description">{t("herdr's amber, a dark report, or neutral charcoal")}</span></div>
               <div className="segmented" aria-label={t("Colors")}>
-                {(["report", "charcoal", "amber"] as const).map((palette) => (
+                {(["amber", "report", "charcoal"] as const).map((palette) => (
                   <button key={palette} type="button" aria-pressed={settings.palette === palette} onClick={() => update({ palette })}>
                     {t(palette === "report" ? "Dark report" : palette === "amber" ? "Amber" : "Charcoal")}
                   </button>

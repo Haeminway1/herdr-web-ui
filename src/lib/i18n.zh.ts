@@ -25,7 +25,7 @@ export const ZH: Record<string, string> = {
   "Light": "浅色",
   "System": "跟随系统",
   "Colors": "配色",
-  "Dark report, neutral charcoal, or herdr's original amber": "深色报告、中性炭灰，或 herdr 原本的琥珀色",
+  "herdr's amber, a dark report, or neutral charcoal": "herdr 的琥珀色、深色报告，或中性炭灰",
   "Dark report": "深色报告",
   "Charcoal": "炭灰",
   "Amber": "琥珀",

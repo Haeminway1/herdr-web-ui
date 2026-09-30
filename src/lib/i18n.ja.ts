@@ -23,7 +23,7 @@ export const JA: Record<string, string> = {
   "Light": "ライト",
   "System": "システム",
   "Colors": "カラー",
-  "Dark report, neutral charcoal, or herdr's original amber": "ダークレポート、ニュートラルなチャコール、または herdr 本来のアンバー",
+  "herdr's amber, a dark report, or neutral charcoal": "herdr のアンバー、ダークレポート、またはニュートラルなチャコール",
   "Dark report": "ダークレポート",
   "Charcoal": "チャコール",
   "Amber": "アンバー",

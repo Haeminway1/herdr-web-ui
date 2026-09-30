@@ -73,28 +73,45 @@ describe("quick replies row", () => {
 });
 
 describe("palette", () => {
-  it("defaults to the report look and keeps only a known palette", () => {
-    expect(DEFAULT_SETTINGS.palette).toBe("report");
+  it("defaults to amber, the look before this setting, and keeps only a known palette", () => {
+    expect(DEFAULT_SETTINGS.palette).toBe("amber");
+    // settings stored before palettes existed carry no palette key
+    expect(sanitizeSettings({ theme: "light" }).palette).toBe("amber");
+    expect(sanitizeSettings({ palette: "report" }).palette).toBe("report");
     expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
-    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("report");
+    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("amber");
   });
 
   it("mirrors each palette's --term-* tokens of styles.css for xterm", () => {
     const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
-    const block = (selector: string): string => css.slice(css.indexOf(`${selector} {`), css.indexOf("}", css.indexOf(`${selector} {`)));
+    const block = (selector: string): string => {
+      const start = css.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      return css.slice(start, css.indexOf("}", start));
+    };
     const token = (text: string, name: string): string | undefined => text.match(new RegExp(`--term-${name}: (#[0-9a-f]{6});`))?.[1];
+    const paper = '[data-theme="light"]:is([data-palette="report"], [data-palette="charcoal"])';
+    // each case lists its blocks from the most specific to the base; the first one naming a token wins
     const cases = [
-      { theme: "dark", palette: "report", own: ":root", base: ":root" },
-      { theme: "light", palette: "report", own: '[data-theme="light"]', base: '[data-theme="light"]' },
-      { theme: "dark", palette: "charcoal", own: '[data-theme="dark"][data-palette="charcoal"]', base: ":root" },
-      { theme: "light", palette: "charcoal", own: '[data-theme="light"][data-palette="charcoal"]', base: '[data-theme="light"]' },
-      { theme: "dark", palette: "amber", own: '[data-theme="dark"][data-palette="amber"]', base: ":root" },
-      { theme: "light", palette: "amber", own: '[data-theme="light"][data-palette="amber"]', base: '[data-theme="light"]' },
+      { theme: "dark", palette: "amber", layers: [":root"] },
+      { theme: "light", palette: "amber", layers: ['[data-theme="light"]', ":root"] },
+      { theme: "dark", palette: "report", layers: ['[data-theme="dark"][data-palette="report"]', ":root"] },
+      { theme: "light", palette: "report", layers: [paper, '[data-theme="light"]'] },
+      { theme: "dark", palette: "charcoal", layers: ['[data-theme="dark"][data-palette="charcoal"]', ":root"] },
+      { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', paper, '[data-theme="light"]'] },
     ] as const;
-    for (const { theme, palette, own, base } of cases) {
-      const read = (name: string): string | undefined => token(block(own), name) ?? token(block(base), name);
+    for (const { theme, palette, layers } of cases) {
+      const read = (name: string): string | undefined => layers.map((selector) => token(block(selector), name)).find((value) => value !== undefined);
       expect(terminalTheme(theme, palette)).toEqual({ background: read("bg")!, foreground: read("fg")!, cursor: read("cursor")!, selectionBackground: read("selection")! });
     }
+  });
+
+  it("paints amber before settings load: the base blocks are the default palette's", () => {
+    const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
+    const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
+    expect(root).toContain(`--term-bg: ${terminalTheme("dark").background};`);
+    expect(root).toContain(`--term-cursor: ${terminalTheme("dark").cursor};`);
+    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "amber"));
   });
 });
 

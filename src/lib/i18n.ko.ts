@@ -21,7 +21,7 @@ export const KO: Record<string, string> = {
   "Light": "밝게",
   "System": "시스템",
   "Colors": "색상",
-  "Dark report, neutral charcoal, or herdr's original amber": "다크 보고서, 중립적인 차콜, 또는 herdr 원래의 앰버",
+  "herdr's amber, a dark report, or neutral charcoal": "herdr의 앰버, 다크 보고서, 또는 중립적인 차콜",
   "Dark report": "다크 보고서",
   "Charcoal": "차콜",
   "Amber": "앰버",

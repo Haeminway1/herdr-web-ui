@@ -80,17 +80,17 @@
 }
 
 /*
- * The system's one filled control, the user's own action: primary. Hover and press are
- * primary mixed with the bright and base surface tokens: no new colors.
+ * The system's one filled control. Hover and press are the accent mixed with the
+ * bright and base surface tokens: no new colors, the hue stays the accent's.
  */
 .access-gate-submit {
   margin-top: var(--space-3);
   height: var(--control-h);
   padding: 0 var(--space-4);
-  background: var(--primary);
-  border: var(--hairline) solid var(--primary);
+  background: var(--accent);
+  border: var(--hairline) solid var(--accent);
   border-radius: var(--radius-sm);
-  color: var(--primary-text);
+  color: var(--bg);
   font-size: var(--fs-md);
   font-weight: var(--fw-semibold);
   cursor: pointer;
@@ -101,13 +101,13 @@
 }
 
 .access-gate-submit:hover {
-  background: color-mix(in srgb, var(--primary) 88%, var(--text-strong));
-  border-color: color-mix(in srgb, var(--primary) 88%, var(--text-strong));
+  background: color-mix(in srgb, var(--accent) 88%, var(--text-strong));
+  border-color: color-mix(in srgb, var(--accent) 88%, var(--text-strong));
 }
 
 .access-gate-submit:active {
-  background: color-mix(in srgb, var(--primary) 80%, var(--bg));
-  border-color: color-mix(in srgb, var(--primary) 80%, var(--bg));
+  background: color-mix(in srgb, var(--accent) 80%, var(--bg));
+  border-color: color-mix(in srgb, var(--accent) 80%, var(--bg));
 }
 
 .access-gate-submit:disabled {
