@@ -13,8 +13,16 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   and when it resets. A tap opens every limit.
 
 ### Fixed
+- A pane herdr reports waiting for input gets a card in the chat even when no reader knows its
+  screen (Codex's collapsed question queue keeps its own handling). A numbered menu that still
+  takes the answer is offered as its options, each answered by typing its number; anything
+  else shows the screen's last lines with Enter and Esc, plus Yes and No for a `(y/n)` prompt
+  and arrows when its hint names them. An answer to a changed screen is refused. Each such
+  wait is logged once.
 - **Add PC** on a Windows host now says that Windows hosts are not supported yet, instead of
   failing with the host shell's "'sh' is not recognized" (#189).
+- A pane waiting for another web bridge no longer frees its input for a moment and reports the
+  wait twice when herdr's refusal of a retry arrives slowly (a busy PC).
 
 ## [0.3.35] - 2026-09-30
 
