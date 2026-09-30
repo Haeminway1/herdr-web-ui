@@ -396,6 +396,7 @@ export const KO: Record<string, string> = {
   "herdr could not restore this pane": "herdr가 이 패널을 복원하지 못했습니다",
   "Select a pane to open its terminal": "터미널을 열 패널을 선택하세요",
   "Reconnect": "다시 연결",
+  "Another app has this pane open. It connects here as soon as that app lets go.": "다른 앱이 이 창을 열고 있습니다. 그 앱이 놓으면 바로 여기에 연결됩니다.",
   "input held while disconnected:": "연결이 끊긴 동안 보관된 입력:",
   "{count} special key dropped": "특수 키 {count}개 버려짐",
   "{count} special keys dropped": "특수 키 {count}개 버려짐",

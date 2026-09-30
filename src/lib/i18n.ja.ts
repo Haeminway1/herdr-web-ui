@@ -398,6 +398,7 @@ export const JA: Record<string, string> = {
   "herdr could not restore this pane": "herdr はこのペインを復元できませんでした",
   "Select a pane to open its terminal": "ターミナルを開くペインを選択してください",
   "Reconnect": "再接続",
+  "Another app has this pane open. It connects here as soon as that app lets go.": "別のアプリがこのペインを開いています。そのアプリが離すとすぐにここへ接続します。",
   "input held while disconnected:": "切断中に保持された入力:",
   "{count} special key dropped": "特殊キー {count} 個を破棄しました",
   "{count} special keys dropped": "特殊キー {count} 個を破棄しました",

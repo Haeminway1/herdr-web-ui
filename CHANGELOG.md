@@ -28,6 +28,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   keep running while it updates.
 
 ### Fixed
+- A pane whose terminal another web bridge on the same herdr has open (two installs side by
+  side) now waits for it instead of ending with "Another web bridge is attached": it says so,
+  keeps the chat readable, and attaches by itself as soon as the other bridge lets go.
 - An iPhone home screen app no longer leaves an empty band as tall as the status bar under the
   composer. The shell follows the visual viewport only while the keyboard is up.
 - Tapping a notification while the app is open in the background opens that pane even when the
