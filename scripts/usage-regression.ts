@@ -41,7 +41,8 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
   try {
     const asked = await staged(context);
     // fork deployment: the meters default to on at the top; this check starts from upstream's defaults
-    await context.addInitScript(() => { try { localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ showUsage: false, usagePlacement: "footer" })); } catch { /* no storage */ } });
+    // (only before anything is saved: the init script runs again on every load)
+    await context.addInitScript(() => { try { if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ showUsage: false, usagePlacement: "footer" })); } catch { /* no storage */ } });
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -132,7 +133,8 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" });
   try {
     await staged(phone);
-    await phone.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ showUsage: true })));
+    // fork deployment: name the placement too, since the fork's default puts the meters at the top
+    await phone.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ showUsage: true, usagePlacement: "footer" })));
     const page = await phone.newPage();
     await page.goto(origin);
     await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
