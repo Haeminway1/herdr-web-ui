@@ -40,7 +40,7 @@ import { herdrSocketPath } from "./herdr/client.ts";
 export class CompletionTracker {
   /** panes that worked (or were blocked) since they were last idle, done or seen, with the agent that did */
   private readonly worked = new Map<string, string | null>();
-  /** panes reported here as `done` while herdr says `idle` */
+  /** panes reported here as `done` while herdr says `idle` or `unknown` */
   private readonly finished = new Set<string>();
   /** what the file holds, so it is written only when that changes */
   private saved = "";
@@ -77,7 +77,7 @@ export class CompletionTracker {
     return changed;
   }
 
-  /** A snapshot as the browser should see it: idle panes this tracker saw finish read `done`. */
+  /** A snapshot as the browser should see it: panes this tracker saw finish read `done`. */
   present(snapshot: SessionSnapshot): SessionSnapshot {
     const statuses = new Map<string, AgentStatus>();
     for (const pane of snapshot.panes) {

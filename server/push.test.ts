@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import type { AlertPrefs } from "../shared/notify-policy.ts";
 import type { AgentStatus, HerdrPane } from "../shared/protocol.ts";
+import { CompletionTracker } from "./completion.ts";
 import { createPushService, handlePushRequest, parseSubscription, type PushService } from "./push.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 
@@ -93,6 +94,33 @@ describe("push state", () => {
 });
 
 describe("push delivery", () => {
+  it("delivers one done alert per Codex finish while an agent handoff keeps working", async () => {
+    const push = subscribed();
+    const completions = new CompletionTracker();
+    const id = "w1:p1";
+    push.seed([pane(id, "unknown", "Codex regression")]);
+    const report = async (status: AgentStatus, agent: string) => {
+      const presented = completions.observe(id, status, agent);
+      await push.onStatus(id, presented);
+      return presented;
+    };
+
+    for (let turn = 0; turn < 2; turn++) {
+      expect(await report("working", "codex")).toBe("working");
+      expect(await report("unknown", "codex")).toBe("done");
+      // Repeated raw unknown events must not repeat the completion alert.
+      expect(await report("unknown", "codex")).toBe("done");
+      expect(fake.received).toHaveLength(turn + 1);
+    }
+    expect(fake.received.every((message) => message.payload.body === "work finished" && message.vapidValid)).toBe(true);
+
+    await report("working", "pi");
+    expect(await report("unknown", "claude")).toBe("working");
+    expect(fake.received).toHaveLength(2);
+    expect(await report("idle", "claude")).toBe("done");
+    expect(fake.received).toHaveLength(3);
+  });
+
   it("sends a status alert the device can decrypt, signed with the server's key", async () => {
     const push = subscribed();
     push.seed([pane("w1:p1", "working", "claude: fix the build")]);
@@ -202,6 +230,28 @@ describe("alert timing and each device's choice", () => {
     push.seed([pane("w1:p1", "idle", "claude")]);
     return { push, advance: (ms: number) => { clock += ms; } };
   }
+
+  it("calls off a derived Codex finish when it is seen or a new turn begins", async () => {
+    const { push } = timed({ input: true, done: "always" });
+    const completions = new CompletionTracker();
+    const report = (status: AgentStatus) => push.onStatus("w1:p1", completions.observe("w1:p1", status, "codex"));
+    await report("working");
+    await report("unknown");
+    expect(completions.seen("w1:p1")).toBe(true);
+    // This is the same onFocus status the server passes to PushService.
+    await push.onStatus("w1:p1", "idle");
+    await push.settled();
+    expect(fake.received).toHaveLength(0);
+
+    await report("working");
+    await report("unknown");
+    await report("working");
+    await push.settled();
+    expect(fake.received).toHaveLength(0);
+    await report("unknown");
+    await push.settled();
+    expect(fake.received.map((message) => message.payload.body)).toEqual(["work finished"]);
+  });
 
   it("calls off a question answered before it goes out, and sends one left waiting", async () => {
     const { push } = timed();

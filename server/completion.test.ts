@@ -5,8 +5,8 @@ import { join } from "node:path";
 import type { SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker } from "./completion.ts";
 
-const snapshot = (panes: { id: string; status: string; focused?: boolean }[]): SessionSnapshot => ({
-  panes: panes.map((pane) => ({ pane_id: pane.id, agent: "claude", agent_status: pane.status, focused: pane.focused ?? false })),
+const snapshot = (panes: { id: string; status: string; agent?: string | null; focused?: boolean }[]): SessionSnapshot => ({
+  panes: panes.map((pane) => ({ pane_id: pane.id, agent: pane.agent === undefined ? "claude" : pane.agent, agent_status: pane.status, focused: pane.focused ?? false })),
   agents: panes.map((pane) => ({ pane_id: pane.id, agent_status: pane.status, focused: pane.focused ?? false })),
 } as unknown as SessionSnapshot);
 
@@ -52,17 +52,31 @@ describe("CompletionTracker", () => {
 
   it("finishes an agent that reads unknown at rest, as Codex does, and keeps it done until seen", () => {
     const tracker = new CompletionTracker();
+    // A first sighting at rest is not a finish.
+    expect(tracker.observe("p", "unknown", "codex")).toBe("unknown");
     // live, herdr 0.9.3: codex/working for a turn, then codex/unknown at rest
     expect(tracker.observe("p", "working", "codex")).toBe("working");
     expect(tracker.observe("p", "unknown", "codex")).toBe("done");
-    const codex = (status: string, focused = false) =>
-      ({ ...snapshot([{ id: "p", status, focused }]), panes: [{ pane_id: "p", agent: "codex", agent_status: status, focused }] } as unknown as SessionSnapshot);
+    const codex = (status: string, focused = false) => snapshot([{ id: "p", agent: "codex", status, focused }]);
     expect(tracker.present(codex("unknown")).panes[0]!.agent_status).toBe("done");
     expect(tracker.seen("p")).toBe(true);
     expect(tracker.present(codex("unknown", true)).panes[0]!.agent_status).toBe("unknown");
     // the next turn works and finishes the same way
     expect(tracker.observe("p", "working", "codex")).toBe("working");
     expect(tracker.observe("p", "unknown", "codex")).toBe("done");
+  });
+
+  it("keeps an agent handoff working through repeated unknown snapshots until it goes idle", () => {
+    const tracker = new CompletionTracker();
+    tracker.observe("p", "working", "pi");
+    const handoff = snapshot([{ id: "p", agent: "claude", status: "unknown" }]);
+    for (let repeat = 0; repeat < 3; repeat++) {
+      const presented = tracker.present(handoff);
+      expect(presented.panes[0]!.agent_status).toBe("working");
+      expect(presented.agents[0]!.agent_status).toBe("working");
+    }
+    expect(tracker.seen("p")).toBe(false);
+    expect(tracker.observe("p", "idle", "claude")).toBe("done");
   });
 
   it("lets an unknown with no agent left be unknown: the agent quit", () => {
@@ -96,6 +110,21 @@ describe("CompletionTracker", () => {
       expect(after.seen("finished")).toBe(true);
       const again = new CompletionTracker(file, () => "herdr-a");
       expect(again.present(snapshot([{ id: "finished", status: "idle" }])).panes[0]!.agent_status).toBe("idle");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("keeps a Codex finish across a restart while herdr still reports unknown", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-completion-codex-"));
+    try {
+      const file = join(dir, "completions.json");
+      const before = new CompletionTracker(file, () => "herdr-a");
+      before.observe("p", "working", "codex");
+      before.observe("p", "unknown", "codex");
+      const atRest = snapshot([{ id: "p", agent: "codex", status: "unknown" }]);
+      const after = new CompletionTracker(file, () => "herdr-a");
+      expect(after.present(atRest).panes[0]!.agent_status).toBe("done");
+      expect(after.seen("p")).toBe(true);
+      expect(new CompletionTracker(file, () => "herdr-a").present(atRest).panes[0]!.agent_status).toBe("unknown");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
