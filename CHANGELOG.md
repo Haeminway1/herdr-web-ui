@@ -21,9 +21,15 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - Claude Code's unnumbered menus, such as the folder-trust check on a folder it has not seen
   ("Enter to confirm · Esc to cancel"), show as a card in the chat and can be answered there.
   herdr reported the pane INPUT, but no card appeared.
+- A Codex pane no longer reads RUN for good after its first turn. herdr reports Codex as
+  `unknown` at rest, and that was taken for more work; the agent that worked reading `unknown`
+  is now a finish (DONE until seen, with its done alert). Late session snapshots no longer
+  end a newer turn, and DONE follows the agent that finished.
 - Subscription usage no longer lists Copilot for everyone signed in to the GitHub CLI. GitHub
   gives every account Copilot Free, so a Free plan found only through `gh` is left out; a
   Copilot sign-in in an editor, or a paid plan, still shows.
+- A local or remote PC refresh no longer replaces a newer pane status with an older
+  snapshot. Status and session changes received during a refresh queue a fresh load.
 
 ## [0.3.34] - 2026-09-30
 
