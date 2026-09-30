@@ -196,6 +196,7 @@ function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
     multi_select: parsed.multi_select,
     custom_option_index: parsed.custom_option_index,
     ...(parsed.queued ? { queued: parsed.queued } : {}),
+    ...(parsed.fallback ? { fallback: true as const } : {}),
   };
   parsedByPublicPrompt.set(prompt, parsed);
   return prompt;
@@ -790,7 +791,7 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
       const above = lines.slice(Math.max(0, first - 12), first).map(cleanLine).filter((line) => line && !isDivider(line));
       const asked = [...above].reverse().find((line) => /\?$/.test(line));
       return publicPrompt(finishPrompt(agent, {
-        kind: "menu", title: "Waiting for your answer", question: asked ?? above.at(-1) ?? "The agent is waiting for your answer.",
+        kind: "menu", fallback: true, title: "Waiting for your answer", question: asked ?? above.at(-1) ?? "The agent is waiting for your answer.",
         body: above.join("\n") || null,
         options: rows.map((row) => ({ label: row.replace(SELECTED_RE, "").replace(/^\d+\.\s+/, "").trim(), description: null })),
         multi_select: false, custom_option_index: null,
@@ -802,7 +803,7 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
   }
   const last = tail.map((index) => cleanLine(lines[index]!));
   return publicPrompt(finishPrompt(agent, {
-    kind: "menu", title: "Waiting for input", question: last.at(-1) ?? "The agent is waiting for input.",
+    kind: "menu", fallback: true, title: "Waiting for input", question: last.at(-1) ?? "The agent is waiting for input.",
     body: last.join("\n") || null,
     options: [{ label: "Enter", description: null }, { label: "Esc", description: null }],
     multi_select: false, custom_option_index: null,
