@@ -80,10 +80,9 @@ export const DEFAULT_SETTINGS: Settings = {
   alertDone: "long",
   quickReplies: ["continue", "yes", "no", "commit and push", "retry"],
   showQuickReplies: false,
-  // fork deployment: the plan meters on by default, at the top of the sidebar
-  showUsage: true,
+  showUsage: false,
   usageCount: "used",
-  usagePlacement: "top",
+  usagePlacement: "footer",
   usageOrder: [],
   usageHidden: [],
 };

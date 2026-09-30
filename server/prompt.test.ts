@@ -825,6 +825,7 @@ describe("the fallback card for a blocked pane no reader knows", () => {
  ↵ choose · esc back
 `);
     expect(prompt.kind).toBe("menu");
+    expect(prompt.fallback).toBe(true);
     expect(prompt.question).toBe("Apply these 3 file changes?");
     expect(labels(prompt)).toEqual(["Apply all", "Review each", "Discard"]);
     expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
