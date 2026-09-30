@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 
-import { alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, chatFontSize, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings } from "./settings.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, chatFontSize, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme } from "./settings.ts";
 
 it("keeps the screen wake lock off until this device explicitly enables it", () => {
   expect(DEFAULT_SETTINGS.keepScreenOn).toBe(false);
@@ -67,5 +69,40 @@ describe("quick replies row", () => {
     expect(sanitizeSettings({ usageOrder: ["codex:a", 3, "codex:a", "", "claude:b"] }).usageOrder).toEqual(["codex:a", "claude:b"]);
     expect(sanitizeSettings({ usageHidden: Array.from({ length: 100 }, (_, index) => `k${index}`) }).usageHidden).toHaveLength(64);
     expect(sanitizeSettings({ usageHidden: "codex:a" }).usageHidden).toEqual([]);
+  });
+});
+
+describe("palette", () => {
+  it("defaults to the report look and keeps only a known palette", () => {
+    expect(DEFAULT_SETTINGS.palette).toBe("report");
+    expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
+    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("report");
+  });
+
+  it("mirrors each palette's --term-* tokens of styles.css for xterm", () => {
+    const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
+    const block = (selector: string): string => css.slice(css.indexOf(`${selector} {`), css.indexOf("}", css.indexOf(`${selector} {`)));
+    const token = (text: string, name: string): string | undefined => text.match(new RegExp(`--term-${name}: (#[0-9a-f]{6});`))?.[1];
+    const cases = [
+      { theme: "dark", palette: "report", own: ":root", base: ":root" },
+      { theme: "light", palette: "report", own: '[data-theme="light"]', base: '[data-theme="light"]' },
+      { theme: "dark", palette: "charcoal", own: '[data-theme="dark"][data-palette="charcoal"]', base: ":root" },
+      { theme: "light", palette: "charcoal", own: '[data-theme="light"][data-palette="charcoal"]', base: '[data-theme="light"]' },
+      { theme: "dark", palette: "amber", own: '[data-theme="dark"][data-palette="amber"]', base: ":root" },
+      { theme: "light", palette: "amber", own: '[data-theme="light"][data-palette="amber"]', base: '[data-theme="light"]' },
+    ] as const;
+    for (const { theme, palette, own, base } of cases) {
+      const read = (name: string): string | undefined => token(block(own), name) ?? token(block(base), name);
+      expect(terminalTheme(theme, palette)).toEqual({ background: read("bg")!, foreground: read("fg")!, cursor: read("cursor")!, selectionBackground: read("selection")! });
+    }
+  });
+});
+
+describe("agent marks", () => {
+  it("shows provider logos until an app icon is chosen", () => {
+    expect(sanitizeSettings({}).claudeMark).toBe("logo");
+    expect(sanitizeSettings({}).codexMark).toBe("logo");
+    expect(sanitizeSettings({ claudeMark: "mascot", codexMark: "app" })).toMatchObject({ claudeMark: "mascot", codexMark: "app" });
+    expect(sanitizeSettings({ claudeMark: "alien", codexMark: 1 })).toMatchObject({ claudeMark: "logo", codexMark: "logo" });
   });
 });
