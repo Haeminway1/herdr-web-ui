@@ -8,6 +8,24 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
+- A Korean README (`README.ko.md`), linked from the English, Simplified Chinese and
+  Japanese READMEs.
+
+### Changed
+- Remote PCs without their own herdr get herdr 0.9.3 in the bundled runtime (was 0.9.1),
+  along with this release's event-stream recovery for the remote bridge. The runtime is
+  version 8: a connected PC's bridge asks for **Update bridge…** once, and herdr sessions
+  keep running while it updates.
+
+### Fixed
+- An iPhone home screen app no longer leaves an empty band as tall as the status bar under the
+  composer. The shell follows the visual viewport only while the keyboard is up.
+- Tapping a notification while the app is open in the background opens that pane even when the
+  system is slow or refuses to bring the window forward.
+
+## [0.3.34] - 2026-09-30
+
+### Added
 - A pane herdr could not restore after a restart (herdr 0.9.3+, e.g. its folder was
   removed) is marked NOT RESTORED in the sidebar, and selecting it shows herdr's reason
   instead of a terminal that ends at once. The server no longer tries to attach it.
@@ -35,28 +53,28 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   `HERDR_WEB_UI_REF` still picks another branch or tag.
 
 ### Fixed
-- An iPhone home screen app no longer leaves an empty band as tall as the status bar under the
-  composer. The shell follows the visual viewport only while the keyboard is up.
-- Tapping a notification while the app is open in the background opens that pane even when the
-  system is slow or refuses to bring the window forward.
-- Enforce device permissions and request origins consistently, persist device changes before reporting success, and stop alerts after device access is revoked.
-- Show remote conversation images and full tool output, including Codex output inherited from earlier rollouts.
+- Enforce device permissions and request origins consistently, persist device changes
+  before reporting success, and stop alerts after device access is revoked. A device that
+  can only watch can no longer read files on a connected PC through a path with an empty
+  segment, and an alert subscription made before any pairing stops once pairing closes the
+  open network.
+- Show remote conversation images and full tool output, including Codex output inherited
+  from earlier rollouts.
 - Dragging terminal text copies the visible selection immediately, including when an
   installed app's asynchronous clipboard permission is blocked. Scrollback copies
   reserve clipboard access during the release gesture; delayed or empty selection
   responses cannot erase a newer copy.
-- Show remote conversation images and full tool output, including Codex output inherited from earlier rollouts.
-- Settle sent composer drafts across pane switches and cancel all delayed completion alerts when work resumes.
-
+- Settle sent composer drafts across pane switches and cancel all delayed completion
+  alerts when work resumes.
 - Closing the selected pane with the sidebar's X no longer puts the keyboard on the pane
   selected in its place. On a phone it came up over the drawer, in the way of closing the
   next pane. A pane or lens the user picks still takes the keyboard.
 - Pane statuses and web push recover when herdr drops the app's event stream: herdr 0.9.2
   and newer close a listener that falls behind, and herdr restarts do the same. Every
   stream now reconnects at once, keeps trying while herdr restarts, and reads back what
-  it missed from herdr, so a
-  pane created meanwhile is no longer left without status or alerts for up to a minute,
-  and an alert for a pane that has since gone quiet is called off instead of sent.
+  it missed from herdr, so a pane created meanwhile is no longer left without status or
+  alerts for up to a minute, and an alert for a pane that has since gone quiet is called
+  off instead of sent.
 
 ## [0.3.33] - 2026-09-29
 
