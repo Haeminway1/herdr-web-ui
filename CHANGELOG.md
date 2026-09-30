@@ -18,6 +18,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   closes it.
 - While typing in the chat on a phone, a tap on the transcript, a drag down it, or the new
   **Hide keyboard** button puts the keyboard away to read; the draft stays in the composer.
+- A Korean README (`README.ko.md`), linked from the English, Simplified Chinese and
+  Japanese READMEs.
 
 ### Changed
 - Remote PCs without their own herdr get herdr 0.9.3 in the bundled runtime (was 0.9.1),
@@ -33,6 +35,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - A Codex pane no longer reads RUN for good after its first turn. herdr reports Codex as
   `unknown` at rest, and that was taken for more work; the agent that worked reading `unknown`
   is now a finish (DONE until seen, with its done alert).
+- Subscription usage no longer lists Copilot for everyone signed in to the GitHub CLI. GitHub
+  gives every account Copilot Free, so a Free plan found only through `gh` is left out; a
+  Copilot sign-in in an editor, or a paid plan, still shows.
 
 ## [0.3.34] - 2026-09-30
 
