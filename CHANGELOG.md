@@ -13,7 +13,7 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   states. Settings → Appearance → Colors also offers a neutral Ghostty-style **Charcoal** and the
   original **Amber**.
 - Settings → Appearance can show Clawd, Claude Code's mascot, on Claude panes and the Codex
-  app's blue tile on Codex panes instead of the provider logos.
+  logo (a blue cloud with a prompt) on Codex panes instead of the provider logos.
 - On a phone, a swipe in from the left edge opens the workspace list and a swipe to the left
   closes it.
 - While typing in the chat on a phone, a tap on the transcript, a drag down it, or the new
