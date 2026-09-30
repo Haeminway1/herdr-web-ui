@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { AlertPrefs } from "../shared/notify-policy.ts";
-import type { AgentStatus, HerdrPane } from "../shared/protocol.ts";
+import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker } from "./completion.ts";
 import { createPushService, handlePushRequest, parseSubscription, type PushService } from "./push.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
@@ -94,6 +94,28 @@ describe("push state", () => {
 });
 
 describe("push delivery", () => {
+  it("delivers the real finish after a late unknown snapshot arrives during a new Codex turn", async () => {
+    const push = subscribed();
+    const completions = new CompletionTracker();
+    const id = "w1:p1";
+    const atRest = { panes: [{ ...pane(id, "unknown", "Codex regression"), agent: "codex" }], agents: [] } as unknown as SessionSnapshot;
+    push.seed(atRest.panes);
+    let release!: (value: SessionSnapshot) => void;
+    const pending = new Promise<SessionSnapshot>((resolve) => { release = resolve; });
+    const reading = completions.readSnapshot(() => pending);
+    await push.onStatus(id, completions.observe(id, "working", "codex"));
+    release(atRest);
+    expect((await reading).panes[0]!.agent_status).toBe("working");
+    expect(completions.seen(id)).toBe(false);
+    expect(fake.received).toHaveLength(0);
+
+    expect(completions.observe(id, "unknown", "codex")).toBe("done");
+    await push.onStatus(id, "done");
+    expect(fake.received).toHaveLength(1);
+    expect(fake.received[0]!.payload.body).toBe("work finished");
+    expect(fake.received[0]!.vapidValid).toBe(true);
+  });
+
   it("delivers one done alert per Codex finish while an agent handoff keeps working", async () => {
     const push = subscribed();
     const completions = new CompletionTracker();

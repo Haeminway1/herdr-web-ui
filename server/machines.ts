@@ -125,7 +125,7 @@ export class MachineManager {
   async refreshLocal(): Promise<void> {
     if (this.localBusy || this.stopped) return;
     this.localBusy = true;
-    try { this.local.snapshot = this.completions.present(await labelOmoPanes(await sessionSnapshot())); this.local.state = "connected"; this.local.error = null; }
+    try { this.local.snapshot = await this.completions.readSnapshot(sessionSnapshot, labelOmoPanes); this.local.state = "connected"; this.local.error = null; }
     catch (e) { this.local.state = "error"; this.local.error = String(e instanceof Error ? e.message : e); }
     finally { this.localBusy = false; this.emit(); }
   }
