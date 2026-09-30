@@ -704,3 +704,56 @@ cancel
     expect(parseInteractivePrompt("claude", narrow + "\n● Done.\n\n> ")).toBeNull();
   });
 });
+
+describe("Claude's unnumbered menus", () => {
+  // Claude Code 2.1.285 on a folder it has not seen, as herdr's pane read shows it (live)
+  const trust = (selected: 0 | 1 = 0, after = "") => `
+❯ claude --model claude-haiku-4-5-20251001
+
+────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /home/user/projects/new-app
+
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+ project, or work from your team). If not, take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ${selected === 0 ? "❯" : " "} No, exit
+ ${selected === 1 ? "❯" : " "} Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+${after}`;
+
+  test("reads the folder-trust check as a menu with its question and both rows", () => {
+    const prompt = parseInteractivePrompt("claude", trust())!;
+    expect(prompt).not.toBeNull();
+    expect(prompt.kind).toBe("menu");
+    expect(prompt.title).toBe("Accessing workspace");
+    expect(prompt.question).toBe("Is this a project you created or one you trust?");
+    expect(labels(prompt)).toEqual(["No, exit", "Yes, I trust this folder"]);
+    expect(prompt.body).toContain("Claude Code'll be able to read, edit, and execute files here.");
+  });
+
+  test("answers from the native cursor, and keeps its id when only the cursor moves", () => {
+    const prompt = parseInteractivePrompt("claude", trust())!;
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    const moved = parseInteractivePrompt("claude", trust(1))!;
+    expect(moved.id).toBe(prompt.id);
+    expect(answerKeys(moved, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
+    expect(() => answerKeys(prompt, { custom_text: "maybe" })).toThrow();
+  });
+
+  test("is gone once the menu is answered and Claude draws under it", () => {
+    expect(parseInteractivePrompt("claude", trust(1, " ▐▛███▛█   Claude Code v2.1.285\n❯ Try \"fix typecheck errors\"\n"))).toBeNull();
+  });
+
+  test("leaves numbered rows and a menu without one selected row to the other readers", () => {
+    expect(parseInteractivePrompt("claude", "Pick one\n\n❯ 1. First\n  2. Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
+    expect(parseInteractivePrompt("claude", "Pick one\n\n  First\n  Second\n\nEnter to confirm · Esc to cancel\n")).toBeNull();
+  });
+});

@@ -28,6 +28,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   keep running while it updates.
 
 ### Fixed
+- Claude Code's unnumbered menus, such as the folder-trust check on a folder it has not seen
+  ("Enter to confirm · Esc to cancel"), show as a card in the chat and can be answered there.
+  herdr reported the pane INPUT, but no card appeared.
 - A pane whose terminal another web bridge on the same herdr has open (two installs side by
   side) now waits for it instead of ending with "Another web bridge is attached": it says so,
   keeps the chat readable, and attaches by itself as soon as the other bridge lets go.

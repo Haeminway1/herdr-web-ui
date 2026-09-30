@@ -23,6 +23,9 @@ const CODEX_QUEUE_POSITION_RE = /^(\d+) of (\d+)$/;
 const CLAUDE_ASK_HINT_RE = /enter to select.*(?:↑\/↓|tab\/arrow keys) to navigate.*esc to cancel/i;
 // question tabs, whole (`←  ☒ Route  ☐ Author  ✔ Submit  →`) or cut off by a narrow pane
 const CLAUDE_TABS_RE = /^←\s+[☐☒☑✔]/;
+// Claude Code's unnumbered menus (the folder-trust check on a new folder, among others):
+// plain rows, `❯` on the selected one, under this hint
+const CLAUDE_CONFIRM_HINT_RE = /enter to confirm.*esc to (?:cancel|exit|go back)/i;
 const SOLID_RULE_RE = /^[─━]{8,}$/;
 const CODEX_APPROVAL_HEADER_RE =
   /(?:Would you like to (?:run|make|apply|continue|grant)|Allow Codex to|Approve (?:this )?(?:app )?tool call|Do you trust the contents|Trust this folder\?|Enable full access)/i;
@@ -54,7 +57,8 @@ type Responder =
   | "codex-approval"
   | "omp-approval"
   | "claude-approval"
-  | "claude-plan";
+  | "claude-plan"
+  | "claude-confirm";
 
 type ParsedPrompt = InteractivePrompt & {
   responder: Responder;
@@ -569,6 +573,52 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
   });
 }
 
+/**
+ * Claude Code's unnumbered menus, live in 2.1.285 on a folder it has not seen:
+ *
+ *   Accessing workspace:
+ *   /home/user/project
+ *   Quick safety check: Is this a project you created or one you trust? (Like your own code,
+ *   …
+ *   ❯ No, exit
+ *     Yes, I trust this folder
+ *   Enter to confirm · Esc to cancel
+ *
+ * herdr reports the pane blocked. The rows are the lines right above the hint, up to a blank
+ * line or a rule, exactly one of them `❯`; numbered rows are left to the menus above.
+ */
+function parseClaudeConfirm(screen: string): ParsedPrompt | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  const hintIndex = findLastIndex(lines, (_, index) => CLAUDE_CONFIRM_HINT_RE.test(wrapped(lines, index)));
+  if (hintIndex < 0) return null;
+  let end = hintIndex - 1;
+  while (end >= 0 && !cleanLine(lines[end]!)) end -= 1;
+  let start = end;
+  while (start > 0 && cleanLine(lines[start - 1]!) && !isDivider(lines[start - 1]!)) start -= 1;
+  if (end < 0 || start < 0) return null;
+  const rows = lines.slice(start, end + 1).map((raw, offset) => {
+    const line = cleanLine(raw);
+    return { label: line.replace(SELECTED_RE, "").trim(), selected: SELECTED_RE.test(line), lineIndex: start + offset };
+  });
+  if (rows.length < 2 || rows.length > 9 || rows.filter((row) => row.selected).length !== 1) return null;
+  if (rows.some((row) => !row.label || NUMBERED_OPTION_RE.test(row.label))) return null;
+  // the panel above the rows: its first line names it, a sentence ending in "?" asks
+  let top = start - 1;
+  while (top >= 0 && !isDivider(lines[top]!) && start - top <= 30) top -= 1;
+  const panel = lines.slice(top + 1, start).map(cleanLine).filter(Boolean);
+  const title = (panel[0] ?? "Choose an option").replace(/:$/, "");
+  const prose = normalizeText(panel.slice(1).join(" "));
+  const asked = /(?:^|[.:!]\s+)([^.:!?]*\?)/.exec(prose)?.[1]?.trim();
+  return finishPrompt("claude", {
+    kind: "menu", title, question: asked ?? title,
+    body: panel.slice(1).join("\n") || null,
+    options: rows.map((row) => ({ label: row.label, description: null })), multi_select: false, custom_option_index: null,
+  }, {
+    responder: "claude-confirm", menuLabels: rows.map((row) => row.label), selectedIndex: rows.findIndex((row) => row.selected),
+    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+  });
+}
+
 function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   const cleanLines = screen.replace(ANSI_RE, "").split(/\r?\n/).map(cleanLine);
   const shown = cleanLines.filter((line) => line && !isDivider(line));
@@ -587,6 +637,7 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   if (prompt.responder === "codex-approval") return ends(/press enter to confirm|esc to cancel|enter continue.*esc back|^\d+\.\s+(?:No|Reject|Cancel|Deny)\b/i);
   if (prompt.responder === "omp-approval") return ends(/^(?:Approve|Deny)$|esc.*cancel/i);
   if (prompt.responder === "claude-approval") return ends(/esc to cancel.*(?:tab|ctrl\+e)|ctrl\+e to explain/i);
+  if (prompt.responder === "claude-confirm") return ends(CLAUDE_CONFIRM_HINT_RE);
   return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i);
 }
 
@@ -596,7 +647,7 @@ function parsePrompt(agent: string, screen: string): ParsedPrompt | null {
     : agent === "omp"
       ? [parseOmpQuestion(screen), parseOmpApproval(screen)]
       : agent === "claude"
-        ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen)]
+        ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen), parseClaudeConfirm(screen)]
         : [];
   return candidates.find((candidate): candidate is ParsedPrompt => candidate !== null && promptTailIsActive(candidate, screen)) ?? null;
 }
