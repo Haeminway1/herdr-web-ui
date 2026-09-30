@@ -8,6 +8,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Fixed
+- A pane waiting for another web bridge no longer frees its input for a moment and reports the
+  wait twice when herdr's refusal of a retry arrives slowly (a busy PC).
 - A pane herdr reports waiting for input always gets a card in the chat, even when no reader
   knows its screen: a marked menu there is offered as options answered from the cursor, and
   otherwise the screen's last lines come with Enter and Esc. Such screens are logged once.

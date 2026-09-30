@@ -81,6 +81,8 @@ const ATTACH_RETRY_MAX_MS = 500;
 const ATTACH_HOLD_MS = 100;
 /** how often a terminal another web bridge holds is tried again, while clients here still want it */
 const ATTACH_HELD_RETRY_MS = 3_000;
+/** the start of herdr refusing an attach, before its whole line (and the exit) has come */
+const ATTACH_REFUSING_RE = /terminal attach failed|already has an attached client|has a read in progress/;
 const ATTACH_HELD_MESSAGE = "Another web bridge has this pane open. It connects here as soon as that bridge lets go.";
 /** The gap between a composer message's text and its Enter (see submitText). */
 export const SUBMIT_DELAY_MS = 120;
@@ -504,6 +506,9 @@ export function createServer(
             // a closed attachment's kill skips onExit, which would clear this timer: a newer
             // attachment on the pane must not hear this one's resume
             if (attachments.get(paneId) !== attachment) return;
+            // a refusal whose exit comes late (a busy PC) is not an attach: onExit handles it,
+            // and resuming here would free the input, then report attach_held a second time
+            if (ATTACH_REFUSING_RE.test(output)) return;
             // the attach took: a pane that waited for another bridge is this bridge's again
             if (attachment.held) {
               attachment.held = false;
