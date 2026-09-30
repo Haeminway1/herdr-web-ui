@@ -12,8 +12,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   corners, white primary actions, electric blue only on small marks, and amber / red / green agent
   states. Settings → Appearance → Colors also offers a neutral Ghostty-style **Charcoal** and the
   original **Amber**.
-- Settings → Appearance can show the Claude Code mascot on Claude panes and a blue Codex
-  app-style tile on Codex panes instead of the provider logos.
+- Settings → Appearance can show Clawd, Claude Code's mascot, on Claude panes and the Codex
+  app's blue tile on Codex panes instead of the provider logos.
 - A pane herdr could not restore after a restart (herdr 0.9.3+, e.g. its folder was
   removed) is marked NOT RESTORED in the sidebar, and selecting it shows herdr's reason
   instead of a terminal that ends at once. The server no longer tries to attach it.
