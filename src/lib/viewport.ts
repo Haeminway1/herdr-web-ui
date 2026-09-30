@@ -12,34 +12,44 @@
  * and is otherwise a plain page: pinning it fought iOS scrolling the focused field
  * into view, and a second tap on the field (to paste) landed after the page jumped,
  * off the field, which dismissed the keyboard.
+ *
+ * The visual height is published only while the soft keyboard is up. An iPhone home
+ * screen app (standalone, black-translucent status bar) reports a visual viewport
+ * shorter than the screen with no keyboard at all, which left a band as tall as the
+ * status bar under the composer. Without a keyboard the shell is 100dvh.
  */
 
 const viewport = window.visualViewport;
+const root = document.documentElement;
+
+const syncHeight = (): void => {
+  if (!viewport) return;
+  if (root.hasAttribute("data-keyboard")) root.style.setProperty("--app-height", `${Math.round(viewport.height)}px`);
+  else root.style.removeProperty("--app-height");
+  if (document.querySelector(".app") !== null) window.scrollTo(0, 0);
+};
 
 if (viewport) {
-  const sync = (): void => {
-    document.documentElement.style.setProperty("--app-height", `${Math.round(viewport.height)}px`);
-    if (document.querySelector(".app") !== null) window.scrollTo(0, 0);
-  };
-  viewport.addEventListener("resize", sync);
-  viewport.addEventListener("scroll", sync);
-  sync();
+  viewport.addEventListener("resize", syncHeight);
+  viewport.addEventListener("scroll", syncHeight);
 }
 
 /**
  * Marks the page while a phone's soft keyboard is up, so the composer drops the
- * home-indicator space the keyboard covers (Composer.css). Viewport sizes do not
- * tell: iOS Safari 26 resizes both viewports with the keyboard. A touch device
- * with a text field focused has its keyboard up - except xterm's own hidden field,
- * which the app focuses on its own, and which never raises a keyboard that way.
+ * home-indicator space the keyboard covers (Composer.css) and the shell follows the
+ * visual viewport. Viewport sizes do not tell: iOS Safari 26 resizes both viewports
+ * with the keyboard. A touch device with a text field focused has its keyboard up -
+ * except xterm's own hidden field, which the app focuses on its own and which raises
+ * a keyboard only in direct typing (PaneTerminal marks that with data-direct-typing).
  */
 const touch = window.matchMedia("(pointer: coarse)");
 const typing = (element: Element | null): boolean =>
-  (element instanceof HTMLTextAreaElement && !element.classList.contains("xterm-helper-textarea"))
+  (element instanceof HTMLTextAreaElement && (!element.classList.contains("xterm-helper-textarea") || element.closest("[data-direct-typing]") !== null))
   || (element instanceof HTMLInputElement && !["button", "checkbox", "radio", "range", "submit", "reset", "file", "color"].includes(element.type))
   || (element instanceof HTMLElement && element.isContentEditable);
 const syncKeyboard = (): void => {
-  document.documentElement.toggleAttribute("data-keyboard", touch.matches && typing(document.activeElement));
+  root.toggleAttribute("data-keyboard", touch.matches && typing(document.activeElement));
+  syncHeight();
 };
 document.addEventListener("focusin", syncKeyboard);
 // focus moving from one field to the next blurs first: read where it landed

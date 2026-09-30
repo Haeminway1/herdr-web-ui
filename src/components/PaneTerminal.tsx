@@ -961,7 +961,8 @@ export function PaneTerminal({
   const uploadImage = useCallback((file: File) => uploadPaneImage(paneId ?? "", file), [paneId]);
 
   return (
-    <div className={`terminal-stack${chatView ? " is-chat" : ""}`}>
+    // data-direct-typing: xterm's own field raises the soft keyboard here (lib/viewport.ts)
+    <div className={`terminal-stack${chatView ? " is-chat" : ""}`} data-direct-typing={coarse && directTyping && !chatView ? "" : undefined}>
       {paneId === null && restoreError !== null && (
         <div className="terminal-placeholder is-restore-error" role="status">
           <div className="terminal-placeholder-inner">

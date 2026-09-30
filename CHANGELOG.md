@@ -35,6 +35,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   `HERDR_WEB_UI_REF` still picks another branch or tag.
 
 ### Fixed
+- An iPhone home screen app no longer leaves an empty band as tall as the status bar under the
+  composer. The shell follows the visual viewport only while the keyboard is up.
+- Tapping a notification while the app is open in the background opens that pane even when the
+  system is slow or refuses to bring the window forward.
 - Enforce device permissions and request origins consistently, persist device changes before reporting success, and stop alerts after device access is revoked.
 - Show remote conversation images and full tool output, including Codex output inherited from earlier rollouts.
 - Dragging terminal text copies the visible selection immediately, including when an
