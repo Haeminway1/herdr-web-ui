@@ -7,6 +7,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Fixed
+- A pane waiting for another web bridge no longer frees its input for a moment and reports the
+  wait twice when herdr's refusal of a retry arrives slowly (a busy PC).
+
 ## [0.3.35] - 2026-09-30
 
 ### Added
