@@ -18,9 +18,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   keep running while it updates.
 
 ### Fixed
-- A pane whose terminal another web bridge on the same herdr has open (two installs side by
-  side) now waits for it instead of ending with "Another web bridge is attached": it says so,
-  keeps the chat readable, and attaches by itself as soon as the other bridge lets go.
+- Claude Code's unnumbered menus, such as the folder-trust check on a folder it has not seen
+  ("Enter to confirm · Esc to cancel"), show as a card in the chat and can be answered there.
+  herdr reported the pane INPUT, but no card appeared. An answer presses Enter only once the
+  cursor is on the row it answers; a menu whose rows cannot be told apart gets no card.
 - The iPhone home-screen app starts below the status bar instead of drawing beneath it, so the
   header text is no longer blurred on iOS 27 (#164). iOS reads this when the app is added, so an
   existing install keeps the blur until it is removed from the Home Screen and added again; send
@@ -41,6 +42,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   its pane URL if focus is refused. A delayed focus or opening gives the window that comes
   forward the newest tapped PC and pane, including while the app starts; an older failure
   cannot open a stale window.
+- A pane whose terminal another web bridge on the same herdr has open (two installs side by
+  side) now waits for it instead of ending with "Another web bridge is attached": it says so,
+  keeps the chat readable, and attaches by itself as soon as the other bridge lets go.
 
 ## [0.3.34] - 2026-09-30
 

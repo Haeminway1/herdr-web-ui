@@ -23,6 +23,9 @@ const CODEX_QUEUE_POSITION_RE = /^(\d+) of (\d+)$/;
 const CLAUDE_ASK_HINT_RE = /enter to select.*(?:↑\/↓|tab\/arrow keys) to navigate.*esc to cancel/i;
 // question tabs, whole (`←  ☒ Route  ☐ Author  ✔ Submit  →`) or cut off by a narrow pane
 const CLAUDE_TABS_RE = /^←\s+[☐☒☑✔]/;
+// Claude Code's unnumbered menus (the folder-trust check on a new folder, among others):
+// plain rows, `❯` on the selected one, under this hint
+const CLAUDE_CONFIRM_HINT_RE = /enter to confirm.*esc to (?:cancel|exit|go back)/i;
 const SOLID_RULE_RE = /^[─━]{8,}$/;
 const CODEX_APPROVAL_HEADER_RE =
   /(?:Would you like to (?:run|make|apply|continue|grant)|Allow Codex to|Approve (?:this )?(?:app )?tool call|Do you trust the contents|Trust this folder\?|Enable full access)/i;
@@ -54,7 +57,8 @@ type Responder =
   | "codex-approval"
   | "omp-approval"
   | "claude-approval"
-  | "claude-plan";
+  | "claude-plan"
+  | "claude-confirm";
 
 type ParsedPrompt = InteractivePrompt & {
   responder: Responder;
@@ -569,6 +573,73 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
   });
 }
 
+/**
+ * Claude Code's unnumbered menus, live in 2.1.285 on a folder it has not seen:
+ *
+ *   Accessing workspace:
+ *   /home/user/project
+ *   Quick safety check: Is this a project you created or one you trust? (Like your own code,
+ *   …
+ *   ❯ No, exit
+ *     Yes, I trust this folder
+ *   Enter to confirm · Esc to cancel
+ *
+ * herdr reports the pane blocked. The rows are the lines right above the hint, up to a blank
+ * line or a rule, exactly one of them `❯`; numbered rows are left to the menus above.
+ */
+function parseClaudeConfirm(screen: string): ParsedPrompt | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  const hintIndex = findLastIndex(lines, (_, index) => CLAUDE_CONFIRM_HINT_RE.test(wrapped(lines, index)));
+  if (hintIndex < 0) return null;
+  let end = hintIndex - 1;
+  while (end >= 0 && !cleanLine(lines[end]!)) end -= 1;
+  let start = end;
+  while (start > 0 && cleanLine(lines[start - 1]!) && !isDivider(lines[start - 1]!)) start -= 1;
+  if (end < 0 || start < 0) return null;
+  // A narrow pane wraps a long label onto the next line, at the label's own indent, so the
+  // indent cannot tell a wrapped label from the next row. Words wrap only when the next one no
+  // longer fits: a line under a row (without its own ❯) continues that row when its first word
+  // would not have fitted after it. The widest line off the rows stands for the pane's width; a
+  // row wider than all of them says nothing of it, and the line under it could be either, so a
+  // screen like that gets no card rather than one that answers a row it does not show.
+  const width = Math.max(0, ...lines.filter((_, index) => index < start || index > end).map((line) => line.trimEnd().length));
+  let unsure = false;
+  const wrappedFrom = (above: string, line: string): boolean => {
+    if (above.trimEnd().length + 1 + (line.split(/\s+/)[0]?.length ?? 0) <= width) return false;
+    if (above.trimEnd().length > width) unsure = true;
+    return true;
+  };
+  const rows: { label: string; selected: boolean; lineIndex: number }[] = [];
+  for (let index = start; index <= end; index += 1) {
+    const line = cleanLine(lines[index]!);
+    const selected = SELECTED_RE.test(line);
+    const previous = rows.at(-1);
+    if (previous && !selected && wrappedFrom(lines[index - 1]!, line)) {
+      previous.label = normalizeText(`${previous.label} ${line}`);
+      continue;
+    }
+    rows.push({ label: line.replace(SELECTED_RE, "").trim(), selected, lineIndex: index });
+  }
+  if (unsure) return null;
+  if (rows.length < 2 || rows.length > 9 || rows.filter((row) => row.selected).length !== 1) return null;
+  if (rows.some((row) => !row.label || NUMBERED_OPTION_RE.test(row.label))) return null;
+  // the panel above the rows: its first line names it, a sentence ending in "?" asks
+  let top = start - 1;
+  while (top >= 0 && !isDivider(lines[top]!) && start - top <= 30) top -= 1;
+  const panel = lines.slice(top + 1, start).map(cleanLine).filter(Boolean);
+  const title = (panel[0] ?? "Choose an option").replace(/:$/, "");
+  const prose = normalizeText(panel.slice(1).join(" "));
+  const asked = /(?:^|[.:!]\s+)([^.:!?]*\?)/.exec(prose)?.[1]?.trim();
+  return finishPrompt("claude", {
+    kind: "menu", title, question: asked ?? title,
+    body: panel.slice(1).join("\n") || null,
+    options: rows.map((row) => ({ label: row.label, description: null })), multi_select: false, custom_option_index: null,
+  }, {
+    responder: "claude-confirm", menuLabels: rows.map((row) => row.label), selectedIndex: rows.findIndex((row) => row.selected),
+    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+  });
+}
+
 function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   const cleanLines = screen.replace(ANSI_RE, "").split(/\r?\n/).map(cleanLine);
   const shown = cleanLines.filter((line) => line && !isDivider(line));
@@ -587,6 +658,7 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   if (prompt.responder === "codex-approval") return ends(/press enter to confirm|esc to cancel|enter continue.*esc back|^\d+\.\s+(?:No|Reject|Cancel|Deny)\b/i);
   if (prompt.responder === "omp-approval") return ends(/^(?:Approve|Deny)$|esc.*cancel/i);
   if (prompt.responder === "claude-approval") return ends(/esc to cancel.*(?:tab|ctrl\+e)|ctrl\+e to explain/i);
+  if (prompt.responder === "claude-confirm") return ends(CLAUDE_CONFIRM_HINT_RE);
   return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i);
 }
 
@@ -596,7 +668,7 @@ function parsePrompt(agent: string, screen: string): ParsedPrompt | null {
     : agent === "omp"
       ? [parseOmpQuestion(screen), parseOmpApproval(screen)]
       : agent === "claude"
-        ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen)]
+        ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen), parseClaudeConfirm(screen)]
         : [];
   return candidates.find((candidate): candidate is ParsedPrompt => candidate !== null && promptTailIsActive(candidate, screen)) ?? null;
 }
@@ -792,6 +864,20 @@ async function closeOpenQuestion(paneId: string): Promise<void> {
   if (parsePrompt("codex", screen)?.responder === "codex-async-question") await paneSendKeys(paneId, [KEY.closeQueue]);
 }
 
+/**
+ * Before the Enter on one of Claude's unnumbered menus: the card's own menu, with the cursor on
+ * the row it answers. Its rows are read from the screen alone, a wrapped label is a guess, and
+ * a key typed in the pane meanwhile moves the cursor too; the folder-trust check is one of these.
+ */
+async function cursorSettled(paneId: string, id: string, index: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const { prompt } = await readPrompt(paneId);
+    if (prompt?.id === id && parsedByPublicPrompt.get(prompt)?.selectedIndex === index) return true;
+    await Bun.sleep(50);
+  }
+  return false;
+}
+
 function promptChanged(): Response {
   return jsonResponse({ error: { code: "prompt_changed", message: "The interactive prompt changed; reopen it and try again." } }, 409);
 }
@@ -850,8 +936,10 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       try {
         // the keys for the question as it shows in the open queue
         if (target !== prompt) steps = answerKeys(target, body);
+        const confirm = parsedByPublicPrompt.get(target)?.responder === "claude-confirm";
         for (let index = 0; index < steps.length; index += 1) {
           const step = steps[index]!;
+          if (confirm && index === steps.length - 1 && !await cursorSettled(body.pane_id, target.id, body.option_index!)) return promptChanged();
           if (step.keys) await paneSendKeys(body.pane_id, step.keys);
           else if (step.text !== undefined) await paneSendText(body.pane_id, step.text);
           if (index < steps.length - 1) await Bun.sleep(30);
