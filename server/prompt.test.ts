@@ -827,6 +827,7 @@ describe("the fallback card for a blocked pane no reader knows", () => {
     expect(prompt.kind).toBe("menu");
     expect(prompt.fallback).toBe(true);
     expect(prompt.question).toBe("Apply these 3 file changes?");
+    expect(prompt.body).toBe("src/a.ts, src/b.ts, src/c.ts");
     expect(labels(prompt)).toEqual(["Apply all", "Review each", "Discard"]);
     expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ text: "3" }]);
     expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ text: "1" }]);
@@ -881,6 +882,7 @@ describe("the fallback card for a blocked pane no reader knows", () => {
   test("takes the question from the line that asks it, not the hint below", () => {
     const prompt = parseFallbackPrompt("gjc", "Found 3 stale caches.\nClear them now?\nPress Enter to continue, Esc to skip\n");
     expect(prompt.question).toBe("Clear them now?");
+    expect(prompt.body).toBe("Found 3 stale caches.\nPress Enter to continue, Esc to skip");
     expect(labels(prompt)).toEqual(["Enter", "Esc"]);
   });
 

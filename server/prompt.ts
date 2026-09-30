@@ -787,12 +787,12 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
   const menu = fallbackMenu(lines, shown);
   if (menu) {
     const above = shown.filter((index) => index < menu.start).map((index) => cleanLine(lines[index]!));
-    const asked = [...above].reverse().find((line) => ASKED_RE.test(line));
+    const question = [...above].reverse().find((line) => ASKED_RE.test(line)) ?? above.at(-1);
     return publicPrompt(finishPrompt(agent, {
-      // the body is every line above the rows, so a changed command above a same-looking menu
-      // is another card; the display cap applies after the hash
-      kind: "menu", fallback: true, title: "Waiting for your answer", question: asked ?? above.at(-1) ?? "The agent is waiting for your answer.",
-      body: above.join("\n") || null,
+      // the body is every other line above the rows, so a changed command above a same-looking
+      // menu is another card; the display cap applies after the hash
+      kind: "menu", fallback: true, title: "Waiting for your answer", question: question ?? "The agent is waiting for your answer.",
+      body: withoutLine(above, question),
       options: menu.rows.map((row) => ({ label: row.label, description: row.description ?? null })),
       multi_select: false, custom_option_index: null,
     }, {
@@ -803,7 +803,7 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
   }
   const last = shown.slice(-16).map((index) => cleanLine(lines[index]!));
   const hints = last.slice(-2);
-  const asked = [...last].reverse().find((line) => ASKED_RE.test(line));
+  const question = [...last].reverse().find((line) => ASKED_RE.test(line)) ?? last.at(-1);
   // a (y/n) letter is offered only for the prompt at the screen's end, never for a mention
   // above it; it is typed without an Enter: a program reading a whole line still waits for
   // one, and the card that follows offers it
@@ -814,8 +814,8 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
     { label: "Esc", steps: keySteps([KEY.escape]) },
   ];
   return publicPrompt(finishPrompt(agent, {
-    kind: "menu", fallback: true, title: "Waiting for input", question: asked ?? last.at(-1) ?? "The agent is waiting for input.",
-    body: last.join("\n") || null,
+    kind: "menu", fallback: true, title: "Waiting for input", question: question ?? "The agent is waiting for input.",
+    body: withoutLine(last, question),
     options: choices.map(({ label }) => ({ label, description: null })),
     multi_select: false, custom_option_index: null,
   }, {
@@ -823,6 +823,12 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
     optionSteps: choices.map(({ steps }) => steps),
   }));
+}
+
+/** the screen lines shown under the card's question, without the question itself */
+function withoutLine(lines: string[], question: string | undefined): string | null {
+  const at = question === undefined ? -1 : lines.lastIndexOf(question);
+  return lines.filter((_, index) => index !== at).join("\n") || null;
 }
 
 /**
