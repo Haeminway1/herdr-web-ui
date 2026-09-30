@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { EDGE_PX, SWIPE_PX, swipeVerdict } from "./edgeSwipe.ts";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { EDGE_PX, SWIPE_PX, swipeVerdict, watchDrawerSwipe } from "./edgeSwipe.ts";
 
 describe("swipeVerdict", () => {
   test("a swipe in from the left edge opens the closed drawer", () => {
@@ -23,5 +23,66 @@ describe("swipeVerdict", () => {
     expect(swipeVerdict(true, 200, -20, 3)).toBe("claim");
     expect(swipeVerdict(true, 200, -SWIPE_PX, 3)).toBe("close");
     expect(swipeVerdict(true, 200, SWIPE_PX, 3)).toBe("ignore");
+  });
+});
+
+/**
+ * The listener itself, on a stand-in document: a claimed stroke must keep every later move
+ * from the page (the terminal's one-finger scroll listens below it) until the finger lifts.
+ */
+describe("watchDrawerSwipe", () => {
+  type Handler = (event: unknown) => void;
+  let listeners: Map<string, Handler>;
+  let saved: { window: unknown; document: unknown };
+
+  beforeEach(() => {
+    listeners = new Map();
+    saved = { window: (globalThis as Record<string, unknown>)["window"], document: (globalThis as Record<string, unknown>)["document"] };
+    (globalThis as Record<string, unknown>)["window"] = { matchMedia: () => ({ matches: true }) };
+    (globalThis as Record<string, unknown>)["document"] = {
+      addEventListener: (type: string, handler: Handler) => listeners.set(type, handler),
+      removeEventListener: (type: string) => listeners.delete(type),
+    };
+  });
+  afterEach(() => {
+    (globalThis as Record<string, unknown>)["window"] = saved.window;
+    (globalThis as Record<string, unknown>)["document"] = saved.document;
+  });
+
+  /** One stroke through the listener; how many moves reached the page, and what the drawer did. */
+  const stroke = (points: [number, number][], open = false) => {
+    const calls: boolean[] = [];
+    const stop = watchDrawerSwipe(() => open, (next) => calls.push(next));
+    let reached = 0;
+    const event = (x: number, y: number) => {
+      let blocked = false;
+      return { touches: [{ clientX: x, clientY: y }], preventDefault: () => { blocked = true; }, stopPropagation: () => { blocked = true; }, get blocked() { return blocked; } };
+    };
+    const [first, ...rest] = points;
+    listeners.get("touchstart")!(event(first![0], first![1]));
+    for (const [x, y] of rest) {
+      const move = event(x, y);
+      listeners.get("touchmove")!(move);
+      if (!move.blocked) reached++;
+    }
+    listeners.get("touchend")!({ touches: [] });
+    stop();
+    return { reached, calls };
+  };
+
+  test("a claimed stroke that comes back within the slop keeps every move from the page", () => {
+    expect(stroke([[4, 400], [24, 400], [6, 400], [5, 400]])).toEqual({ reached: 0, calls: [] });
+  });
+
+  test("a claimed stroke that comes back and goes on opens the drawer once, and keeps its moves", () => {
+    expect(stroke([[4, 400], [24, 400], [6, 400], [70, 400], [90, 460], [120, 520]])).toEqual({ reached: 0, calls: [true] });
+  });
+
+  test("a vertical stroke from mid-screen belongs to the page", () => {
+    expect(stroke([[200, 300], [200, 330], [200, 360], [200, 400]])).toEqual({ reached: 3, calls: [] });
+  });
+
+  test("a swipe to the left closes the open drawer", () => {
+    expect(stroke([[300, 400], [270, 400], [200, 400]], true)).toEqual({ reached: 0, calls: [false] });
   });
 });
