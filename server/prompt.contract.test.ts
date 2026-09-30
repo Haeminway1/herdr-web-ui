@@ -59,6 +59,12 @@ async function menu(label: string, head: string[], rows: string[], drift = false
 const base = () => `http://localhost:${server.port}`;
 const chosen = (target: Menu) => readFileSync(target.log, "utf8").split("\n").filter(Boolean);
 
+/** the rows confirmed so far, once there is one: the menu logs it after the answer's 200 */
+async function confirmed(target: Menu): Promise<string[]> {
+  for (let i = 0; i < 40 && chosen(target).length === 0; i++) await Bun.sleep(50);
+  return chosen(target);
+}
+
 async function card(target: Menu): Promise<{ id: string; options: { label: string }[] }> {
   for (let i = 0; i < 100; i++) {
     const { prompt } = await (await fetch(`${base()}/api/pane/prompt?pane_id=${encodeURIComponent(target.pane)}`)).json() as { prompt: any };
@@ -99,7 +105,7 @@ describe("answers to Claude's unnumbered menus", () => {
     expect(prompt.options.map((option) => option.label)).toEqual(["No, exit", "Yes, I trust this folder"]);
     const response = await answer(trust, prompt.id, 1);
     expect(response.status).toBe(200);
-    expect(chosen(trust)).toEqual(["Yes, I trust this folder"]);
+    expect(await confirmed(trust)).toEqual(["Yes, I trust this folder"]);
   });
 
   it("confirms nothing when the cursor lands on a row the card does not show", async () => {
