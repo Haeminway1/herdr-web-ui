@@ -73,6 +73,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   conversation: process words with `bun.exe`, backslashes and a drive letter read as omo, and the
   session folder is named as omo's engine names a Windows folder.
   ([#342](https://github.com/devswha/herdr-web-ui/pull/342) by @Haeminway1)
+- The chat lens finds an omo pane's conversation when its process keeps its sessions outside
+  `~/.omo/agent` (`OMO_CODING_AGENT_DIR`, `SENPI_CODING_AGENT_DIR` or `PI_CODING_AGENT_DIR`).
+  ([#350](https://github.com/devswha/herdr-web-ui/pull/350) by @Haeminway1)
 
 ## [0.3.43] - 2026-10-02
 
