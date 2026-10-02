@@ -7,6 +7,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Fixed
+- The message box stays editable while the app reconnects. On an iPhone, a dictation keyboard such
+  as Typeless or Wispr Flow opens its own app and comes back; the connection could drop meanwhile,
+  the box was disabled and lost its focus, and the dictated text went nowhere. Sending still waits
+  for the connection. ([#318](https://github.com/devswha/herdr-web-ui/pull/318) by @Haeminway1)
+
 ## [0.3.42] - 2026-10-02
 
 ### Added
