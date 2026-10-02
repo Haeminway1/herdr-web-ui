@@ -393,6 +393,7 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
               <div className="segmented" aria-label={t("Panes open in")}>
                 {(["auto", "chat", "terminal"] as const).map((defaultView) => (
                   <button key={defaultView} type="button" aria-pressed={settings.defaultView === defaultView} onClick={() => {
+                    if (settings.defaultView === defaultView) return;
                     // one choice for every pane: what each one remembered gives way to it
                     forgetPaneViews();
                     update({ defaultView });
