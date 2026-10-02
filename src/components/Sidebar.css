@@ -583,12 +583,7 @@
   .workspace-rename {
     opacity: 1;
   }
-  .pane-item.is-selected .pane-actions {
-    opacity: 1;
-  }
-  .pane-item.is-selected .pane-actions > * {
-    pointer-events: auto;
-  }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -596,5 +591,15 @@
   .pane-row,
   .pane-actions {
     transition: none;
+  }
+}
+
+/* without a hover (a touch screen, or a pen), the selected row shows its actions */
+@media (hover: none), (pointer: coarse) {
+  .pane-item.is-selected .pane-actions {
+    opacity: 1;
+  }
+  .pane-item.is-selected .pane-actions > * {
+    pointer-events: auto;
   }
 }
