@@ -41,6 +41,18 @@ baseline() { # a clean worktree of the upstream main this branch merged, made on
     echo "comparing with upstream ${commit:0:7}"
   fi
 }
+# Upstream's results are kept per upstream commit (UPSTREAM_CACHE): the same upstream is not
+# tested again for the next release, which halves a release's time. A missing one is run.
+UPSTREAM_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/herdr-web-ui-fork-gate"
+upstream_run() { # upstream_run <log name> <bun script>: that log of upstream, cached by commit
+  local commit cached
+  commit="$(git merge-base HEAD upstream/main)" || fail "no upstream/main to compare with"
+  cached="$UPSTREAM_CACHE/$commit/$1"
+  if [ -s "$cached" ]; then cp "$cached" "$logs/$1"; echo "upstream $1: cached for ${commit:0:7}"; return; fi
+  baseline
+  (cd "$base" && bun run "$2" > "$logs/$1" 2>&1)
+  mkdir -p "$UPSTREAM_CACHE/$commit" && cp "$logs/$1" "$cached"
+}
 cleanup() { [ -n "$base" ] && git worktree remove --force "$base" 2>/dev/null; }
 trap cleanup EXIT
 failing() { grep -E '^\(fail\)' "$1" | sed -E 's/ \[[0-9.]+ms\]$//' | sort -u; }
@@ -53,8 +65,7 @@ if ! bun run test:unit > "$logs/unit.log" 2>&1; then
   bun run test:unit > "$logs/unit-2.log" 2>&1 && mv "$logs/unit-2.log" "$logs/unit.log"
 fi
 if grep -qE '^\(fail\)' "$logs/unit.log"; then
-  baseline
-  (cd "$base" && bun run test:unit > "$logs/upstream-unit.log" 2>&1)
+  upstream_run upstream-unit.log test:unit
   new="$(comm -23 <(failing "$logs/unit.log") <(failing "$logs/upstream-unit.log"))"
   [ -z "$new" ] || fail "unit tests failed that pass upstream: $new"
   notes="$notes; unit failures also upstream: $(failing "$logs/unit.log" | wc -l)"
@@ -66,10 +77,9 @@ if ! bun run test:integration > "$logs/integration.log" 2>&1; then
   bun run test:integration > "$logs/integration-2.log" 2>&1 && mv "$logs/integration-2.log" "$logs/integration.log"
 fi
 if grep -qE '^\(fail\)' "$logs/integration.log"; then
-  baseline
   # upstream twice: a test that fails there one run in two is as known as one that always does
-  (cd "$base" && bun run test:integration > "$logs/upstream-integration.log" 2>&1)
-  (cd "$base" && bun run test:integration > "$logs/upstream-integration-2.log" 2>&1)
+  upstream_run upstream-integration.log test:integration
+  upstream_run upstream-integration-2.log test:integration
   new="$(comm -23 <(failing "$logs/integration.log") <(cat <(failing "$logs/upstream-integration.log") <(failing "$logs/upstream-integration-2.log") | sort -u))"
   [ -z "$new" ] || fail "integration tests failed that pass upstream: $new"
   notes="$notes; integration failures also upstream: $(failing "$logs/integration.log" | wc -l)"
@@ -81,8 +91,7 @@ if [ $ui_ok -eq 0 ]; then
   step="$(first_error "$logs/ui.log")"
   patch="${KNOWN_UI_STEPS[$step]:-}"
   [ -n "$patch" ] || fail "UI regression failed: $step"
-  baseline
-  (cd "$base" && bun run test:ui > "$logs/upstream-ui.log" 2>&1)
+  upstream_run upstream-ui.log test:ui
   # upstream failing the same step, or this step known to fail on this PC either way (it passed
   # upstream this time): the run without it must then pass whole
   [ "$(first_error "$logs/upstream-ui.log")" = "$step" ] || echo "note: upstream passed '$step' this time; the step is known to fail here either way" >&2
