@@ -188,7 +188,7 @@ export function UsagePanel() {
           const window = tightestWindow(usage);
           const value = window ? meterPercent(window, count) : 0;
           const reset = window ? formatResetShort(window.resets_at, now) : null;
-          const resetAt = window ? formatResetAt(window.resets_at, now) : null;
+          const resetAt = window && reset !== null ? formatResetAt(window.resets_at, now) : null;
           const problem = problemText(t, usage);
           // two accounts of one provider are told apart by the account; one alone needs no address
           const twin = shown.some((other) => other !== usage && other.id === usage.id);

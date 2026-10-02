@@ -7,6 +7,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Changed
+- The top usage panel shows larger percentages, remaining-capacity colors and compact reset
+  countdowns with their local time. Expired reset times stay hidden until fresh usage arrives.
+
 ## [0.3.43] - 2026-10-02
 
 ### Changed
