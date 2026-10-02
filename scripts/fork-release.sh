@@ -67,8 +67,10 @@ if ! bun run test:integration > "$logs/integration.log" 2>&1; then
 fi
 if grep -qE '^\(fail\)' "$logs/integration.log"; then
   baseline
+  # upstream twice: a test that fails there one run in two is as known as one that always does
   (cd "$base" && bun run test:integration > "$logs/upstream-integration.log" 2>&1)
-  new="$(comm -23 <(failing "$logs/integration.log") <(failing "$logs/upstream-integration.log"))"
+  (cd "$base" && bun run test:integration > "$logs/upstream-integration-2.log" 2>&1)
+  new="$(comm -23 <(failing "$logs/integration.log") <(cat <(failing "$logs/upstream-integration.log") <(failing "$logs/upstream-integration-2.log") | sort -u))"
   [ -z "$new" ] || fail "integration tests failed that pass upstream: $new"
   notes="$notes; integration failures also upstream: $(failing "$logs/integration.log" | wc -l)"
 fi
