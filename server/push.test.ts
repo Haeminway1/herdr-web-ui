@@ -166,6 +166,30 @@ describe("push delivery", () => {
     expect(fake.received).toHaveLength(2);
   });
 
+  it("keeps each tab's presence apart, and drops a report that arrives after a newer one", async () => {
+    const push = subscribed();
+    push.seed([pane("w1:p1", "working", "api")]);
+    push.presence(fake.subscription.endpoint, true, null, "tab-a", 1);
+    push.presence(fake.subscription.endpoint, true, null, "tab-b", 1);
+    push.presence(fake.subscription.endpoint, false, null, "tab-a", 2);
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(0); // tab b still shows it
+    push.presence(fake.subscription.endpoint, false, null, "tab-b", 3);
+    push.presence(fake.subscription.endpoint, true, null, "tab-b", 2); // the late visible heartbeat
+    await push.onStatus("w1:p1", "working");
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(1);
+  });
+
+  it("takes presence over HTTP from the device that holds the subscription only", async () => {
+    const push = subscribed();
+    const post = (body: unknown, device: string | null) => handlePushRequest(new Request("http://x/api/push/presence", { method: "POST", body: JSON.stringify(body) }), "/api/push/presence", push, device);
+    expect((await post({ endpoint: fake.subscription.endpoint, visible: true, tab: "t", seq: 1 }, null))!.status).toBe(204);
+    expect((await post({ endpoint: fake.subscription.endpoint, visible: true }, "another-device"))!.status).toBe(404);
+    expect((await post({ endpoint: fake.subscription.endpoint, visible: "yes" }, null))!.status).toBe(400);
+    expect((await post({ visible: true }, null))!.status).toBe(400);
+  });
+
   it("sends a status alert the device can decrypt, signed with the server's key", async () => {
     const push = subscribed();
     push.seed([pane("w1:p1", "working", "claude: fix the build")]);

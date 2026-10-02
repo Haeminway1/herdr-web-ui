@@ -252,7 +252,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
               <feColorMatrix mode="matrix" values={gooMatrix()} />
             </filter>
             <filter id="droplet-shadow" x="-50%" y="-100%" width="200%" height="300%">
-              <feDropShadow dx="0" dy={SHADOW_DY} stdDeviation={SHADOW_BLUR / 2} floodColor="var(--droplet-shadow)" floodOpacity="1" />
+              <feDropShadow dx="0" dy={SHADOW_DY} stdDeviation={SHADOW_BLUR / 2} style={{ floodColor: "var(--droplet-shadow)" }} />
             </filter>
           </defs>
           <rect ref={shadowEl} className="droplet-shadow" filter="url(#droplet-shadow)" />
