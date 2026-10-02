@@ -1,76 +1,53 @@
 import { describe, expect, it } from "bun:test";
-import { DROP_SPRING, EXPAND_SPRING, GOO_BLUR_MAX, Spring, dropletGeometry, dropletLayout, neckProfile, tintColor } from "./dropletMotion.ts";
+import { DYNAMIC_ISLAND_TOP, GROW_SPRING, ISLAND_HEIGHT, ISLAND_WIDTH, Spring, islandLayout, islandShape } from "./dropletMotion.ts";
 
-describe("droplet layout", () => {
-  it("hangs the card under the safe area and hides the island above the screen, blur and all", () => {
-    const phone = dropletLayout(390, 59);
-    expect(phone.cardTop).toBe(71);
-    expect(phone.cardWidth).toBe(358);
-    expect(phone.cardLeft).toBe(16);
-    expect(phone.islandBottom).toBeLessThanOrEqual(-(GOO_BLUR_MAX + 2));
-    const desktop = dropletLayout(1280, 0);
-    expect(desktop.cardTop).toBe(12);
-    expect(desktop.cardWidth).toBe(396);
-    expect(desktop.centerX).toBe(640);
-    expect(phone.islandShown).toBe(false);
-  });
-  it("puts the island over a Dynamic Island, with the card below it", () => {
-    const island = dropletLayout(393, 59, 0, 0, true);
-    expect(island.islandShown).toBe(true);
-    expect(island.islandTop).toBe(11);
-    expect(island.islandBottom).toBeCloseTo(48.33);
-    expect(island.cardTop).toBeGreaterThanOrEqual(71);
-    expect(island.cardTop).toBeGreaterThanOrEqual(island.islandBottom + 26);
+describe("island layout", () => {
+  it("grows out of a Dynamic Island, or from a pill under the safe area elsewhere", () => {
+    const island = islandLayout(393, 59, 0, 0, true);
+    expect(island.top).toBe(DYNAMIC_ISLAND_TOP);
+    expect(island.overIsland).toBe(true);
+    expect(island.expandedWidth).toBe(369);
+    const notch = islandLayout(390, 47);
+    expect(notch.top).toBe(59);
+    expect(notch.overIsland).toBe(false);
+    expect(islandLayout(1280, 0).expandedWidth).toBe(400);
   });
 });
 
-describe("droplet geometry", () => {
-  const layout = dropletLayout(390, 0);
-  it("starts as nothing at the island and ends as the card", () => {
-    const start = dropletGeometry(0, 0, layout);
-    expect(start.width).toBe(0);
-    expect(start.height).toBe(0);
-    const end = dropletGeometry(1, 1, layout);
-    expect(end.x).toBeCloseTo(layout.cardLeft);
-    expect(end.y).toBeCloseTo(layout.cardTop);
-    expect(end.width).toBeCloseTo(layout.cardWidth);
-    expect(end.height).toBeCloseTo(layout.cardHeight);
-    expect(end.radius).toBeCloseTo(layout.cardRadius);
-    expect(end.neckWidth).toBe(0);
-    expect(end.offsetY).toBeCloseTo(0);
+describe("island shape", () => {
+  const layout = islandLayout(393, 59, 0, 0, true);
+  it("is the compact island at rest and the banner when grown, from the same top", () => {
+    const rest = islandShape(0, layout);
+    expect(rest.width).toBe(ISLAND_WIDTH);
+    expect(rest.height).toBeCloseTo(ISLAND_HEIGHT);
+    expect(rest.radius).toBeCloseTo(ISLAND_HEIGHT / 2);
+    const grown = islandShape(1, layout);
+    expect(grown.width).toBe(layout.expandedWidth);
+    expect(grown.height).toBe(layout.expandedHeight);
+    expect(grown.top).toBe(rest.top);
+    expect(grown.left + grown.width / 2).toBeCloseTo(rest.left + rest.width / 2);
   });
-  it("stretches the falling drop on its neck, which breaks before it lands", () => {
-    const falling = dropletGeometry(0.45, 0, layout);
-    expect(falling.height).toBeGreaterThan(falling.width);
-    expect(falling.neckWidth).toBeGreaterThan(0);
-    expect(dropletGeometry(0.9, 0, layout).neckWidth).toBe(0);
-    expect(neckProfile(0)).toBe(0);
-    expect(neckProfile(1)).toBe(0);
-    expect(neckProfile(1.6 / 3)).toBeCloseTo(1);
-  });
-  it("turns from island black to card white", () => {
-    expect(tintColor(0, [0, 0, 0], [255, 255, 255])).toBe("rgb(0, 0, 0)");
-    expect(tintColor(1, [0, 0, 0], [255, 255, 255])).toBe("rgb(255, 255, 255)");
+  it("fades a pill in and out where there is no island under it", () => {
+    const pill = islandLayout(390, 47);
+    expect(islandShape(0, pill).opacity).toBe(0);
+    expect(islandShape(0.5, pill).opacity).toBe(1);
+    expect(islandShape(0, layout).opacity).toBe(1);
   });
 });
 
 describe("spring", () => {
-  const run = (config: typeof DROP_SPRING, until: number): { values: number[]; spring: Spring } => {
-    const spring = new Spring(0);
-    spring.to(1, config, 0);
-    const values: number[] = [];
-    for (let t = 16; t <= until; t += 16) { spring.step(t - 16, t); values.push(spring.value); }
-    return { values, spring };
-  };
   it("overshoots as an underdamped spring does, and settles in about its duration", () => {
-    const { values } = run(EXPAND_SPRING, 1_600);
-    expect(Math.max(...values)).toBeGreaterThan(1.005);
+    const spring = new Spring(0);
+    spring.to(1, GROW_SPRING, 0);
+    const values: number[] = [];
+    for (let t = 16; t <= 1_200; t += 16) { spring.step(t - 16, t); values.push(spring.value); }
+    expect(Math.max(...values)).toBeGreaterThan(1.01);
+    expect(Math.abs(values[Math.round(GROW_SPRING.duration / 16)]! - 1)).toBeLessThan(0.03);
     expect(Math.abs(values.at(-1)! - 1)).toBeLessThan(0.002);
-    expect(Math.abs(values[Math.round(EXPAND_SPRING.duration / 16)]! - 1)).toBeLessThan(0.03);
   });
   it("waits out its delay, then rests exactly at its target", () => {
     const spring = new Spring(0);
-    spring.to(1, DROP_SPRING, 0, 300);
+    spring.to(1, GROW_SPRING, 0, 300);
     spring.step(0, 250);
     expect(spring.value).toBe(0);
     let t = 250;

@@ -65,7 +65,7 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     const box = (await card.boundingBox())!;
     assert.ok(box.y >= 12 && box.y < 40, `card top ${box.y}`);
     assert.ok(Math.abs(box.x + box.width / 2 - 195) <= 1, `card centre ${box.x + box.width / 2}`);
-    assert.ok(box.width <= 390 - 32 && box.width > 300, `card width ${box.width}`);
+    assert.ok(box.width <= 390 - 24 && box.width > 300, `card width ${box.width}`);
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "droplet-phone.png") });
     await card.tap();
     await droplet.waitFor({ state: "detached" });

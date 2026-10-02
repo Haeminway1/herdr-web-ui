@@ -1,200 +1,100 @@
 /**
- * The in-app alert's motion (components/Droplet.tsx), ported from expo-dynamic-notifications
- * (rit3zh, MIT; THIRD_PARTY_NOTICES.md): its layout, its drop, neck and card geometry, and its
- * springs, drawn here with SVG and requestAnimationFrame instead of Skia and Reanimated.
- *
- * Four values drive it, each on a spring from 0 to 1: `drop` (the drop grows out of an island
- * above the screen and falls to the card's centre, stretched while its neck holds), `tint`
- * (island black to card white on the way), `expand` (the drop spreads into the card) and
- * `reveal` (the card's text).
+ * The phone's in-app alert (components/Droplet.tsx) as the iPhone's Dynamic Island shows one:
+ * the black island itself grows from its compact pill into a wide rounded banner on a lively
+ * spring, its content fades in, and on the way out the content goes first and the island shrinks
+ * back into the pill. On an iPhone with an island it grows out of the island; elsewhere a pill of
+ * the same size appears under the top of the screen and grows the same way.
  */
 
+/** the compact island, as an iPhone draws it in portrait */
 export const ISLAND_WIDTH = 126;
 export const ISLAND_HEIGHT = 37.33;
-export const CARD_MAX_WIDTH = 396;
-/** thinner than the original 74: a phone alert is one line of name and one of what it wants */
-export const CARD_HEIGHT = 56;
-export const CARD_MARGIN = 16;
-export const CARD_GAP = 26;
-export const DROP_SIZE = 40;
-export const NECK_WIDTH = 46;
-export const CANVAS_PADDING = 96;
-export const EDGE_MARGIN = 10;
-export const GOO_BLUR_MAX = 20;
-/** GOO_BLUR_MIN..GOO_BLUR_MAX at the original's GOO_STRENGTH 0.62 */
-export const GOO_BLUR = 5 + (GOO_BLUR_MAX - 5) * 0.62;
-export const GOO_GAIN = 22;
-export const GOO_THRESHOLD = 0.43;
-export const GOO_INSET_RATIO = 0.26;
-const DROP_GROW_SPAN = 0.7;
-const DROP_GROW_POWER = 1.25;
-const DROP_STRETCH = 0.38;
-const NECK_BREAK = 0.82;
-const NECK_RISE = 1.6;
-const NECK_FALL = 1.4;
-const DROP_TINT_START = 0.06;
-const DROP_TINT_END = 0.88;
-const CONTENT_MIN_SCALE = 0.88;
-export const SHADOW_DY = 10;
-export const SHADOW_BLUR = 14;
-/**
- * The way in runs at ENTER_PACE of the original's timing (same shapes, same springs, quicker):
- * an alert is read at a glance, and the original's 1.2s fall felt slow before the text showed.
- */
-export const ENTER_PACE = 0.32;
-export const ENTER_TINT_DELAY = 110 * ENTER_PACE;
-export const ENTER_EXPAND_DELAY = 340 * ENTER_PACE;
-export const ENTER_REVEAL_DELAY = 560 * ENTER_PACE;
-export const EXIT_COLLAPSE_DELAY = 100;
-export const EXIT_DROP_DELAY = 280;
-/** the card's gap under the top of what can be seen (Triad's top-edge anchor) */
+/** where an iPhone's Dynamic Island sits in portrait, measured from the top of the screen */
+export const DYNAMIC_ISLAND_TOP = 11;
+/** the expanded island: a screen's width less a margin each side, one name and one line under it */
+export const EXPANDED_MARGIN = 12;
+export const EXPANDED_MAX_WIDTH = 400;
+export const EXPANDED_HEIGHT = 68;
+export const EXPANDED_RADIUS = 30;
+/** without an island, the pill's gap under the top of what can be seen */
 export const TOP_SPACING = 12;
 
 export interface SpringConfig {
   duration: number;
   dampingRatio: number;
-  /** a starting push, in units per second, in the direction it heads */
-  velocity?: number;
 }
-export const DROP_SPRING: SpringConfig = { duration: 1150 * ENTER_PACE, dampingRatio: 0.82 };
-export const EXPAND_SPRING: SpringConfig = { duration: 1000 * ENTER_PACE, dampingRatio: 0.8 };
-export const REVEAL_SPRING: SpringConfig = { duration: 700 * ENTER_PACE, dampingRatio: 1 };
-export const TINT_SPRING: SpringConfig = { duration: 700 * ENTER_PACE, dampingRatio: 1 };
-export const COLLAPSE_SPRING: SpringConfig = { duration: 660, dampingRatio: 0.92, velocity: 2 };
-export const RETURN_SPRING: SpringConfig = { duration: 1150, dampingRatio: 0.9 };
-export const FADE_SPRING: SpringConfig = { duration: 360, dampingRatio: 1 };
-export const DRAG_SPRING: SpringConfig = { duration: 560, dampingRatio: 0.7 };
+/** the island's growth: quick and a little bouncy, as the system's */
+export const GROW_SPRING: SpringConfig = { duration: 520, dampingRatio: 0.7 };
+/** its content, once it has room */
+export const REVEAL_SPRING: SpringConfig = { duration: 260, dampingRatio: 1 };
+export const REVEAL_DELAY = 90;
+/** the way out: the content first, then the island back into its pill */
+export const HIDE_SPRING: SpringConfig = { duration: 140, dampingRatio: 1 };
+export const SHRINK_SPRING: SpringConfig = { duration: 420, dampingRatio: 0.9 };
+export const SHRINK_DELAY = 70;
+export const DRAG_SPRING: SpringConfig = { duration: 420, dampingRatio: 0.75 };
 
-export interface DropletLayout {
-  width: number;
+export interface IslandLayout {
+  /** the island's top edge: it grows down and out from here */
+  top: number;
   centerX: number;
-  islandWidth: number;
-  islandHeight: number;
-  islandTop: number;
-  islandBottom: number;
-  islandRadius: number;
-  cardWidth: number;
-  cardHeight: number;
-  cardRadius: number;
-  cardTop: number;
-  cardLeft: number;
-  cardCenterY: number;
-  canvasHeight: number;
-  /** the island is the phone's own Dynamic Island, drawn over it: the drop leaves from there */
-  islandShown: boolean;
+  compactWidth: number;
+  compactHeight: number;
+  expandedWidth: number;
+  expandedHeight: number;
+  /** the island is the phone's own: at rest it is simply not drawn over it */
+  overIsland: boolean;
 }
-
-/** where an iPhone's Dynamic Island sits in portrait, measured from the top of the screen */
-export const DYNAMIC_ISLAND_TOP = 11;
 
 /**
- * The card hangs TOP_SPACING under the safe area's top. Without a Dynamic Island, the island it
- * falls from sits above the screen, far enough that neither it nor its blur shows at rest: the
- * drop grows out of the top edge itself. With one (`dynamicIsland`, Droplet.tsx tells), the
- * island is drawn over the phone's own, and the drop grows out of it.
+ * Where the island grows. `dynamicIsland`: an iPhone in portrait with one (Droplet.tsx tells by
+ * its safe area); anything else gets a pill TOP_SPACING under the safe area's top.
  */
-export function dropletLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0, dynamicIsland = false): DropletLayout {
-  // a Dynamic Island is the island: the drop grows out of it and the card hangs below it
-  const islandBottom = dynamicIsland ? DYNAMIC_ISLAND_TOP + ISLAND_HEIGHT : Math.min(insetTop + TOP_SPACING - CARD_GAP, -(GOO_BLUR_MAX + 2));
-  const cardTop = dynamicIsland ? Math.max(insetTop + TOP_SPACING, islandBottom + CARD_GAP) : insetTop + TOP_SPACING;
+export function islandLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0, dynamicIsland = false): IslandLayout {
   const safeWidth = Math.max(width - insetLeft - insetRight, 0);
-  const centerX = insetLeft + safeWidth / 2;
-  const cardWidth = Math.max(Math.min(safeWidth - CARD_MARGIN * 2, CARD_MAX_WIDTH), 0);
   return {
-    width,
-    centerX,
-    islandWidth: ISLAND_WIDTH,
-    islandHeight: ISLAND_HEIGHT,
-    islandTop: islandBottom - ISLAND_HEIGHT,
-    islandBottom,
-    islandRadius: ISLAND_HEIGHT / 2,
-    cardWidth,
-    cardHeight: CARD_HEIGHT,
-    cardRadius: CARD_HEIGHT / 2,
-    cardTop,
-    cardLeft: centerX - cardWidth / 2,
-    cardCenterY: cardTop + CARD_HEIGHT / 2,
-    canvasHeight: cardTop + CARD_HEIGHT + CANVAS_PADDING,
-    islandShown: dynamicIsland,
+    top: dynamicIsland ? DYNAMIC_ISLAND_TOP : insetTop + TOP_SPACING,
+    centerX: insetLeft + safeWidth / 2,
+    compactWidth: ISLAND_WIDTH,
+    compactHeight: ISLAND_HEIGHT,
+    expandedWidth: Math.max(Math.min(safeWidth - EXPANDED_MARGIN * 2, EXPANDED_MAX_WIDTH), ISLAND_WIDTH),
+    expandedHeight: EXPANDED_HEIGHT,
+    overIsland: dynamicIsland,
   };
 }
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 const mix = (t: number, from: number, to: number): number => from + (to - from) * t;
-const easeOutPower = (t: number, power: number): number => 1 - Math.pow(1 - clamp(t, 0, 1), power);
 
-/** The neck's width over the fall: it rises, peaks, and is gone once the drop is NECK_BREAK of the way. */
-export function neckProfile(progress: number, rise = NECK_RISE, fall = NECK_FALL): number {
-  const t = clamp(progress, 0, 1);
-  if (t <= 0 || t >= 1) return 0;
-  const peak = rise / (rise + fall);
-  const normal = Math.pow(peak, rise) * Math.pow(1 - peak, fall);
-  return (Math.pow(t, rise) * Math.pow(1 - t, fall)) / normal;
-}
-
-export interface DropletGeometry {
-  x: number;
-  y: number;
+export interface IslandShape {
+  left: number;
+  top: number;
   width: number;
   height: number;
   radius: number;
-  neckX: number;
-  neckY: number;
-  neckWidth: number;
-  neckHeight: number;
-  shadowOpacity: number;
-  /** the body's centre below the card's resting centre: the text rides it */
-  offsetY: number;
-  widthRatio: number;
+  /** without a phone's own island under it, the pill fades in as it starts and out as it ends */
+  opacity: number;
 }
 
-export function dropletGeometry(drop: number, expand: number, layout: DropletLayout): DropletGeometry {
-  const grow = easeOutPower(clamp(drop / DROP_GROW_SPAN, 0, 1), DROP_GROW_POWER);
-  const neck = neckProfile(drop / NECK_BREAK);
-  const stretch = 1 + DROP_STRETCH * neck;
-  const droplet = DROP_SIZE * grow;
-  const width = Math.max(Math.min(mix(expand, droplet / stretch, layout.cardWidth), layout.width - EDGE_MARGIN * 2), 0);
-  const height = Math.max(mix(expand, droplet * stretch, layout.cardHeight), 0);
-  const radius = Math.min(mix(expand, droplet * 0.5, layout.cardRadius), Math.min(width, height) / 2);
-  const originY = layout.islandBottom - layout.islandHeight * 0.34;
-  const centerY = mix(drop, originY, layout.cardCenterY);
-  const neckWidth = Math.min(NECK_WIDTH, width) * neck;
-  const neckY = layout.islandBottom - layout.islandHeight * 0.5;
+/** The island at `grow` (0 compact, 1 expanded; the spring overshoots past 1 and back). */
+export function islandShape(grow: number, layout: IslandLayout): IslandShape {
+  const width = mix(grow, layout.compactWidth, layout.expandedWidth);
+  const height = mix(clamp(grow, 0, 1.08), layout.compactHeight, layout.expandedHeight);
+  const radius = Math.min(mix(clamp(grow, 0, 1), layout.compactHeight / 2, EXPANDED_RADIUS), height / 2);
   return {
-    x: layout.centerX - width / 2,
-    y: centerY - height / 2,
+    left: layout.centerX - width / 2,
+    top: layout.top,
     width,
     height,
-    radius: Math.max(radius, 0),
-    neckX: layout.centerX - neckWidth / 2,
-    neckY,
-    neckWidth,
-    neckHeight: Math.max(centerY - neckY, 0),
-    shadowOpacity: clamp(expand, 0, 1),
-    offsetY: centerY - layout.cardCenterY,
-    widthRatio: layout.cardWidth > 0 ? width / layout.cardWidth : 0,
+    radius,
+    opacity: layout.overIsland ? 1 : clamp(grow * 4, 0, 1),
   };
 }
 
-/** The text at a reveal: it fades, sharpens and grows in, a little past full while the card overshoots. */
-export function contentStyle(reveal: number, geometry: DropletGeometry): { opacity: number; scale: number; blur: number } {
+/** The content at a reveal: it fades and settles in from a little smaller and softer. */
+export function contentStyle(reveal: number): { opacity: number; scale: number; blur: number } {
   const progress = clamp(reveal, 0, 1);
-  const overshoot = clamp(geometry.widthRatio - 1, 0, 0.2);
-  return { opacity: progress, scale: mix(progress, CONTENT_MIN_SCALE, 1) + overshoot * progress, blur: 8 * (1 - progress) };
-}
-
-export type Rgb = readonly [number, number, number];
-
-/** The drop's colour: island black to card white over DROP_TINT_START..END of `tint`. */
-export function tintColor(tint: number, from: Rgb, to: Rgb): string {
-  const t = clamp((tint - DROP_TINT_START) / (DROP_TINT_END - DROP_TINT_START), 0, 1);
-  const channel = (i: 0 | 1 | 2): number => Math.round(mix(t, from[i], to[i]));
-  return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
-}
-
-/** The feColorMatrix of the goo: alpha sharpened back into an edge, so shapes that blur into each other read as one liquid. */
-export function gooMatrix(gain = GOO_GAIN, threshold = GOO_THRESHOLD): string {
-  return `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${gain} ${-gain * threshold}`;
+  return { opacity: progress, scale: mix(progress, 0.92, 1), blur: 4 * (1 - progress) };
 }
 
 /**
@@ -208,7 +108,6 @@ export class Spring {
   private stiffness = 0;
   private damping = 0;
   private startAt = 0;
-  private push = 0;
 
   constructor(value: number) {
     this.value = value;
@@ -225,24 +124,18 @@ export class Spring {
     const omega = zeta < 1 ? 4.6 / (zeta * seconds) : 6.6 / seconds;
     this.stiffness = omega * omega;
     this.damping = 2 * zeta * omega;
-    this.push = config.velocity ?? 0;
   }
 
   set(value: number): void {
     this.value = value;
     this.target = value;
     this.velocity = 0;
-    this.push = 0;
   }
 
   /** Advances from `then` to `now` in steps of at most 4ms; true while it still moves. */
   step(then: number, now: number): boolean {
-    if (now <= this.startAt) return this.value !== this.target || this.push !== 0;
+    if (now <= this.startAt) return this.value !== this.target;
     let t = Math.max(then, this.startAt);
-    if (this.push !== 0) {
-      this.velocity += this.push * Math.sign(this.target - this.value || 1);
-      this.push = 0;
-    }
     while (t < now) {
       const dt = Math.min(4, now - t);
       const seconds = dt / 1000;

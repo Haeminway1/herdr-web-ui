@@ -206,18 +206,17 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 
 ### In-app alert
 
-Island black in both themes; the card follows the theme (dark here, the original's white in the light theme).
+The Dynamic Island's own colours, the same in every theme.
 
 | Token | Value | Usage |
 |-------|-------|-------|
-| `--droplet-island` | `#000` | Island, neck and the drop as it leaves |
-| `--droplet-card` | `#fff` | Card the drop turns into |
-| `--droplet-title` | `#1c1c1e` | Card text |
-| `--droplet-message` | `#77787d` | What happened; ended title and dot |
-| `--droplet-avatar` | `#e8e9eb` | Agent mark disc |
-| `--droplet-blocked` | `#2f9bff` | Needs-input title and dot |
-| `--droplet-done` | `#30a46c` | Finished title and dot |
-| `--droplet-shadow` | `rgba(16, 19, 28, 0.2)` | Shadow under the card |
+| `--droplet-island` | `#000` | The island and its banner |
+| `--droplet-title` | `#fff` | Pane name |
+| `--droplet-message` | `#98989f` | Ended detail and dot |
+| `--droplet-avatar` | `rgba(255, 255, 255, 0.14)` | Agent mark tile |
+| `--droplet-blocked` | `#ff9f0a` | Needs-input detail and dot |
+| `--droplet-done` | `#30d158` | Finished detail and dot |
+| `--droplet-shadow` | `rgba(0, 0, 0, 0.35)` | Shadow under the banner |
 
 ### Shell
 - `.app` is a full-viewport column: `.app-header` over `.app-body`; the body is sidebar plus
@@ -427,19 +426,16 @@ Island black in both themes; the card follows the theme (dark here, the original
 
 ### In-app alert
 - While the app is on screen, a pane that needs input, finishes a turn (by the device's Finished
-  choice) or ends drops a card from the top edge, as the Triad student app does
-  (expo-dynamic-notifications, ported in `lib/dropletMotion.ts`): a drop grows out of an island
-  above the screen on a neck of liquid, stretches as it falls and turns from black to white, breaks
-  free, and spreads into the card on springs; then its text sharpens in. It hangs from
-  `env(safe-area-inset-top)` only, so a Dynamic Island, a notch and a desktop window take the same
-  path; no device is guessed.
-- The drop is for a touch screen. With a mouse the same alert is a toast in the bottom-right
-  corner, as the Aquila design system's: up to three stacked, sliding in from the right, a 2px
-  line in the status colour shrinking while it stays (5s, held while hovered); a click opens the
-  pane, the X or a swipe right puts it away.
-- On an iPhone in portrait whose safe area is a Dynamic Island's (59px and up), the island is drawn
-  over the phone's own and the drop leaves from it; elsewhere it leaves from the top edge. The card
-  is dark in the dark theme and the original's white in the light one, 56px tall.
+  choice) or ends shows an in-app alert. On a touch screen it is the iPhone's Dynamic Island
+  (`lib/dropletMotion.ts`): the black island grows on a lively spring from its 126×37 pill into a
+  rounded banner (the screen's width less 12px a side, 68px tall), the pane's mark, name and what
+  happened fade in, and on the way out the content goes first and the island shrinks back. On an
+  iPhone in portrait whose safe area is an island's (59px and up) it grows out of the phone's own
+  island; elsewhere a pill fades in 12px under the safe area's top and grows the same way.
+- One at a time; a newer one has the current one shrink away first. Tap opens the pane; a drag or
+  flick up puts it away; it leaves by itself 5s after its text shows, and waits while touched.
+- Not for the pane already open, and only while the window is in front and focused (otherwise the
+  system notification covers it). Reduced motion: it fades in and out where it rests.
 - While the app is on screen it tells the server (`POST /api/push/presence`, every 10s), which
   holds this device's web pushes back: no system banner over the app's own alert.
 - One at a time; a newer one folds the current one away first. Tap opens the pane; a drag or flick

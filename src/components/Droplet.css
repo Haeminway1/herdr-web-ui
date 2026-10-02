@@ -1,9 +1,8 @@
 /*
- * In-app alert (Droplet.tsx, motion in lib/dropletMotion.ts). An SVG canvas over the top of the
- * page holds the liquid: a black island above the screen, its neck and the drop, under one goo
- * filter (blur, then a sharp alpha edge), so where they touch they read as one liquid. The card's
- * text is a button over it, moved with the drop. The island is black; the card follows the
- * theme (the --droplet-* group): dark in the dark theme, the original's white in the light one.
+ * The phone's in-app alert (Droplet.tsx, motion in lib/dropletMotion.ts), as the iPhone's
+ * Dynamic Island: one black shape, the island, that grows into a rounded banner and back. Its
+ * colours are the island's in every theme (the --droplet-* group): black, white text, the status
+ * colour on the dot and what happened.
  */
 
 .droplet {
@@ -26,30 +25,21 @@
   pointer-events: none;
 }
 
-.droplet-canvas {
-  position: fixed;
-  top: 0;
-  left: 0;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.droplet-island { fill: var(--droplet-island); }
-.droplet-shadow { fill: var(--droplet-card); }
-
 .droplet-card {
   position: fixed;
   display: block;
+  overflow: hidden;
   padding: 0;
   border: 0;
-  background: transparent;
+  background: var(--droplet-island);
+  box-shadow: 0 8px 24px var(--droplet-shadow);
   color: var(--droplet-title);
   font: inherit;
   text-align: left;
   cursor: pointer;
   pointer-events: auto;
   touch-action: none;
-  will-change: transform;
+  will-change: width, height, transform;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -60,14 +50,20 @@
   outline-offset: var(--ring-offset);
 }
 
+/* the banner's content keeps its full width while the island grows around it, centred */
 .droplet-body {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
-  height: 100%;
-  padding: 0 16px 0 10px;
+  width: min(400px, calc(100vw - 24px));
+  margin-left: calc(min(400px, calc(100vw - 24px)) / -2);
+  padding: 0 18px 0 14px;
   opacity: 0;
+  transform-origin: center top;
   will-change: transform, opacity, filter;
 }
 
@@ -78,7 +74,7 @@
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: var(--radius-pill);
+  border-radius: 10px;
   background: var(--droplet-avatar);
 }
 
@@ -105,19 +101,19 @@
   line-height: 1.25;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--droplet-tone);
+  color: var(--droplet-title);
 }
 
 .droplet-detail {
   overflow: hidden;
-  margin-top: 1px;
-  font-size: 12.5px;
+  margin-top: 2px;
+  font-size: 13px;
   font-weight: var(--fw-medium);
-  letter-spacing: -0.2px;
+  letter-spacing: -0.1px;
   line-height: 1.25;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--droplet-message);
+  color: var(--droplet-tone);
 }
 
 .droplet-dot {
