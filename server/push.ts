@@ -61,6 +61,10 @@ export const DEFAULT_ALERT_TIMING: AlertTiming = { short: 10_000, long: 60_000, 
  * A word it never sends (a phone frozen before it could) lapses after this long.
  */
 export const PRESENCE_TTL_MS = 30_000;
+/** How long a tab's newest report is remembered after it was heard, so a late older one is still known as late. */
+const TAB_MEMORY_MS = 10 * 60_000;
+/** Tabs remembered per subscription at most; the longest silent goes first. */
+const MAX_TABS = 32;
 
 export interface PushSubscriptionRecord {
   endpoint: string;
@@ -170,9 +174,8 @@ export function createPushService(options: PushServiceOptions): PushService {
   let subscriptions: Map<string, PushSubscriptionRecord> | null = null;
   const lastStatus = new Map<string, AgentStatus>();
   const titles = new Map<string, string>();
-  /** endpoint -> until when its app is on screen (PRESENCE_TTL_MS) */
-  /** endpoint -> each tab of that device: until when it is on screen, and its newest report */
-  const onScreen = new Map<string, Map<string, { until: number; seq: number }>>();
+  /** endpoint -> each tab of that device: until when it is on screen, its newest report, and when that was heard */
+  const onScreen = new Map<string, Map<string, { until: number; seq: number; heard: number }>>();
   const away = (subscription: PushSubscriptionRecord): boolean =>
     ![...(onScreen.get(subscription.endpoint)?.values() ?? [])].some((tab) => tab.until > now());
 
@@ -331,11 +334,14 @@ export function createPushService(options: PushServiceOptions): PushService {
       // only the device that holds the subscription speaks for it
       if (!subscription || (subscription.device_id ?? null) !== (deviceId ?? null)) return false;
       // each tab speaks for itself, and an older report of it that arrives late changes nothing
-      const tabs = onScreen.get(endpoint) ?? new Map<string, { until: number; seq: number }>();
+      const tabs = onScreen.get(endpoint) ?? new Map<string, { until: number; seq: number; heard: number }>();
       const last = tabs.get(tab);
       if (last && seq < last.seq) return true;
-      for (const [id, state] of tabs) if (state.until <= now() && id !== tab) tabs.delete(id);
-      tabs.set(tab, { until: visible ? now() + PRESENCE_TTL_MS : 0, seq });
+      // a hidden tab keeps its newest report a while: a late visible one of it must still be known as late
+      for (const [id, state] of tabs) if (state.heard + TAB_MEMORY_MS <= now() && id !== tab) tabs.delete(id);
+      tabs.delete(tab); // re-inserted last, so the map stays ordered by when each tab was heard
+      tabs.set(tab, { until: visible ? now() + PRESENCE_TTL_MS : 0, seq, heard: now() });
+      for (const id of tabs.keys()) if (tabs.size > MAX_TABS) tabs.delete(id);
       onScreen.set(endpoint, tabs);
       return true;
     },

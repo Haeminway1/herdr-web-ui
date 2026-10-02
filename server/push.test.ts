@@ -181,6 +181,41 @@ describe("push delivery", () => {
     expect(fake.received).toHaveLength(1);
   });
 
+  it("keeps a hidden tab's newest report, so its late visible one is still dropped", async () => {
+    const push = subscribed();
+    push.seed([pane("w1:p1", "working", "api")]);
+    push.presence(fake.subscription.endpoint, false, null, "tab-a", 2);
+    push.presence(fake.subscription.endpoint, true, null, "tab-b", 1);
+    push.presence(fake.subscription.endpoint, false, null, "tab-b", 2);
+    push.presence(fake.subscription.endpoint, true, null, "tab-a", 1); // a's delayed visible heartbeat
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(1); // both tabs are hidden
+  });
+
+  it("forgets a tab long silent, and remembers only so many", async () => {
+    let clock = 1_000_000;
+    const push = subscribed({ now: () => clock });
+    push.seed([pane("w1:p1", "working", "api")]);
+    push.presence(fake.subscription.endpoint, false, null, "old", 5);
+    clock += 10 * 60_000;
+    push.presence(fake.subscription.endpoint, false, null, "new", 1);
+    // "old" was forgotten: a report of it with any number is taken as its first
+    push.presence(fake.subscription.endpoint, true, null, "old", 1);
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(0);
+    // past the cap the longest silent tab goes, the one just heard stays
+    push.presence(fake.subscription.endpoint, false, null, "old", 2);
+    for (let i = 0; i < 40; i++) push.presence(fake.subscription.endpoint, false, null, `t${i}`, 1);
+    push.presence(fake.subscription.endpoint, true, null, "t39", 0); // still remembered: late, dropped
+    await push.onStatus("w1:p1", "working");
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(1);
+    push.presence(fake.subscription.endpoint, true, null, "t0", 0); // forgotten: taken
+    await push.onStatus("w1:p1", "working");
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(1);
+  });
+
   it("takes presence over HTTP from the device that holds the subscription only", async () => {
     const push = subscribed();
     const post = (body: unknown, device: string | null) => handlePushRequest(new Request("http://x/api/push/presence", { method: "POST", body: JSON.stringify(body) }), "/api/push/presence", push, device);
