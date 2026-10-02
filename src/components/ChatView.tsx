@@ -1,5 +1,5 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { OUTGOING_KEEP_MS, recordedIds, type Outgoing } from "../lib/outbox.ts";
+import { OUTGOING_KEEP_MS, forgetGone, recordedIds, type Outgoing } from "../lib/outbox.ts";
 import {
   ArrowDown, BookOpen, Bot, Brain, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, Copy, FilePen, FileSearch, Globe, ListChecks, Target, Terminal, Wrench,
   type LucideProps,
@@ -791,15 +791,22 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
     });
   }, [turns]);
   const userSeen = useRef(new Map<number, ReadonlySet<string>>());
+  // a refused message leaves the outbox without being retired here: its turns go with it
+  forgetGone(userSeen.current, outgoing);
   for (const item of outgoing) if (!userSeen.current.has(item.id)) userSeen.current.set(item.id, new Set(userTurns.map((turn) => turn.key)));
   const recordedOut = recordedIds(outgoing.map((item) => ({ id: item.id, text: item.text, sent: item.sent, seen: userSeen.current.get(item.id) ?? new Set<string>() })), userTurns);
   // a pane read from its screen (no conversation to record it) shows the message until the pane took it
   const pendingOut = outgoing.filter((item) => !recordedOut.has(item.id));
   const [, setOutboxTick] = useState(0);
+  // the screen a pane showed when it took the message: once that screen changes, it shows the message itself
+  const screenAtSent = useRef(new Map<number, TranscriptMessage[]>());
   useEffect(() => {
+    forgetGone(screenAtSent.current, outgoing);
     for (const item of outgoing) {
       const shown = pendingOut.some((pending) => pending.id === item.id);
-      if (item.sent && (!shown || state.source !== "conversation" || Date.now() - item.at > OUTGOING_KEEP_MS)) { userSeen.current.delete(item.id); onOutgoingDone?.(item.id); }
+      if (item.sent && state.source !== "conversation" && !screenAtSent.current.has(item.id)) screenAtSent.current.set(item.id, state.messages);
+      const screenMoved = state.source !== "conversation" && item.sent && screenAtSent.current.get(item.id) !== state.messages;
+      if (item.sent && (!shown || screenMoved || Date.now() - item.at > OUTGOING_KEEP_MS)) { userSeen.current.delete(item.id); screenAtSent.current.delete(item.id); onOutgoingDone?.(item.id); }
     }
     if (outgoing.length === 0) return;
     const timer = window.setTimeout(() => setOutboxTick((tick) => tick + 1), 2_000);

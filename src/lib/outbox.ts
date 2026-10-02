@@ -57,3 +57,9 @@ export function recordedIds(items: ReadonlyArray<{ id: number; text: string; sen
   }
   return done;
 }
+
+/** Drops what a map keeps for messages no longer on their way (refused, retired), so it stays as small as the outbox. */
+export function forgetGone<T>(kept: Map<number, T>, items: ReadonlyArray<{ id: number }>): void {
+  const live = new Set(items.map((item) => item.id));
+  for (const id of kept.keys()) if (!live.has(id)) kept.delete(id);
+}

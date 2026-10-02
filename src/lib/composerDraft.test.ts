@@ -73,3 +73,33 @@ it("takes a dispatched send out of the box at once, and puts a failed one back b
   store.restore("a");
   expect(store.read("a").text).toBe("");
 });
+it("keeps a dispatched send through a reload until the pane answers it", () => {
+  const { store, data } = fixture();
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
+  store.set("a", "hello"); store.dispatch("a", "hello");
+  store.set("a", "next");
+  // the page closes before the answer: a new page finds the message back in front of the draft, marked
+  const reloaded = new ComposerDraftStore(() => storage);
+  expect(reloaded.read("a")).toEqual({ text: "hello\nnext", sending: false, unconfirmed: true });
+  expect(data.get("a")).toBe("hello\nnext");
+  expect(data.has("a:unconfirmed")).toBe(false);
+  // sending it again takes the mark off
+  reloaded.dispatch("a", "hello\nnext");
+  expect(reloaded.read("a")).toEqual({ text: "", sending: true });
+  reloaded.end("a");
+  expect(data.has("a:unconfirmed")).toBe(false);
+  expect(new ComposerDraftStore(() => storage).read("a")).toEqual({ text: "", sending: false });
+});
+it("forgets a dispatched send once the pane takes or refuses it", () => {
+  const { store, data } = fixture();
+  store.set("a", "taken"); store.dispatch("a", "taken");
+  expect(data.get("a:unconfirmed")).toBe("taken");
+  store.end("a");
+  expect(data.has("a:unconfirmed")).toBe(false);
+  store.set("a", "refused"); store.dispatch("a", "refused");
+  store.restore("a");
+  expect(data.has("a:unconfirmed")).toBe(false);
+  expect(data.get("a")).toBe("refused");
+  store.end("a");
+  expect(store.read("a")).toEqual({ text: "refused", sending: false });
+});

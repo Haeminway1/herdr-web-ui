@@ -210,7 +210,7 @@ export function Composer({
   const removedAttachments = useRef(new Set<number>());
   const fileRequest = useRef(0);
   const draftKey = `herdr-web-ui:composer-draft:${paneStorageId(machineId, paneId)}`;
-  const { text, sending } = useSyncExternalStore(composerDrafts.subscribe, () => composerDrafts.read(draftKey));
+  const { text, sending, unconfirmed } = useSyncExternalStore(composerDrafts.subscribe, () => composerDrafts.read(draftKey));
   const setText = useCallback((value: string | ((previous: string) => string)) => composerDrafts.set(draftKey, value), [draftKey]);
   const mounted = useRef(true);
   const [caret, setCaret] = useState(text.length);
@@ -224,6 +224,10 @@ export function Composer({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragging, setDragging] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // a message sent from a page that closed before the pane answered is back in the box: say so
+  useEffect(() => {
+    if (unconfirmed) setNote(t("Not confirmed. Check the terminal before sending again."));
+  }, [unconfirmed]);
   // shown only when chosen in Settings → Quick replies: a button beside the box was one more thing to read
   const quickOpen = settings.showQuickReplies;
   const quickReplies = quickReplyButtons(settings);
