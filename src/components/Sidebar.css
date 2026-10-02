@@ -447,19 +447,56 @@
   font-size: var(--fs-sm);
 }
 
+/* the row's actions take no room of their own: they show over the end of the row when it is
+   hovered or focused, on the row's own background, and the title has the whole width otherwise */
 .pane-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
   padding-right: var(--space-1);
+  padding-left: var(--space-6);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: linear-gradient(to right, transparent, var(--bg-hover) var(--space-6));
   opacity: 0;
+  pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease-out);
 }
 
-.pane-item:hover .pane-actions,
-.pane-item:focus-within .pane-actions,
+/* keyboard focus only: a click's focus would bring the buttons under the pointer mid-click */
+.pane-item:has(:focus-visible) .pane-actions,
 .pane-actions:has(.is-armed) {
   opacity: 1;
+}
+
+/* a hover only where there is one: a tap on a touch screen leaves a "hover" behind */
+@media (hover: hover) {
+  .pane-item:hover .pane-actions {
+    opacity: 1;
+  }
+  .pane-item:hover .pane-actions > * {
+    pointer-events: auto;
+  }
+}
+
+/* compact on a mouse: four of them end short of the row's middle, where a click opens the pane */
+@media not (pointer: coarse) {
+  .pane-actions .sidebar-row-action:not(.is-armed) {
+    width: 26px;
+    height: 26px;
+  }
+  .pane-actions .sidebar-row-action svg {
+    width: 15px;
+    height: 15px;
+  }
+}
+
+/* only the buttons take a click: the fade in front of them still opens the pane */
+.pane-item:has(:focus-visible) .pane-actions > *,
+.pane-actions:has(.is-armed) > * {
+  pointer-events: auto;
 }
 
 .pane-close.is-armed {
@@ -540,11 +577,17 @@
     height: var(--touch-target);
   }
 
-  /* no hover on touch: the grip stays, quiet, and the row actions are always there */
+  /* no hover on touch: the grip stays, quiet, and the selected row shows its actions; the
+     other rows keep their whole width for their titles */
   .sidebar-drag-handle,
-  .pane-actions,
   .workspace-rename {
     opacity: 1;
+  }
+  .pane-item.is-selected .pane-actions {
+    opacity: 1;
+  }
+  .pane-item.is-selected .pane-actions > * {
+    pointer-events: auto;
   }
 }
 

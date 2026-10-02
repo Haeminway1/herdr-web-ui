@@ -297,8 +297,10 @@ One set for both themes: a white card out of island black, as in the original (e
   Drag/drop reorders; `Alt+↑/↓` on the handle is the keyboard equivalent.
 - Every pane row is two lines: agent/shell mark, then the editable title alone on line one (full
   width), and the status chip followed by workspace and cwd on line two. Mark boxes are neutral;
-  the selected row gets the amber rail and an amber-edged mark box. Row actions rename or arm a
-  3-second, second-click close. Inline server failures stay beside their row.
+  the selected row gets the amber rail and an amber-edged mark box. Row actions (new tab, split,
+  rename, and a 3-second, second-click close) take no room of their own: they show over the end
+  of a hovered or focused row, and on a touch screen over the selected row only, so every title
+  keeps the row's whole width. Inline server failures stay beside their row.
 - A PC group header is caret, monitor, name, “This PC” for the local machine and a state dot
   (done = connected, working pulse = connecting/reconnecting, blocked = error). Connected says
   nothing more; every other state is written under the name, with the server's error clamped to
