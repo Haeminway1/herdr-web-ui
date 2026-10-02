@@ -49,7 +49,8 @@ function sanitize(value) {
 
 function load(file) {
   try {
-    return sanitize(JSON.parse(fs.readFileSync(file, "utf8")));
+    // a file written by Windows tools (PowerShell's UTF8) starts with a byte-order mark JSON refuses
+    return sanitize(JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "")));
   } catch {
     return { ...DEFAULTS };
   }
