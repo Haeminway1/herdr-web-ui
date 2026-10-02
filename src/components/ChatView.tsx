@@ -770,7 +770,7 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   }, [turns]);
   const userSeen = useRef(new Map<number, ReadonlySet<string>>());
   for (const item of outgoing) if (!userSeen.current.has(item.id)) userSeen.current.set(item.id, new Set(userTurns.map((turn) => turn.key)));
-  const recordedOut = recordedIds(outgoing.map((item) => ({ id: item.id, text: item.text, seen: userSeen.current.get(item.id) ?? new Set<string>() })), userTurns);
+  const recordedOut = recordedIds(outgoing.map((item) => ({ id: item.id, text: item.text, sent: item.sent, seen: userSeen.current.get(item.id) ?? new Set<string>() })), userTurns);
   const pendingOut = outgoing.filter((item) => state.source === "conversation" && !recordedOut.has(item.id));
   const [, setOutboxTick] = useState(0);
   useEffect(() => {

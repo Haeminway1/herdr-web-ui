@@ -32,14 +32,25 @@ export interface UserTurn {
  * Which of the messages on their way the transcript holds now. `seen` is the user turns there
  * already when the message went out, by key, so a page that moves keeps them apart; each new
  * user turn stands for one message only, the oldest message first, so "yes" sent twice is
- * recorded twice before both go.
+ * recorded twice before both go. A message the pane took (`sent`) that no new turn matches
+ * word for word takes the oldest new turn left: an agent may record it otherwise (a long paste
+ * folded, a mention resolved), and showing it twice is worse than retiring it a turn early.
  */
-export function recordedIds(items: ReadonlyArray<{ id: number; text: string; seen: ReadonlySet<string> }>, turns: readonly UserTurn[]): Set<number> {
+export function recordedIds(items: ReadonlyArray<{ id: number; text: string; sent: boolean; seen: ReadonlySet<string> }>, turns: readonly UserTurn[]): Set<number> {
   const used = new Set<string>();
   const done = new Set<number>();
-  for (const item of [...items].sort((a, b) => a.id - b.id)) {
+  const ordered = [...items].sort((a, b) => a.id - b.id);
+  const fresh = (item: { seen: ReadonlySet<string> }, turn: UserTurn): boolean => !item.seen.has(turn.key) && !used.has(turn.key);
+  for (const item of ordered) {
     if (normalize(item.text) === "") { done.add(item.id); continue; }
-    const turn = turns.find((candidate) => !item.seen.has(candidate.key) && !used.has(candidate.key) && sameMessage(item.text, candidate.text));
+    const turn = turns.find((candidate) => fresh(item, candidate) && sameMessage(item.text, candidate.text));
+    if (!turn) continue;
+    used.add(turn.key);
+    done.add(item.id);
+  }
+  for (const item of ordered) {
+    if (done.has(item.id) || !item.sent) continue;
+    const turn = turns.find((candidate) => fresh(item, candidate));
     if (!turn) continue;
     used.add(turn.key);
     done.add(item.id);
