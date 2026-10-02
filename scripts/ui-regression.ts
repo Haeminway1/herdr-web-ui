@@ -18,7 +18,7 @@ import { checkNotificationStartup } from "./notification-startup-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
 import { checkDefaultView } from "./default-view-regression.ts";
-import { checkAlertBell } from "./alert-bell-regression.ts";
+import { checkAlertBell, checkPushedAlertWhileClosed } from "./alert-bell-regression.ts";
 import { checkDroplet } from "./droplet-regression.ts";
 import { checkComposerReconnect } from "./composer-reconnect-regression.ts";
 import { UsageService } from "../server/usage.ts";
@@ -220,6 +220,7 @@ try {
   await checkMobileViewport(browser, origin, paneB);
   await checkDefaultView(browser, origin);
   await checkAlertBell(browser, origin);
+  await checkPushedAlertWhileClosed(browser, origin);
   await checkDroplet(browser, origin);
   await checkComposerReconnect(browser, origin, paneB);
 

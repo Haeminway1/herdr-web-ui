@@ -75,6 +75,52 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
+// The bell's list (src/lib/alertLog.ts) keeps the alerts this device heard, but a push that
+// arrives while no page of the app runs is heard only here. Each one is written down for the
+// next page to take (src/lib/pushedAlerts.ts, where the same names are), the last 30 at most.
+const ALERTS_DB = "herdr-web-ui-alerts";
+const ALERTS_STORE = "pushed";
+const ALERTS_KEPT = 30;
+const ALERT_KINDS = new Set(["blocked", "done", "ended"]);
+
+function openAlerts() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(ALERTS_DB, 1);
+    request.onupgradeneeded = () => { request.result.createObjectStore(ALERTS_STORE, { autoIncrement: true }); };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function recordAlert(payload) {
+  // a test push is no pane's alert
+  if (!payload.pane_id || !ALERT_KINDS.has(payload.kind)) return;
+  const db = await openAlerts();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(ALERTS_STORE, "readwrite");
+      const store = tx.objectStore(ALERTS_STORE);
+      store.add({
+        at: typeof payload.at === "number" ? payload.at : Date.now(),
+        machineId: payload.machine_id || "local",
+        paneId: payload.pane_id,
+        title: payload.title || payload.pane_id,
+        kind: payload.kind,
+      });
+      // keys ascend with age: past the last ALERTS_KEPT, the oldest go
+      const keys = store.getAllKeys();
+      keys.onsuccess = () => {
+        for (const key of keys.result.slice(0, Math.max(0, keys.result.length - ALERTS_KEPT))) store.delete(key);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
 // Web push (server/push.ts sends, shared/protocol.ts PushPayload is the JSON). Every
 // push shows a notification: Safari revokes a subscription whose pushes stay silent.
 // A window of the app that is visible right now already shows the change in its
@@ -88,8 +134,11 @@ self.addEventListener("push", (event) => {
   }
   event.waitUntil(
     (async () => {
+      // written down whether or not the notification can be shown: the bell keeps what came
+      const recorded = recordAlert(payload).catch(() => undefined);
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const watching = windows.some((client) => client.visibilityState === "visible");
+      await recorded;
       await self.registration.showNotification(payload.title || "herdr", {
         body: payload.body || "",
         tag: payload.tag || "herdr",

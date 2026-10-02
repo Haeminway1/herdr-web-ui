@@ -157,12 +157,13 @@ export function parseSubscription(value: unknown): PushSubscriptionRecord | null
   return { endpoint, keys: { p256dh: keys!.p256dh as string, auth: keys!.auth as string } };
 }
 
-export function statusMessage(paneId: string, title: string, status: AgentStatus): PushPayload {
-  return { pane_id: paneId, title, body: statusNotificationBody(status), tag: paneNotificationTag(paneId) };
+// only blocked and done are news (shared/notify-policy.ts shouldNotifyStatus)
+export function statusMessage(paneId: string, title: string, status: AgentStatus, at = Date.now()): PushPayload {
+  return { pane_id: paneId, title, body: statusNotificationBody(status), tag: paneNotificationTag(paneId), kind: status === "blocked" ? "blocked" : "done", at };
 }
 
-export function endedMessage(paneId: string, title: string): PushPayload {
-  return { pane_id: paneId, title, body: ENDED_NOTIFICATION_BODY, tag: paneNotificationTag(paneId) };
+export function endedMessage(paneId: string, title: string, at = Date.now()): PushPayload {
+  return { pane_id: paneId, title, body: ENDED_NOTIFICATION_BODY, tag: paneNotificationTag(paneId), kind: "ended", at };
 }
 
 export function createPushService(options: PushServiceOptions): PushService {
@@ -419,6 +420,8 @@ export function createPushService(options: PushServiceOptions): PushService {
         turnStart.delete(key);
       }
       if (!shouldNotifyStatus(previous, status)) return;
+      // the time it happened, not the time a held-back alert goes out
+      const at = now();
       const groups = new Map<number, PushSubscriptionRecord[]>();
       for (const subscription of store().values()) {
         const delay = delayFor(subscription.alerts ?? DEFAULT_ALERTS, status, worked);
@@ -433,7 +436,7 @@ export function createPushService(options: PushServiceOptions): PushService {
           return current && current.device_id === subscription.device_id ? [current] : [];
         });
         // an app on screen shows the alert itself: no push on top of it
-        await broadcast({ ...statusMessage(paneId, title, status), ...(machineId === "local" ? {} : { machine_id: machineId }), tag: paneNotificationTag(paneId, machineId) }, status === "blocked" ? "high" : "normal", live.filter(away));
+        await broadcast({ ...statusMessage(paneId, title, status, at), ...(machineId === "local" ? {} : { machine_id: machineId }), tag: paneNotificationTag(paneId, machineId) }, status === "blocked" ? "high" : "normal", live.filter(away));
       });
     },
 
@@ -445,7 +448,7 @@ export function createPushService(options: PushServiceOptions): PushService {
       const to = [...store().values()].filter((subscription) => (subscription.alerts ?? DEFAULT_ALERTS).done !== "off" && away(subscription));
       if (to.length === 0) return;
       // the pane may already be gone from herdr: the seeded title is what is left
-      await broadcast({ ...endedMessage(paneId, titles.get(key) ?? paneId), ...(machineId === "local" ? {} : { machine_id: machineId }), tag: paneNotificationTag(paneId, machineId) }, "normal", to);
+      await broadcast({ ...endedMessage(paneId, titles.get(key) ?? paneId, now()), ...(machineId === "local" ? {} : { machine_id: machineId }), tag: paneNotificationTag(paneId, machineId) }, "normal", to);
     },
 
     async settled() {

@@ -237,6 +237,8 @@ describe("push delivery", () => {
       title: "claude: fix the build",
       body: "waiting for your input",
       tag: "herdr-pane-w1:p1",
+      kind: "blocked",
+      at: expect.any(Number),
     });
     expect(received!.urgency).toBe("high");
     expect(received!.ttl).toBe(12 * 60 * 60);
@@ -304,6 +306,8 @@ describe("push delivery", () => {
       title: "vim notes.md",
       body: "terminal ended",
       tag: "herdr-pane-w1:p1",
+      kind: "ended",
+      at: expect.any(Number),
     });
   });
 
