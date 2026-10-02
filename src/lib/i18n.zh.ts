@@ -572,6 +572,7 @@ export const ZH: Record<string, string> = {
   "Every turn": "每一轮",
   "In the app": "应用内",
   "While the app is open, these drop in from the top of the screen at once. Tap one to open its pane.": "应用打开时，这些提醒会立即从屏幕顶部落下。点按即可打开对应的窗格。",
+  "Dismiss": "关闭",
   "Open pane": "打开窗格",
   "Quick replies": "快捷回复",
   "One-tap messages above the message box, on this device. Each is sent as if typed: queued while the agent works, an answer when a question is open.": "显示在消息输入框上方的一键消息，仅适用于此设备。每条消息都像手动输入一样发送：Agent 工作时加入队列，有未关闭的问题时作为回答。",

@@ -205,7 +205,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 
 ### In-app alert
 
-One set for both themes: a white card out of island black, as in the original (expo-dynamic-notifications).
+Island black in both themes; the card follows the theme (dark here, the original's white in the light theme).
 
 | Token | Value | Usage |
 |-------|-------|-------|
@@ -430,6 +430,13 @@ One set for both themes: a white card out of island black, as in the original (e
   free, and spreads into the card on springs; then its text sharpens in. It hangs from
   `env(safe-area-inset-top)` only, so a Dynamic Island, a notch and a desktop window take the same
   path; no device is guessed.
+- The drop is for a touch screen. With a mouse the same alert is a toast in the bottom-right
+  corner, as the Aquila design system's: up to three stacked, sliding in from the right, a 2px
+  line in the status colour shrinking while it stays (5s, held while hovered); a click opens the
+  pane, the X or a swipe right puts it away.
+- On an iPhone in portrait whose safe area is a Dynamic Island's (59px and up), the island is drawn
+  over the phone's own and the drop leaves from it; elsewhere it leaves from the top edge. The card
+  is dark in the dark theme and the original's white in the light one, 56px tall.
 - While the app is on screen it tells the server (`POST /api/push/presence`, every 10s), which
   holds this device's web pushes back: no system banner over the app's own alert.
 - One at a time; a newer one folds the current one away first. Tap opens the pane; a drag or flick

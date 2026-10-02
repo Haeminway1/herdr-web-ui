@@ -108,6 +108,32 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     await Bun.sleep(1_200);
     assert.equal(await droplet.count(), 0, "no in-app alert when turned off");
     console.log("PASS in-app alerts turned off stay off");
+
+    // with a mouse, the same alert is a toast in the bottom-right corner, not a drop
+    const desk = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+    try {
+      await desk.addInitScript(() => {
+        if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertDone: "off" }));
+      });
+      const deskPage = await desk.newPage();
+      deskPage.on("pageerror", (error) => errors.push(error.message));
+      await deskPage.goto(`${origin}/?pane=${encodeURIComponent(openPane)}`);
+      await deskPage.locator(".conn-live").waitFor();
+      const seenHere = (pane: string, status: string) => deskPage.locator(`.pane-item:has(.pane-select[title^="${pane} —"]) [data-status="${status}"]`).first().waitFor({ state: "attached" });
+      await report(otherPane, "idle");
+      await report(otherPane, "working"); await seenHere(otherPane, "working"); await report(otherPane, "blocked");
+      const toast = deskPage.locator(".alert-toast[data-shown]");
+      await toast.waitFor();
+      assert.equal(await deskPage.locator(".droplet").count(), 0, "no drop with a mouse");
+      const at = (await toast.boundingBox())!;
+      assert.ok(at.x + at.width > 1280 - 40 && at.y + at.height > 800 - 60, `toast at ${JSON.stringify(at)}`);
+      await toast.click({ position: { x: 40, y: at.height / 2 } });
+      await deskPage.locator(`.pane-select[title^="${otherPane} —"][aria-current="true"]`).waitFor({ state: "attached" });
+      await deskPage.locator(".alert-toast").waitFor({ state: "detached" });
+      console.log("PASS with a mouse the alert is a toast in the corner, and a click opens its pane");
+    } finally {
+      await desk.close();
+    }
     assert.deepEqual(errors, []);
   } finally {
     await context.close();

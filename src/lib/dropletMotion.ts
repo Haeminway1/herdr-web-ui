@@ -12,11 +12,12 @@
 export const ISLAND_WIDTH = 126;
 export const ISLAND_HEIGHT = 37.33;
 export const CARD_MAX_WIDTH = 396;
-export const CARD_HEIGHT = 74;
+/** thinner than the original 74: a phone alert is one line of name and one of what it wants */
+export const CARD_HEIGHT = 56;
 export const CARD_MARGIN = 16;
-export const CARD_GAP = 34;
-export const DROP_SIZE = 52;
-export const NECK_WIDTH = 60;
+export const CARD_GAP = 26;
+export const DROP_SIZE = 40;
+export const NECK_WIDTH = 46;
 export const CANVAS_PADDING = 96;
 export const EDGE_MARGIN = 10;
 export const GOO_BLUR_MAX = 20;
@@ -40,7 +41,7 @@ export const SHADOW_BLUR = 14;
  * The way in runs at ENTER_PACE of the original's timing (same shapes, same springs, quicker):
  * an alert is read at a glance, and the original's 1.2s fall felt slow before the text showed.
  */
-export const ENTER_PACE = 0.5;
+export const ENTER_PACE = 0.32;
 export const ENTER_TINT_DELAY = 110 * ENTER_PACE;
 export const ENTER_EXPAND_DELAY = 340 * ENTER_PACE;
 export const ENTER_REVEAL_DELAY = 560 * ENTER_PACE;
@@ -79,17 +80,23 @@ export interface DropletLayout {
   cardLeft: number;
   cardCenterY: number;
   canvasHeight: number;
+  /** the island is the phone's own Dynamic Island, drawn over it: the drop leaves from there */
+  islandShown: boolean;
 }
 
+/** where an iPhone's Dynamic Island sits in portrait, measured from the top of the screen */
+export const DYNAMIC_ISLAND_TOP = 11;
+
 /**
- * The card hangs TOP_SPACING under the safe area's top. The island it falls from sits above the
- * screen, far enough that neither it nor its blur shows at rest: the drop grows out of the top
- * edge itself. No device is guessed: an island, a notch and a desktop window differ only in
- * `insetTop`.
+ * The card hangs TOP_SPACING under the safe area's top. Without a Dynamic Island, the island it
+ * falls from sits above the screen, far enough that neither it nor its blur shows at rest: the
+ * drop grows out of the top edge itself. With one (`dynamicIsland`, Droplet.tsx tells), the
+ * island is drawn over the phone's own, and the drop grows out of it.
  */
-export function dropletLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0): DropletLayout {
-  const cardTop = insetTop + TOP_SPACING;
-  const islandBottom = Math.min(cardTop - CARD_GAP, -(GOO_BLUR_MAX + 2));
+export function dropletLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0, dynamicIsland = false): DropletLayout {
+  // a Dynamic Island is the island: the drop grows out of it and the card hangs below it
+  const islandBottom = dynamicIsland ? DYNAMIC_ISLAND_TOP + ISLAND_HEIGHT : Math.min(insetTop + TOP_SPACING - CARD_GAP, -(GOO_BLUR_MAX + 2));
+  const cardTop = dynamicIsland ? Math.max(insetTop + TOP_SPACING, islandBottom + CARD_GAP) : insetTop + TOP_SPACING;
   const safeWidth = Math.max(width - insetLeft - insetRight, 0);
   const centerX = insetLeft + safeWidth / 2;
   const cardWidth = Math.max(Math.min(safeWidth - CARD_MARGIN * 2, CARD_MAX_WIDTH), 0);
@@ -108,6 +115,7 @@ export function dropletLayout(width: number, insetTop: number, insetLeft = 0, in
     cardLeft: centerX - cardWidth / 2,
     cardCenterY: cardTop + CARD_HEIGHT / 2,
     canvasHeight: cardTop + CARD_HEIGHT + CANVAS_PADDING,
+    islandShown: dynamicIsland,
   };
 }
 
