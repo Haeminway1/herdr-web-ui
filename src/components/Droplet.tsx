@@ -267,7 +267,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
           onPointerUp={(event) => endPress(event, false)}
           onPointerCancel={(event) => endPress(event, true)}
         >
-          <span ref={bodyEl} className="droplet-body">
+          <span ref={bodyEl} className="droplet-body" style={{ top: `${layout.contentTop}px` }}>
             <span className="droplet-mark">{current.agent ? <AgentMark agent={current.agent} size={18} /> : null}</span>
             <span className="droplet-text">
               <span className="droplet-title">{current.title}</span>
