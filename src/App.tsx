@@ -195,7 +195,8 @@ export function App() {
   const [pushOn, setPushOn] = useState(false);
   // this device's push endpoint: while the app is on screen, the server holds its pushes back
   const [pushEndpoint, setPushEndpoint] = useState<string | null>(null);
-  useEffect(() => (pushEndpoint ? watchPresence(pushEndpoint) : undefined), [pushEndpoint]);
+  // only while it shows alerts itself: with in-app alerts off, the push is the alert
+  useEffect(() => (pushEndpoint && settings.alertInApp ? watchPresence(pushEndpoint) : undefined), [pushEndpoint, settings.alertInApp]);
   const pushOnRef = useRef(pushOn);
   pushOnRef.current = pushOn;
   const lockedRef = useRef(locked);

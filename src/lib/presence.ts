@@ -6,13 +6,17 @@
  */
 export const PRESENCE_EVERY_MS = 10_000;
 
+/** this page among the device's tabs, and the order of its reports (the server drops one that arrives late) */
+const tab = Math.random().toString(36).slice(2, 12);
+let seq = 0;
+
 export function reportPresence(endpoint: string, visible: boolean): void {
   try {
     // keepalive: the word that the app was hidden must outlive the page going to sleep
     void fetch("/api/push/presence", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ endpoint, visible }),
+      body: JSON.stringify({ endpoint, visible, tab, seq: ++seq }),
       keepalive: true,
     }).catch(() => undefined);
   } catch {

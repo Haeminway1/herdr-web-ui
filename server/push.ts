@@ -84,7 +84,7 @@ export interface PushService {
    * The app on this subscription's device is on screen (`visible`), or no longer. False when the
    * endpoint is not this device's subscription. While on screen, its alerts are not pushed.
    */
-  presence(endpoint: string, visible: boolean, deviceId: string | null | undefined): boolean;
+  presence(endpoint: string, visible: boolean, deviceId: string | null | undefined, tab?: string, seq?: number): boolean;
   /** One confirmation push to one device, so enabling alerts proves the whole path works. */
   sendTest(endpoint: string): Promise<PushDelivery | null>;
   /** The collector's view of every pane: status baselines and the titles notifications use. */
@@ -171,8 +171,10 @@ export function createPushService(options: PushServiceOptions): PushService {
   const lastStatus = new Map<string, AgentStatus>();
   const titles = new Map<string, string>();
   /** endpoint -> until when its app is on screen (PRESENCE_TTL_MS) */
-  const onScreen = new Map<string, number>();
-  const away = (subscription: PushSubscriptionRecord): boolean => (onScreen.get(subscription.endpoint) ?? 0) <= now();
+  /** endpoint -> each tab of that device: until when it is on screen, and its newest report */
+  const onScreen = new Map<string, Map<string, { until: number; seq: number }>>();
+  const away = (subscription: PushSubscriptionRecord): boolean =>
+    ![...(onScreen.get(subscription.endpoint)?.values() ?? [])].some((tab) => tab.until > now());
 
   /** Created on first need: a server nobody subscribes to never writes a key. */
   function keys(): { publicKey: string; privateKey: string } {
@@ -324,12 +326,17 @@ export function createPushService(options: PushServiceOptions): PushService {
       persist();
     },
 
-    presence(endpoint, visible, deviceId) {
+    presence(endpoint, visible, deviceId, tab = "", seq = 0) {
       const subscription = store().get(endpoint);
       // only the device that holds the subscription speaks for it
       if (!subscription || (subscription.device_id ?? null) !== (deviceId ?? null)) return false;
-      if (visible) onScreen.set(endpoint, now() + PRESENCE_TTL_MS);
-      else onScreen.delete(endpoint);
+      // each tab speaks for itself, and an older report of it that arrives late changes nothing
+      const tabs = onScreen.get(endpoint) ?? new Map<string, { until: number; seq: number }>();
+      const last = tabs.get(tab);
+      if (last && seq < last.seq) return true;
+      for (const [id, state] of tabs) if (state.until <= now() && id !== tab) tabs.delete(id);
+      tabs.set(tab, { until: visible ? now() + PRESENCE_TTL_MS : 0, seq });
+      onScreen.set(endpoint, tabs);
       return true;
     },
 
@@ -448,7 +455,7 @@ export function createPushService(options: PushServiceOptions): PushService {
  *   POST   /api/push/subscribe { subscription, alerts? } -> 204 (alerts: this device's AlertPrefs)
  *   DELETE /api/push/subscribe { endpoint } -> 204
  *   POST   /api/push/test      { endpoint } -> 204 | 404 subscription_not_found | 502 push_failed
- *   POST   /api/push/presence  { endpoint, visible } -> 204 | 404 subscription_not_found
+ *   POST   /api/push/presence  { endpoint, visible, tab, seq } -> 204 | 400 | 404 subscription_not_found
  */
 export async function handlePushRequest(request: Request, pathname: string, push: PushService, deviceId: string | null | undefined): Promise<Response | null> {
   const route = `${request.method} ${pathname}`;
@@ -464,7 +471,7 @@ export async function handlePushRequest(request: Request, pathname: string, push
   } catch {
     return badRequest("invalid_json", "request body must be JSON");
   }
-  const body = (typeof payload === "object" && payload !== null ? payload : {}) as { subscription?: unknown; endpoint?: unknown; alerts?: unknown; visible?: unknown };
+  const body = (typeof payload === "object" && payload !== null ? payload : {}) as { subscription?: unknown; endpoint?: unknown; alerts?: unknown; visible?: unknown; tab?: unknown; seq?: unknown };
 
   if (route === "POST /api/push/subscribe") {
     const subscription = parseSubscription(body.subscription);
@@ -475,7 +482,9 @@ export async function handlePushRequest(request: Request, pathname: string, push
   if (typeof body.endpoint !== "string") return badRequest("missing_endpoint", "endpoint is required");
   if (route === "POST /api/push/presence") {
     if (typeof body.visible !== "boolean") return badRequest("missing_visible", "visible must be true or false");
-    return push.presence(body.endpoint, body.visible, deviceId)
+    const tab = typeof body.tab === "string" ? body.tab.slice(0, 64) : "";
+    const seq = typeof body.seq === "number" && Number.isFinite(body.seq) ? body.seq : 0;
+    return push.presence(body.endpoint, body.visible, deviceId, tab, seq)
       ? new Response(null, { status: 204 })
       : jsonResponse({ error: { code: "subscription_not_found", message: "this device is not subscribed" } }, 404);
   }
