@@ -624,6 +624,8 @@ export const JA: Record<string, string> = {
   "Beside Settings, how much of each plan the AI tools on the server's PC have used. Turning it on sends their sign-ins to each provider's usage endpoint; they are never refreshed here.": "設定の横に、サーバー PC の AI ツールが各プランをどれだけ使ったかを表示します。オンにすると各ツールのサインイン情報を各プロバイダーの使用量エンドポイントに送信します。ここでトークンを更新することはありません。",
   "Accounts": "アカウント",
   "Show {name}": "{name} を表示",
+  "left": "残り",
+  "used": "使用",
   "{percent} left": "残り {percent}",
   "Meters show": "メーターの表示",
   "Beside Settings": "設定の横",
