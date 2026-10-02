@@ -59,7 +59,7 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     assert.match((await card.getAttribute("aria-label")) ?? "", /Needs input/);
     assert.equal(await droplet.getAttribute("data-kind"), "blocked");
     // it hangs under the top edge, centred, inside the screen
-    await Bun.sleep(1_000);
+    await Bun.sleep(1_800); // the springs settle: the drop's fall and the card's spread overshoot first
     const box = (await card.boundingBox())!;
     assert.ok(box.y >= 12 && box.y < 40, `card top ${box.y}`);
     assert.ok(Math.abs(box.x + box.width / 2 - 195) <= 1, `card centre ${box.x + box.width / 2}`);
@@ -81,7 +81,7 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     await page.mouse.down();
     await page.mouse.move(flick.x + flick.width / 2, flick.y + flick.height / 2 - 40, { steps: 4 });
     await page.mouse.up();
-    await droplet.waitFor({ state: "detached", timeout: 2_000 });
+    await droplet.waitFor({ state: "detached", timeout: 4_000 }); // the drop folds back up on its springs
     assert.equal(await selected(), otherPane, "a flick up opens nothing");
     console.log("PASS a flick up puts an in-app alert away");
 
@@ -90,9 +90,10 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     await block(openPane);
     await card.waitFor({ state: "visible" });
     const shown = Date.now();
-    await droplet.waitFor({ state: "detached", timeout: 7_000 });
+    await droplet.waitFor({ state: "detached", timeout: 9_000 });
     const lasted = Date.now() - shown;
-    assert.ok(lasted > 3_500 && lasted < 6_000, `stayed ${lasted}ms`);
+    // 0.56s in, 3.6s held, then the drop folds back up on its springs
+    assert.ok(lasted > 4_000 && lasted < 8_000, `stayed ${lasted}ms`);
     console.log("PASS an in-app alert goes by itself");
 
     // turned off in Settings: none

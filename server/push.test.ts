@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { AlertPrefs } from "../shared/notify-policy.ts";
 import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker } from "./completion.ts";
-import { createPushService, handlePushRequest, parseSubscription, type PushService } from "./push.ts";
+import { PRESENCE_TTL_MS, createPushService, handlePushRequest, parseSubscription, type PushService } from "./push.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 
 /**
@@ -141,6 +141,29 @@ describe("push delivery", () => {
     expect(fake.received).toHaveLength(2);
     expect(await report("idle", "claude")).toBe("done");
     expect(fake.received).toHaveLength(3);
+  });
+
+  it("holds a device's pushes back while its app is on screen, and only that device can say so", async () => {
+    let clock = 1_000_000;
+    const push = subscribed({ now: () => clock });
+    push.seed([pane("w1:p1", "working", "api")]);
+    expect(push.presence(fake.subscription.endpoint, true, "someone-else")).toBe(false);
+    expect(push.presence("https://push.example/unknown", true, null)).toBe(false);
+    expect(push.presence(fake.subscription.endpoint, true, null)).toBe(true);
+    await push.onStatus("w1:p1", "blocked");
+    await push.onEnded("w1:p1");
+    expect(fake.received).toHaveLength(0);
+    // the app said it was hidden: pushes again
+    push.presence(fake.subscription.endpoint, false, null);
+    await push.onStatus("w1:p1", "working");
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(1);
+    // on screen, then never heard from again: the word lapses
+    push.presence(fake.subscription.endpoint, true, null);
+    clock += PRESENCE_TTL_MS + 1;
+    await push.onStatus("w1:p1", "working");
+    await push.onStatus("w1:p1", "blocked");
+    expect(fake.received).toHaveLength(2);
   });
 
   it("sends a status alert the device can decrypt, signed with the server's key", async () => {
