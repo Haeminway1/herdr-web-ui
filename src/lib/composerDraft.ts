@@ -78,7 +78,7 @@ export class ComposerDraftStore {
     const pending = this.pending.get(key);
     if (!pending) return;
     const current = this.read(key).text;
-    this.set(key, current.trim() === "" ? pending.sent : `${pending.sent}\n${current}`);
+    this.set(key, current === "" ? pending.sent : `${pending.sent}\n${current}`);
   }
   end(key: string): void {
     this.pending.delete(key);

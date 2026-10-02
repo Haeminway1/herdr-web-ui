@@ -1,5 +1,5 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { OUTGOING_KEEP_MS, recorded, type Outgoing } from "../lib/outbox.ts";
+import { OUTGOING_KEEP_MS, recordedIds, type Outgoing } from "../lib/outbox.ts";
 import {
   ArrowDown, BookOpen, Bot, Brain, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, Copy, FilePen, FileSearch, Globe, ListChecks, Target, Terminal, Wrench,
   type LucideProps,
@@ -756,10 +756,12 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   const finishedBeforeSend = sentOver !== null && sentOver.page === state.turns ? sentOver.turn : null;
   const empty = state.source === "conversation" ? turns.length === 0 && outgoing.length === 0 : state.messages.length === 0;
   // a sent message shows until a user turn the transcript gained since it went out holds it
-  const userTexts = useMemo(() => turns.filter((turn) => turn.role === "user").map((turn) => turn.parts.filter((part): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n\n")), [turns]);
+  // counted on the newest page only: an older page loaded above it does not move these
+  const userTexts = useMemo(() => state.turns.filter((turn) => turn.role === "user").map((turn) => turn.parts.filter((part): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n\n")), [state.turns]);
   const userBaseline = useRef(new Map<number, number>());
   for (const item of outgoing) if (!userBaseline.current.has(item.id)) userBaseline.current.set(item.id, userTexts.length);
-  const pendingOut = outgoing.filter((item) => state.source === "conversation" && !recorded(item.text, userTexts.slice(userBaseline.current.get(item.id) ?? userTexts.length)));
+  const recordedOut = recordedIds(outgoing.map((item) => ({ id: item.id, text: item.text, baseline: userBaseline.current.get(item.id) ?? userTexts.length })), userTexts);
+  const pendingOut = outgoing.filter((item) => state.source === "conversation" && !recordedOut.has(item.id));
   const [, setOutboxTick] = useState(0);
   useEffect(() => {
     for (const item of outgoing) {

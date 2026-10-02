@@ -535,14 +535,17 @@ export function Composer({
     textRef.current = "";
     caretRef.current = 0;
     setNote(null);
-    for (const attachment of sentAttachments) URL.revokeObjectURL(attachment.previewUrl);
-    setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
+    // the attachments stay until the pane took the message: a refused one comes back with them
     const failed = (note: string): void => {
       composerDrafts.restore(draftKey);
       if (mounted.current) setNote(note);
     };
     const settle = (result: boolean | string): void => {
-      if (result === true) return;
+      if (result === true) {
+        for (const attachment of sentAttachments) URL.revokeObjectURL(attachment.previewUrl);
+        if (mounted.current) setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
+        return;
+      }
       failed(typeof result === "string" ? result : t("Not sent. It is back in the message box."));
     };
     try {
