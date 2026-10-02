@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 let revision: string | null = null;
 try { revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* non-Git build */ }
 
-// agentSvgMarks.ts carries LobeHub Icons paths (MIT): their notice ships with every built client
+// AgentMark.tsx carries LobeHub Icons paths (MIT): their notice ships with every built client
 const thirdPartyNotices: Plugin = {
   name: "third-party-notices",
   generateBundle() {

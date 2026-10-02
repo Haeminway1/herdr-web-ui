@@ -18,6 +18,9 @@ export type SidebarGrouping = "workspace" | "directory";
 export type UsageCount = "used" | "left";
 /** amber: the herdr look (the default); report: the dark technical report look; charcoal: neutral Ghostty-style dark */
 export type Palette = "amber" | "report" | "charcoal";
+/** which picture an agent's mark shows: its provider logo, or its app's own icon */
+export type ClaudeMarkStyle = "logo" | "mascot";
+export type CodexMarkStyle = "logo" | "app";
 /** where the plan meters sit: chips beside Settings, or a panel at the top of the sidebar */
 export type UsagePlacement = "footer" | "top";
 
@@ -28,6 +31,10 @@ export interface Settings {
   sidebarGrouping: SidebarGrouping;
   /** the chrome color family, keyed as data-palette in src/styles.css */
   palette: Palette;
+  /** Claude panes: the Anthropic logo, or the Claude Code mascot */
+  claudeMark: ClaudeMarkStyle;
+  /** Codex panes: the OpenAI logo, or the blue Codex app icon */
+  codexMark: CodexMarkStyle;
   /** xterm font size in px */
   terminalFontSize: number;
   /** mouse reports sent to herdr per wheel event in the terminal: 1 is what xterm sends by itself */
@@ -80,6 +87,8 @@ export const DEFAULT_SETTINGS: Settings = {
   density: "comfortable",
   sidebarGrouping: "workspace",
   palette: "amber",
+  claudeMark: "logo",
+  codexMark: "logo",
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
@@ -159,6 +168,8 @@ export function sanitizeSettings(raw: unknown): Settings {
     theme: theme === "dark" || theme === "light" || theme === "system" ? theme : DEFAULT_SETTINGS.theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarGrouping: record["sidebarGrouping"] === "workspace" || record["sidebarGrouping"] === "directory" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
+    claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
+    codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,
     palette: record["palette"] === "amber" || record["palette"] === "report" || record["palette"] === "charcoal" ? record["palette"] : DEFAULT_SETTINGS.palette,
     terminalFontSize: typeof font === "number" && Number.isFinite(font) ? clampFont(font) : DEFAULT_SETTINGS.terminalFontSize,
     terminalWheelSpeed: typeof record["terminalWheelSpeed"] === "number" && Number.isFinite(record["terminalWheelSpeed"])
@@ -312,6 +323,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => ({ settings, resolvedTheme, resolvedLanguage, update }), [settings, resolvedTheme, resolvedLanguage, update]);
   return createElement(SettingsContext.Provider, { value }, children);
+}
+
+/** The settings where a provider is mounted, else null: for leaf components also rendered standalone. */
+export function useOptionalSettings(): SettingsContextValue | null {
+  return useContext(SettingsContext);
 }
 
 export function useSettings(): SettingsContextValue {
