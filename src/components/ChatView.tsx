@@ -757,16 +757,26 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   const empty = state.source === "conversation" ? turns.length === 0 && outgoing.length === 0 : state.messages.length === 0;
   // a sent message shows until a user turn the transcript gained since it went out holds it
   // counted on the newest page only: an older page loaded above it does not move these
-  const userTexts = useMemo(() => state.turns.filter((turn) => turn.role === "user").map((turn) => turn.parts.filter((part): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n\n")), [state.turns]);
-  const userBaseline = useRef(new Map<number, number>());
-  for (const item of outgoing) if (!userBaseline.current.has(item.id)) userBaseline.current.set(item.id, userTexts.length);
-  const recordedOut = recordedIds(outgoing.map((item) => ({ id: item.id, text: item.text, baseline: userBaseline.current.get(item.id) ?? userTexts.length })), userTexts);
+  const userTurns = useMemo(() => {
+    const count = new Map<string, number>();
+    return turns.flatMap((turn) => {
+      if (turn.role !== "user") return [];
+      const text = turn.parts.filter((part): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n\n");
+      // a turn's time names it on any page; without one, the same text's nth time, which a turn added after it does not move
+      const nth = (count.get(text) ?? 0) + 1;
+      count.set(text, nth);
+      return [{ key: turn.ts ?? `${nth}:${text}`, text }];
+    });
+  }, [turns]);
+  const userSeen = useRef(new Map<number, ReadonlySet<string>>());
+  for (const item of outgoing) if (!userSeen.current.has(item.id)) userSeen.current.set(item.id, new Set(userTurns.map((turn) => turn.key)));
+  const recordedOut = recordedIds(outgoing.map((item) => ({ id: item.id, text: item.text, seen: userSeen.current.get(item.id) ?? new Set<string>() })), userTurns);
   const pendingOut = outgoing.filter((item) => state.source === "conversation" && !recordedOut.has(item.id));
   const [, setOutboxTick] = useState(0);
   useEffect(() => {
     for (const item of outgoing) {
       const shown = pendingOut.some((pending) => pending.id === item.id);
-      if (item.sent && (!shown || Date.now() - item.at > OUTGOING_KEEP_MS)) { userBaseline.current.delete(item.id); onOutgoingDone?.(item.id); }
+      if (item.sent && (!shown || Date.now() - item.at > OUTGOING_KEEP_MS)) { userSeen.current.delete(item.id); onOutgoingDone?.(item.id); }
     }
     if (outgoing.length === 0) return;
     const timer = window.setTimeout(() => setOutboxTick((tick) => tick + 1), 2_000);

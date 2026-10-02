@@ -16,33 +16,33 @@ export interface Outgoing {
 export const OUTGOING_KEEP_MS = 20_000;
 
 const normalize = (text: string): string => text.replace(/\s+/g, " ").trim();
-/** a message this long may come back cut or with more after it: its first part is enough */
-const LONG = 200;
 
-/** Is this user turn that message? The same text, spaces aside; a long one by its first part. */
+/** Is this user turn that message? The same text, spaces aside. */
 export function sameMessage(sent: string, turn: string): boolean {
-  const mine = normalize(sent);
-  const theirs = normalize(turn);
-  if (mine === theirs) return true;
-  return mine.length >= LONG && theirs.length >= LONG && mine.slice(0, LONG) === theirs.slice(0, LONG);
+  return normalize(sent) === normalize(turn);
+}
+
+export interface UserTurn {
+  /** the same for the same turn whichever page holds it */
+  key: string;
+  text: string;
 }
 
 /**
- * Which of the messages on their way the transcript holds now. `baseline` is how many user turns
- * the newest page had when the message went out; each newer user turn stands for one message
- * only, the oldest message first, so "yes" sent twice is recorded twice before both go.
+ * Which of the messages on their way the transcript holds now. `seen` is the user turns there
+ * already when the message went out, by key, so a page that moves keeps them apart; each new
+ * user turn stands for one message only, the oldest message first, so "yes" sent twice is
+ * recorded twice before both go.
  */
-export function recordedIds(items: ReadonlyArray<{ id: number; text: string; baseline: number }>, userTexts: readonly string[]): Set<number> {
-  const used = new Set<number>();
+export function recordedIds(items: ReadonlyArray<{ id: number; text: string; seen: ReadonlySet<string> }>, turns: readonly UserTurn[]): Set<number> {
+  const used = new Set<string>();
   const done = new Set<number>();
   for (const item of [...items].sort((a, b) => a.id - b.id)) {
     if (normalize(item.text) === "") { done.add(item.id); continue; }
-    for (let index = item.baseline; index < userTexts.length; index++) {
-      if (used.has(index) || !sameMessage(item.text, userTexts[index]!)) continue;
-      used.add(index);
-      done.add(item.id);
-      break;
-    }
+    const turn = turns.find((candidate) => !item.seen.has(candidate.key) && !used.has(candidate.key) && sameMessage(item.text, candidate.text));
+    if (!turn) continue;
+    used.add(turn.key);
+    done.add(item.id);
   }
   return done;
 }
