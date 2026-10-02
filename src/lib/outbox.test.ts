@@ -10,10 +10,22 @@ it("knows a message by its whole text, spaces aside", () => {
 it("lets each new user turn stand for one message, the oldest first, whatever page holds it", () => {
   const turn = (key: string, text: string): UserTurn => ({ key, text });
   const seen = new Set(["t1", "t2"]);
-  const items = [{ id: 1, text: "yes", seen }, { id: 2, text: "yes", seen }];
+  const items = [{ id: 1, text: "yes", sent: false, seen }, { id: 2, text: "yes", sent: false, seen }];
   expect([...recordedIds(items, [turn("t1", "yes"), turn("t2", "no"), turn("t3", "yes")])]).toEqual([1]);
   expect([...recordedIds(items, [turn("t1", "yes"), turn("t2", "no"), turn("t3", "yes"), turn("t4", "yes")])].sort()).toEqual([1, 2]);
   // the page moved on: the old turns are gone from it, the new one still counts once
   expect([...recordedIds(items, [turn("t3", "yes")])]).toEqual([1]);
-  expect(recordedIds([{ id: 3, text: "no", seen }], [turn("t2", "no")]).size).toBe(0);
+  expect(recordedIds([{ id: 3, text: "no", sent: true, seen }], [turn("t2", "no")]).size).toBe(0);
+});
+
+it("retires a message the pane took when the agent recorded it in other words, oldest turn first", () => {
+  const turn = (key: string, text: string): UserTurn => ({ key, text });
+  const seen = new Set(["t1"]);
+  const pasted = { id: 1, text: "line one\nline two\n...", sent: true, seen };
+  expect([...recordedIds([pasted], [turn("t1", "old"), turn("t2", "[Pasted text #1 +40 lines]")])]).toEqual([1]);
+  // not yet taken by the pane: it waits for its own words
+  expect(recordedIds([{ ...pasted, sent: false }], [turn("t2", "[Pasted text #1 +40 lines]")]).size).toBe(0);
+  // a word-for-word match is not taken by another message's fallback
+  const exact = { id: 2, text: "yes", sent: true, seen };
+  expect([...recordedIds([pasted, exact], [turn("t2", "yes"), turn("t3", "[Pasted text]")])].sort()).toEqual([1, 2]);
 });
