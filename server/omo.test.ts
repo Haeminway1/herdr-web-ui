@@ -2,7 +2,7 @@ import { expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { heldSessionIds, isOmoProcess, omoSessionFolder, omoCandidates, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
+import { heldRuntime, heldSessionIds, isOmoProcess, omoSessionFolder, omoCandidates, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
 
 const runtime = (paneId: string, startedAt: number | null = 10_000, paths: string[] = [], ids: string[] = []): OmoRuntime => ({ paneId, startedAt, paths, ids });
 const files = [
@@ -116,6 +116,19 @@ it("reads only the live process's own holder records, never a reused pid's lefto
     expect(heldSessionIds(dir, 99, 10_000)).toEqual([]);
     expect(heldSessionIds(join(dir, "missing"), 42, 10_000)).toEqual([]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("shows no earlier conversation after /new, while the session held now has no file yet", () => {
+  // the process started at 10s and wrote /fresh.jsonl; /new then made it hold a session not written yet
+  const afterNew = heldRuntime(runtime("a"), ["new-session"], files);
+  expect(selectOmoTranscript("a", files, [runtime("a")], 20_000)).toBe("/fresh.jsonl");
+  expect(selectOmoTranscript("a", files, [afterNew], 20_000)).toBeNull();
+  expect(selectOmoTranscript("a", files, [heldRuntime(runtime("a", 10_000, [], ["fresh-session"]), ["new-session"], files)], 20_000)).toBeNull();
+  // its first message writes the file, and the chat follows it
+  const written = [...files, { path: "/new.jsonl", id: "new-session", createdAt: 15_000 }];
+  expect(selectOmoTranscript("a", written, [heldRuntime(runtime("a"), ["new-session"], written)], 20_000)).toBe("/new.jsonl");
+  // holding nothing changes nothing
+  expect(heldRuntime(runtime("a", 10_000, ["/old.jsonl"]), [], files)).toEqual(runtime("a", 10_000, ["/old.jsonl"]));
 });
 
 it("does not pin a launch session id after a new unclaimed session appears", () => {

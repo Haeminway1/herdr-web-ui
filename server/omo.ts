@@ -133,6 +133,19 @@ export function heldSessionIds(dir: string, pid: number, startedAt: number | nul
   return ids;
 }
 
+/**
+ * A runtime as the sessions its processes hold now (`held`, by id) tell it: the held one
+ * outranks a launch --session-id and herdr's session path or id, which /new leaves behind.
+ * omo writes a session's file with its first message, so one held with no file yet is a
+ * conversation not begun (/new, nothing typed since): it names that id alone, never a file
+ * from before.
+ */
+export function heldRuntime(runtime: OmoRuntime, held: readonly string[], files: readonly OmoCandidate[]): OmoRuntime {
+  if (held.length === 0) return runtime;
+  const current = files.filter((file) => held.includes(file.id)).map((file) => file.path);
+  return { ...runtime, paths: current, ids: current.length > 0 ? [] : [...held] };
+}
+
 /** When the process that holds a session here started, by its own record: where the system does not tell (macOS). */
 export function holderStartedAt(dir: string, pid: number): number | null {
   const holders = join(dir, "session-holders");
@@ -230,16 +243,8 @@ function omoTranscriptsOfCwd(cwd: string, panes: HerdrPane[], infos: ReadonlyMap
   const files = omoCandidates(cwd, home, runtimes.flatMap((runtime) => runtime.paths));
   // Match canonical candidates even when /proc names a symlink into the store.
   for (const runtime of runtimes) runtime.paths = runtime.paths.flatMap((path) => { try { return [realpathSync(path)]; } catch { return []; } });
-  for (const runtime of runtimes) {
-    const ids = held.get(runtime.paneId) ?? [];
-    const current = files.filter((file) => ids.includes(file.id)).map((file) => file.path);
-    if (current.length === 0) continue;
-    // The session held now outranks a launch --session-id and herdr's session path or id,
-    // which /new leaves behind.
-    runtime.paths = current;
-    runtime.ids = [];
-  }
-  return new Map(runtimes.map((runtime) => [runtime.paneId, { path: selectOmoTranscript(runtime.paneId, files, runtimes), startedAt: runtime.startedAt ?? since.get(runtime.paneId) ?? null }]));
+  const current = runtimes.map((runtime) => heldRuntime(runtime, held.get(runtime.paneId) ?? [], files));
+  return new Map(current.map((runtime) => [runtime.paneId, { path: selectOmoTranscript(runtime.paneId, files, current), startedAt: runtime.startedAt ?? since.get(runtime.paneId) ?? null }]));
 }
 
 export async function omoTranscriptForPane(paneId: string, cwd: string, panes: HerdrPane[], home = process.env["HOME"] ?? ""): Promise<string | null> {

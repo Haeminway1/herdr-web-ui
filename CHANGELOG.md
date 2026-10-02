@@ -65,6 +65,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - On an iPhone home screen app, a text field that keeps its focus with the keyboard down no
   longer leaves a status-bar band under the message box.
   ([#349](https://github.com/devswha/herdr-web-ui/pull/349) by @Haeminway1)
+- After `/new` in an OmO pane, the chat stops showing the conversation before it: OmO writes the
+  new session's file only with its first message, and until then the chat shows what a fresh OmO
+  shows. ([#351](https://github.com/devswha/herdr-web-ui/pull/351) by @WOULDU-pres)
+||||||| 8c5c10d
 
 ## [0.3.43] - 2026-10-02
 
