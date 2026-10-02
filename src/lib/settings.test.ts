@@ -90,12 +90,12 @@ describe("quick replies row", () => {
 
 describe("palette", () => {
   it("defaults to amber, the look before this setting, and keeps only a known palette", () => {
-    expect(DEFAULT_SETTINGS.palette).toBe("amber");
+    expect(DEFAULT_SETTINGS.palette).toBe("report"); // fork deployment default;
     // settings stored before palettes existed carry no palette key
-    expect(sanitizeSettings({ theme: "light" }).palette).toBe("amber");
+    expect(sanitizeSettings({ theme: "light" }).palette).toBe("report");
     expect(sanitizeSettings({ palette: "report" }).palette).toBe("report");
     expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
-    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("amber");
+    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("report");
   });
 
   const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");

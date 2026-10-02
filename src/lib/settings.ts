@@ -72,7 +72,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   density: "comfortable",
-  palette: "amber",
+  palette: "report", // fork deployment: the report look by default, as before v0.3.4101
   claudeMark: "logo",
   codexMark: "logo",
   terminalFontSize: 13,
