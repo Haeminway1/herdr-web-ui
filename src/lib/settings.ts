@@ -117,7 +117,6 @@ export const DEFAULT_SETTINGS: Settings = {
   usageCount: "used",
   usagePlacement: "top",
   defaultView: "auto",
-  usagePlacement: "footer",
   usageGlance: "week",
   usageOrder: [],
   usageHidden: [],
