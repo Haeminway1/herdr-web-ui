@@ -118,7 +118,8 @@ function AlertToast({ toast, onDismiss, onOpen }: { toast: Toast; onDismiss: (id
       aria-label={`${toast.title}, ${detail}. ${t("Open pane")}`}
       tabIndex={0}
       onKeyDown={(event) => {
-        if (event.key === "Enter") { onOpen(toast.machineId, toast.paneId); onDismiss(toast.id); }
+        // Enter on the X is the X's own click (dismiss), not the toast's (open the pane)
+        if (event.key === "Enter" && event.target === event.currentTarget) { onOpen(toast.machineId, toast.paneId); onDismiss(toast.id); }
         if (event.key === "Escape") onDismiss(toast.id);
       }}
       onPointerEnter={() => setPaused(true)}
