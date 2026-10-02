@@ -81,6 +81,21 @@ if grep -qE '^\(fail\)' "$logs/integration.log"; then
   upstream_run upstream-integration.log test:integration
   upstream_run upstream-integration-2.log test:integration
   new="$(comm -23 <(failing "$logs/integration.log") <(cat <(failing "$logs/upstream-integration.log") <(failing "$logs/upstream-integration-2.log") | sort -u))"
+  # a test upstream passed twice may still be a flake of this machine (the Windows mirrored
+  # paste one is): each such test alone, up to three times upstream; one failure there clears it
+  if [ -n "$new" ]; then
+    baseline
+    still=""
+    while IFS= read -r line; do
+      name="$(printf '%s' "${line#(fail) }" | sed -E 's/.* > //; s/[][(){}.*+?^$|\\]/\\&/g')"
+      known=0
+      for _ in 1 2 3; do
+        (cd "$base" && HERDR_TEST_MODE=integration bun test --timeout 15000 -t "$name" $(git ls-files '*.contract.test.ts') > "$logs/upstream-alone.log" 2>&1) || { known=1; break; }
+      done
+      [ $known -eq 1 ] || still="$still$line"$'\n'
+    done <<< "$new"
+    new="${still%$'\n'}"
+  fi
   [ -z "$new" ] || fail "integration tests failed that pass upstream: $new"
   notes="$notes; integration failures also upstream: $(failing "$logs/integration.log" | wc -l)"
 fi
