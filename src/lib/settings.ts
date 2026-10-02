@@ -16,6 +16,8 @@ export type Density = "compact" | "comfortable";
 export type SidebarGrouping = "workspace" | "directory";
 /** what the plan meters count: the share of a limit used, or what is left of it */
 export type UsageCount = "used" | "left";
+/** the limit a meter shows at a glance: the one closest to running out, or the plan's week */
+export type UsageGlance = "nearest" | "week";
 /** amber: the herdr look (the default); report: the dark technical report look; charcoal: neutral Ghostty-style dark */
 export type Palette = "amber" | "report" | "charcoal";
 /** which picture an agent's mark shows: its provider logo, or its app's own icon */
@@ -75,6 +77,7 @@ export interface Settings {
   usagePlacement: UsagePlacement;
   /** every pane's lens until switched in that pane; changing it puts every pane back on it */
   defaultView: DefaultView;
+  usageGlance: UsageGlance;
   /** the plan meters' order by ProviderUsage.key; accounts not in it follow, the one nearest a limit first */
   usageOrder: string[];
   /** accounts left out of the plan meters, strip and popover alike, by ProviderUsage.key */
@@ -114,6 +117,8 @@ export const DEFAULT_SETTINGS: Settings = {
   usageCount: "used",
   usagePlacement: "top",
   defaultView: "auto",
+  usagePlacement: "footer",
+  usageGlance: "week",
   usageOrder: [],
   usageHidden: [],
   voiceInput: false,
@@ -203,6 +208,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     usageCount: record["usageCount"] === "used" || record["usageCount"] === "left" ? record["usageCount"] : DEFAULT_SETTINGS.usageCount,
     usagePlacement: record["usagePlacement"] === "top" || record["usagePlacement"] === "footer" ? record["usagePlacement"] : DEFAULT_SETTINGS.usagePlacement,
     defaultView: record["defaultView"] === "chat" || record["defaultView"] === "terminal" || record["defaultView"] === "auto" ? record["defaultView"] : DEFAULT_SETTINGS.defaultView,
+    usageGlance: record["usageGlance"] === "nearest" || record["usageGlance"] === "week" ? record["usageGlance"] : DEFAULT_SETTINGS.usageGlance,
     usageOrder: usageKeys(record["usageOrder"]),
     usageHidden: usageKeys(record["usageHidden"]),
     voiceInput: typeof record["voiceInput"] === "boolean" ? record["voiceInput"] : DEFAULT_SETTINGS.voiceInput,

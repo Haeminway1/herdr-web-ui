@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
-import { formatPercent, formatResetAt, formatResetIn, formatResetShort, leftLevel, meterPercent, meterText, moveInOrder, orderProviders, tightestWindow, usageName, windowLabel } from "./usage.ts";
+import { formatPercent, formatResetAt, formatResetIn, formatResetShort, glanceWindow, leftLevel, meterPercent, meterText, moveInOrder, orderProviders, tightestWindow, usageName, windowLabel } from "./usage.ts";
 
 const NOW = Date.parse("2026-09-29T12:00:00Z");
 const window = (used_percent: number, kind: UsageWindow["kind"] = "week", scope: string | null = null): UsageWindow => ({ kind, scope, used_percent, resets_at: null });
@@ -88,5 +88,21 @@ describe("the top panel's reset and colour", () => {
     expect(leftLevel(window(51))).toBe("mid");
     expect(leftLevel(window(80))).toBe("mid");
     expect(leftLevel(window(81))).toBe("low");
+  });
+});
+
+describe("glanceWindow", () => {
+  const usage = provider("claude", [window(53, "session"), window(10, "week", "Sonnet"), window(38, "week")]);
+
+  it("nearest: the limit closest to running out", () => {
+    expect(glanceWindow(usage, "nearest")?.kind).toBe("session");
+  });
+
+  it("week: the plan-wide week, not a model's own", () => {
+    expect(glanceWindow(usage, "week")).toEqual(window(38, "week"));
+  });
+
+  it("week, where the plan has none: the nearest instead", () => {
+    expect(glanceWindow(provider("claude", [window(53, "session")]), "week")?.kind).toBe("session");
   });
 });

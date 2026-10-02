@@ -644,6 +644,8 @@ export const KO: Record<string, string> = {
   "used": "사용",
   "Fold plan limits": "구독 한도 접기",
   "{percent} left": "{percent} 남음",
+  "Limit shown": "표시할 한도",
+  "Nearest to its limit": "한도에 가장 가까운 것",
   "Meters show": "미터 표시",
   "Beside Settings": "설정 옆",
   "Top of the list": "목록 맨 위",

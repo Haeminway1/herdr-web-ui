@@ -646,6 +646,8 @@ export const JA: Record<string, string> = {
   "used": "使用",
   "Fold plan limits": "プランの上限を折りたたむ",
   "{percent} left": "残り {percent}",
+  "Limit shown": "表示する上限",
+  "Nearest to its limit": "上限に最も近いもの",
   "Meters show": "メーターの表示",
   "Beside Settings": "設定の横",
   "Top of the list": "一覧の一番上",
