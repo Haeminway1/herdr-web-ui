@@ -23,14 +23,30 @@ const OMO_EXTENSION = /\/omo-ai\/plugin\/?$/;
  * Words after a `--` are the prompt, not options: senpi loads no extension from them.
  */
 export function isOmoProcess(argv: readonly string[]): boolean {
-  const runtime = JS_RUNTIME.test(argv[0] ?? "");
-  const program = runtime ? argv.slice(1).find((word) => !word.startsWith("-")) : argv[0];
-  if (program === undefined || program.includes(":")) return false;
+  const words = argv.map(windowsPath);
+  const runtime = JS_RUNTIME.test(words[0] ?? "");
+  const at = runtime ? words.slice(1).findIndex((word) => !word.startsWith("-")) + 1 : 0;
+  const program = at > 0 || !runtime ? words[at] : undefined;
+  if (program === undefined || isPathList(program)) return false;
   if (OMO_PROCESS.test(program)) return true;
   if (!runtime || !SENPI_ENTRY.test(program)) return false;
-  const prompt = argv.indexOf("--", argv.indexOf(program));
-  const options = prompt === -1 ? argv : argv.slice(0, prompt);
-  return options.some((word, at) => options[at - 1] === "--extension" && !word.includes(":") && OMO_EXTENSION.test(word));
+  const prompt = words.indexOf("--", at);
+  const options = prompt === -1 ? words : words.slice(0, prompt);
+  return options.some((word, index) => options[index - 1] === "--extension" && !isPathList(word) && OMO_EXTENSION.test(word));
+}
+
+/**
+ * A Windows PC's process words read as the same paths: backslashes as slashes, and a program's
+ * .exe/.cmd dropped (`C:\Users\me\.bun\bin\bun.exe` is bun, `omo.cmd` is omo).
+ */
+function windowsPath(word: string): string {
+  if (!/\\|^[A-Za-z]:[\\/]|\.(exe|cmd|bat)$/i.test(word)) return word;
+  return word.replace(/\\/g, "/").replace(/\.(exe|cmd|bat)$/i, "");
+}
+
+/** A PATH-like list (`a:b`), not one path: a drive's colon (`C:/…`) does not make one. */
+function isPathList(word: string): boolean {
+  return word.replace(/^[A-Za-z]:\//, "").includes(":");
 }
 
 export interface OmoCandidate { path: string; id: string; createdAt: number | null }

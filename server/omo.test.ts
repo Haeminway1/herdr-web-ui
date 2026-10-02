@@ -23,6 +23,18 @@ it("takes omo from the program a process runs: its own binary, or the script of 
   expect(isOmoProcess([`${OMO_AI}/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`, "--output-format", "stream-json"])).toBeTrue();
 });
 
+it("reads a Windows PC's process words: bun.exe, backslashes, and a drive's colon", () => {
+  const modules = "C:\\Users\\me\\.bun\\install\\global\\node_modules";
+  expect(isOmoProcess(["C:\\Users\\me\\.bun\\bin\\bun.exe", `${modules}\\@code-yeongyu\\senpi\\dist\\bundle\\cli.js`, "--extension", `${modules}\\omo-ai\\plugin`])).toBeTrue();
+  expect(isOmoProcess(["bun.exe", `${modules}\\omo-ai\\plugin\\runtime\\ast-grep-mcp\\cli.js`, "mcp"])).toBeTrue();
+  expect(isOmoProcess(["node.exe", "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\omo-ai\\bin\\omo.js"])).toBeTrue();
+  expect(isOmoProcess(["C:\\Users\\me\\AppData\\Roaming\\npm\\omo.cmd"])).toBeTrue();
+  // still only the program: bun.exe running something else, or a PATH list, is not omo
+  expect(isOmoProcess(["bun.exe", "C:\\work\\app\\server.js"])).toBeFalse();
+  expect(isOmoProcess(["bun.exe", "C:\\a\\omo-ai\\bin;D:\\b"])).toBeFalse();
+  expect(isOmoProcess(["/bin/sh", "-c", "a:/x/omo-ai/bin"])).toBeFalse();
+});
+
 it("takes the engine a global bun install hoists next to omo-ai for omo when it loads omo-ai's plugin", () => {
   const modules = "/home/u/.bun/install/global/node_modules";
   // omo-ai 5.1.6 installed with `bun add -g omo-ai`: senpi is not under omo-ai
