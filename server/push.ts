@@ -55,6 +55,12 @@ export interface AlertTiming {
   longTurn: number;
 }
 export const DEFAULT_ALERT_TIMING: AlertTiming = { short: 10_000, long: 60_000, longTurn: 60_000 };
+/**
+ * A device whose app is on screen says so (POST /api/push/presence) at least this often: its
+ * pushes are held back meanwhile, as the app shows the alert itself (components/Droplet.tsx).
+ * A word it never sends (a phone frozen before it could) lapses after this long.
+ */
+export const PRESENCE_TTL_MS = 30_000;
 
 export interface PushSubscriptionRecord {
   endpoint: string;
@@ -74,6 +80,11 @@ export interface PushService {
   subscribe(subscription: PushSubscriptionRecord, alerts?: AlertPrefs, deviceId?: string | null): void;
   revokeDevice(id: string): void;
   unsubscribe(endpoint: string): void;
+  /**
+   * The app on this subscription's device is on screen (`visible`), or no longer. False when the
+   * endpoint is not this device's subscription. While on screen, its alerts are not pushed.
+   */
+  presence(endpoint: string, visible: boolean, deviceId: string | null | undefined): boolean;
   /** One confirmation push to one device, so enabling alerts proves the whole path works. */
   sendTest(endpoint: string): Promise<PushDelivery | null>;
   /** The collector's view of every pane: status baselines and the titles notifications use. */
@@ -159,6 +170,9 @@ export function createPushService(options: PushServiceOptions): PushService {
   let subscriptions: Map<string, PushSubscriptionRecord> | null = null;
   const lastStatus = new Map<string, AgentStatus>();
   const titles = new Map<string, string>();
+  /** endpoint -> until when its app is on screen (PRESENCE_TTL_MS) */
+  const onScreen = new Map<string, number>();
+  const away = (subscription: PushSubscriptionRecord): boolean => (onScreen.get(subscription.endpoint) ?? 0) <= now();
 
   /** Created on first need: a server nobody subscribes to never writes a key. */
   function keys(): { publicKey: string; privateKey: string } {
@@ -310,6 +324,15 @@ export function createPushService(options: PushServiceOptions): PushService {
       persist();
     },
 
+    presence(endpoint, visible, deviceId) {
+      const subscription = store().get(endpoint);
+      // only the device that holds the subscription speaks for it
+      if (!subscription || (subscription.device_id ?? null) !== (deviceId ?? null)) return false;
+      if (visible) onScreen.set(endpoint, now() + PRESENCE_TTL_MS);
+      else onScreen.delete(endpoint);
+      return true;
+    },
+
     revokeDevice(id) {
       for (const [endpoint, subscription] of store()) {
         if (subscription.device_id === id || subscription.device_id === undefined) store().delete(endpoint);
@@ -396,7 +419,8 @@ export function createPushService(options: PushServiceOptions): PushService {
           const current = store().get(subscription.endpoint);
           return current && current.device_id === subscription.device_id ? [current] : [];
         });
-        await broadcast({ ...statusMessage(paneId, title, status), ...(machineId === "local" ? {} : { machine_id: machineId }), tag: paneNotificationTag(paneId, machineId) }, status === "blocked" ? "high" : "normal", live);
+        // an app on screen shows the alert itself: no push on top of it
+        await broadcast({ ...statusMessage(paneId, title, status), ...(machineId === "local" ? {} : { machine_id: machineId }), tag: paneNotificationTag(paneId, machineId) }, status === "blocked" ? "high" : "normal", live.filter(away));
       });
     },
 
@@ -405,7 +429,7 @@ export function createPushService(options: PushServiceOptions): PushService {
       callOff(key);
       turnStart.delete(key);
       // an ended terminal is a finish of its own: a device that wants none hears none
-      const to = [...store().values()].filter((subscription) => (subscription.alerts ?? DEFAULT_ALERTS).done !== "off");
+      const to = [...store().values()].filter((subscription) => (subscription.alerts ?? DEFAULT_ALERTS).done !== "off" && away(subscription));
       if (to.length === 0) return;
       // the pane may already be gone from herdr: the seeded title is what is left
       await broadcast({ ...endedMessage(paneId, titles.get(key) ?? paneId), ...(machineId === "local" ? {} : { machine_id: machineId }), tag: paneNotificationTag(paneId, machineId) }, "normal", to);
@@ -424,12 +448,13 @@ export function createPushService(options: PushServiceOptions): PushService {
  *   POST   /api/push/subscribe { subscription, alerts? } -> 204 (alerts: this device's AlertPrefs)
  *   DELETE /api/push/subscribe { endpoint } -> 204
  *   POST   /api/push/test      { endpoint } -> 204 | 404 subscription_not_found | 502 push_failed
+ *   POST   /api/push/presence  { endpoint, visible } -> 204 | 404 subscription_not_found
  */
 export async function handlePushRequest(request: Request, pathname: string, push: PushService, deviceId: string | null | undefined): Promise<Response | null> {
   const route = `${request.method} ${pathname}`;
   if (route === "GET /api/push") return jsonResponse({ public_key: push.publicKey() });
-  if (route !== "POST /api/push/subscribe" && route !== "DELETE /api/push/subscribe" && route !== "POST /api/push/test") {
-    const known = pathname === "/api/push" || pathname === "/api/push/subscribe" || pathname === "/api/push/test";
+  if (route !== "POST /api/push/subscribe" && route !== "DELETE /api/push/subscribe" && route !== "POST /api/push/test" && route !== "POST /api/push/presence") {
+    const known = pathname === "/api/push" || pathname === "/api/push/subscribe" || pathname === "/api/push/test" || pathname === "/api/push/presence";
     return known ? badRequest("method_not_allowed", `${request.method} is not supported on ${pathname}`) : null;
   }
 
@@ -439,7 +464,7 @@ export async function handlePushRequest(request: Request, pathname: string, push
   } catch {
     return badRequest("invalid_json", "request body must be JSON");
   }
-  const body = (typeof payload === "object" && payload !== null ? payload : {}) as { subscription?: unknown; endpoint?: unknown; alerts?: unknown };
+  const body = (typeof payload === "object" && payload !== null ? payload : {}) as { subscription?: unknown; endpoint?: unknown; alerts?: unknown; visible?: unknown };
 
   if (route === "POST /api/push/subscribe") {
     const subscription = parseSubscription(body.subscription);
@@ -448,6 +473,12 @@ export async function handlePushRequest(request: Request, pathname: string, push
     return new Response(null, { status: 204 });
   }
   if (typeof body.endpoint !== "string") return badRequest("missing_endpoint", "endpoint is required");
+  if (route === "POST /api/push/presence") {
+    if (typeof body.visible !== "boolean") return badRequest("missing_visible", "visible must be true or false");
+    return push.presence(body.endpoint, body.visible, deviceId)
+      ? new Response(null, { status: 204 })
+      : jsonResponse({ error: { code: "subscription_not_found", message: "this device is not subscribed" } }, 404);
+  }
   if (route === "DELETE /api/push/subscribe") {
     push.unsubscribe(body.endpoint);
     return new Response(null, { status: 204 });

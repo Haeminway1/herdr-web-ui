@@ -41,6 +41,7 @@ import { useFileViewer } from "./lib/useFileViewer.ts";
 import { useT } from "./lib/i18n.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
 import { watchDrawerSwipe } from "./lib/edgeSwipe.ts";
+import { watchPresence } from "./lib/presence.ts";
 import { Droplet } from "./components/Droplet.tsx";
 import { dropletAllows, endedTurn, showDroplet, trackTurn, type DropletKind } from "./lib/droplet.ts";
 
@@ -192,6 +193,9 @@ export function App() {
   const [notifications, setNotifications] = useState<NotificationState>(() => notificationState());
   // this device has a server-side push subscription: alerts come from the server, not the tab
   const [pushOn, setPushOn] = useState(false);
+  // this device's push endpoint: while the app is on screen, the server holds its pushes back
+  const [pushEndpoint, setPushEndpoint] = useState<string | null>(null);
+  useEffect(() => (pushEndpoint ? watchPresence(pushEndpoint) : undefined), [pushEndpoint]);
   const pushOnRef = useRef(pushOn);
   pushOnRef.current = pushOn;
   const lockedRef = useRef(locked);
@@ -355,7 +359,7 @@ export function App() {
     updateSettings({ alertsOn: true });
     try {
       const endpoint = await ensurePushSubscription(alertsRef.current);
-      setPushOn(endpoint !== null);
+      setPushOn(endpoint !== null); setPushEndpoint(endpoint);
       // the confirmation push proves the whole path (server -> push service -> this device)
       if (endpoint) await sendTestPush(endpoint);
       return endpoint !== null;
@@ -369,7 +373,7 @@ export function App() {
   // this device's push subscription (the server forgets it) and silences the tab's own.
   const disableNotifications = useCallback(async () => {
     updateSettings({ alertsOn: false });
-    setPushOn(false);
+    setPushOn(false); setPushEndpoint(null);
     await removePushSubscription().catch((err) => console.warn("could not drop the push subscription", err));
   }, [updateSettings]);
 
@@ -381,10 +385,10 @@ export function App() {
     let cancelled = false;
     ensurePushSubscription(alerts)
       .then((endpoint) => {
-        if (!cancelled) setPushOn(endpoint !== null);
+        if (!cancelled) { setPushOn(endpoint !== null); setPushEndpoint(endpoint); }
       })
       .catch(() => {
-        if (!cancelled) setPushOn(false);
+        if (!cancelled) { setPushOn(false); setPushEndpoint(null); }
       });
     return () => {
       cancelled = true;
@@ -417,7 +421,7 @@ export function App() {
     // before signOut: the unsubscribe call needs the cookie, and a locked device must stop
     // receiving pane titles
     await removePushSubscription().catch(() => undefined);
-    setPushOn(false);
+    setPushOn(false); setPushEndpoint(null);
     try {
       await signOut();
     } catch {
