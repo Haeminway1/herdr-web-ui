@@ -65,12 +65,16 @@ try {
   }, panes);
   const page = await context.newPage();
   let holdSubmitResult = false;
+  let refuseSubmitResult = false;
   let releaseSubmitResult: (() => void) | null = null;
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
     const upstream = socket.connectToServer();
     upstream.onMessage((raw) => {
       const message = JSON.parse(String(raw));
-      if (holdSubmitResult && message.type === "submit-result") {
+      if (refuseSubmitResult && message.type === "submit-result") {
+        refuseSubmitResult = false;
+        socket.send(JSON.stringify({ ...message, ok: false, code: "agent_blocked", message: "the agent is waiting for an answer" }));
+      } else if (holdSubmitResult && message.type === "submit-result") {
         holdSubmitResult = false;
         const release = () => { socket.send(raw); releaseSubmitResult = null; };
         releaseSubmitResult = release;
@@ -325,26 +329,34 @@ try {
   assert.equal(await composer.inputValue(), "draft for A");
   console.log("PASS drafts stay with their panes");
 
-  // A real successful send waits on its acknowledgement while its composer unmounts.
+  // A send leaves the box at once and shows in the chat as sending, while its acknowledgement
+  // is still on its way and its composer unmounts.
   for (const returnBeforeAck of [false, true]) {
     await composer.fill("# confirmed draft");
     holdSubmitResult = true;
     await page.getByRole("button", { name: "Send message", exact: true }).click();
+    assert.equal(await composer.inputValue(), "", "the box empties as the message goes");
+    await page.locator(".chat-turn-user.is-outgoing", { hasText: "confirmed draft" }).waitFor();
     await until(() => releaseSubmitResult !== null, "held submit acknowledgement");
     await selectPane(paneB);
     assert.equal(await composer.inputValue(), "draft for B");
     if (returnBeforeAck) {
       await selectPane(paneA);
-      assert.equal(await page.getByRole("button", { name: "Send message", exact: true }).isDisabled(), true);
-      await composer.fill("# confirmed draft plus unsent text");
+      await composer.fill(" plus unsent text");
     }
     releaseSubmitResult!();
     if (!returnBeforeAck) await selectPane(paneA);
-    await until(async () => await composer.inputValue() === (returnBeforeAck ? " plus unsent text" : ""), "only acknowledged text leaves the draft");
+    await until(async () => await composer.inputValue() === (returnBeforeAck ? " plus unsent text" : ""), "text typed after a send stays");
   }
+  // a send the pane refuses comes back to the box, in front of what was typed since
+  await composer.fill("refused message");
+  refuseSubmitResult = true;
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await until(async () => await composer.inputValue() === "refused message", "a refused send returns to the box");
+  await composer.fill("");
   if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "composer-acknowledged-draft.png") });
   await composer.fill("draft for A");
-  console.log("PASS successful sends settle after switching panes and preserve edits made after returning");
+  console.log("PASS a send leaves the box at once, shows as sending, and a refused one comes back");
 
   // Every directory has a fold caret, even with one pane; opening a pane reveals its folder.
   const split = await herdrRpc<{ pane: { pane_id: string } }>("pane.split", { target_pane_id: paneB, direction: "down", focus: false });

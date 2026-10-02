@@ -352,7 +352,6 @@ export const ZH: Record<string, string> = {
   // ---- composer ----
   "Reconnecting… message held here, never queued": "正在重连… 消息保留在此处，不会加入队列",
   "Message {agent}…": "给 {agent} 发消息…",
-  "Sent as it was. Your changes made while it was sending stayed here and were not sent.": "已按原内容发送。发送期间所做的修改保留在此处，未被发送。",
   "Message composer": "消息输入框",
   "Model and reasoning": "模型和推理",
   "Model not available": "模型信息不可用",
@@ -560,6 +559,7 @@ export const ZH: Record<string, string> = {
   "Test notification": "测试通知",
   "Check whether this device can receive push alerts": "检查此设备能否接收推送通知",
   "Sending…": "正在发送…",
+  "Sent": "已发送",
   "Send test": "发送测试",
   "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "推送通知需要 HTTPS 或 localhost。在 iPhone 上请使用添加到主屏幕的应用。",
   "Allow notifications in your browser settings, then try again.": "请在浏览器设置中允许通知，然后重试。",
@@ -634,6 +634,7 @@ export const ZH: Record<string, string> = {
   "Queued message {n}": "排队的消息 {n}",
   "Not sent. Reconnect and try again.": "未发送。请重新连接后重试。",
   "Not confirmed. Check the terminal before sending again.": "未确认。重新发送前请检查终端。",
+  "Not sent. It is back in the message box.": "未能发送。消息已放回输入框。",
   // ---- subscription usage ----
   "Beside Settings, how much of each plan the AI tools on the server's PC have used. Turning it on sends their sign-ins to each provider's usage endpoint; they are never refreshed here.": "在设置旁显示服务器电脑上的 AI 工具各计划的用量。开启后会将其登录信息发送到各提供商的用量端点，此处不会刷新令牌。",
   "Accounts": "账户",

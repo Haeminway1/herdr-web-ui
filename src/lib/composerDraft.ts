@@ -61,6 +61,25 @@ export class ComposerDraftStore {
     this.notify();
     return true;
   }
+  /**
+   * Sends at once: the sent text leaves the draft now (the chat shows it as sending), so the box
+   * is free while the pane takes it. False while another send of this draft is on its way.
+   */
+  dispatch(key: string, sent: string): boolean {
+    if (!this.begin(key, sent)) return false;
+    const current = this.read(key).text;
+    this.set(key, current.startsWith(sent) ? current.slice(sent.length) : current);
+    // what is in the box from now on is new, not the sent text edited
+    this.pending.set(key, { sent, edited: false });
+    return true;
+  }
+  /** A dispatched send failed: its text goes back in front of whatever was typed since. */
+  restore(key: string): void {
+    const pending = this.pending.get(key);
+    if (!pending) return;
+    const current = this.read(key).text;
+    this.set(key, current.trim() === "" ? pending.sent : `${pending.sent}\n${current}`);
+  }
   end(key: string): void {
     this.pending.delete(key);
     this.drafts.set(key, { ...this.read(key), sending: false });

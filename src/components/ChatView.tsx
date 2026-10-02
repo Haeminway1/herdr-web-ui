@@ -1,4 +1,5 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { OUTGOING_KEEP_MS, recorded, type Outgoing } from "../lib/outbox.ts";
 import {
   ArrowDown, BookOpen, Bot, Brain, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, Copy, FilePen, FileSearch, Globe, ListChecks, Target, Terminal, Wrench,
   type LucideProps,
@@ -49,6 +50,9 @@ export interface ChatViewProps {
   refreshKey: number;
   /** bumped when a composer message goes out, before the transcript holds it */
   sentKey?: number;
+  /** messages sent from here that the transcript may not hold yet: shown at once (lib/outbox.ts) */
+  outgoing?: readonly Outgoing[];
+  onOutgoingDone?: (id: number) => void;
   connected: boolean;
   ended: boolean;
   agent: string | null;
@@ -444,8 +448,10 @@ function FallbackTurn({ paneId, message }: { paneId: string; message: Transcript
   return <Turn paneId={paneId} turn={turn} live={false} last={false} showThinking={false} />;
 }
 
+const NO_OUTGOING: readonly Outgoing[] = [];
+
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onPrompt, onSuggestion, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0, outgoing = NO_OUTGOING, onOutgoingDone, connected, ended, agent, agentStatus, onMetadata, onPrompt, onSuggestion, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -748,7 +754,22 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   const turns = useMemo(() => older.length > 0 ? [...older, ...state.turns] : state.turns, [older, state.turns]);
   heldPage.current = state.turns;
   const finishedBeforeSend = sentOver !== null && sentOver.page === state.turns ? sentOver.turn : null;
-  const empty = state.source === "conversation" ? turns.length === 0 : state.messages.length === 0;
+  const empty = state.source === "conversation" ? turns.length === 0 && outgoing.length === 0 : state.messages.length === 0;
+  // a sent message shows until a user turn the transcript gained since it went out holds it
+  const userTexts = useMemo(() => turns.filter((turn) => turn.role === "user").map((turn) => turn.parts.filter((part): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n\n")), [turns]);
+  const userBaseline = useRef(new Map<number, number>());
+  for (const item of outgoing) if (!userBaseline.current.has(item.id)) userBaseline.current.set(item.id, userTexts.length);
+  const pendingOut = outgoing.filter((item) => state.source === "conversation" && !recorded(item.text, userTexts.slice(userBaseline.current.get(item.id) ?? userTexts.length)));
+  const [, setOutboxTick] = useState(0);
+  useEffect(() => {
+    for (const item of outgoing) {
+      const shown = pendingOut.some((pending) => pending.id === item.id);
+      if (item.sent && (!shown || Date.now() - item.at > OUTGOING_KEEP_MS)) { userBaseline.current.delete(item.id); onOutgoingDone?.(item.id); }
+    }
+    if (outgoing.length === 0) return;
+    const timer = window.setTimeout(() => setOutboxTick((tick) => tick + 1), 2_000);
+    return () => window.clearTimeout(timer);
+  });
 
   return <ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><div className="chat-view" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={t("conversation of {pane}", { pane: paneId })}>
     <div className="chat-transcript">
@@ -783,6 +804,10 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
         : agent !== null
           ? <details className="chat-terminal-fallback"><summary>{t("Conversation unavailable — show terminal output")}</summary><pre>{state.messages.map((message) => message.text).join("\n\n")}</pre></details>
           : state.messages.map((message, index) => <FallbackTurn key={index} paneId={paneId} message={message} />)}
+      {pendingOut.map((item) => <article key={`out:${item.id}`} className="chat-turn chat-turn-user is-outgoing" data-sent={item.sent ? "" : undefined}>
+        <div className="chat-bubble"><Markdown>{item.text}</Markdown></div>
+        <div className="chat-turn-meta">{t(item.sent ? "Sent" : "Sending…")}</div>
+      </article>)}
       {!ended && !connected && <p className="chat-inline-state">{t("reconnecting…")}</p>}
       {error !== null && <p className="chat-inline-state chat-inline-error" role="alert">{errorStatus === 401 ? "locked — the token gate is asking again" : error}</p>}
       {!loaded && error === null && <p className="chat-inline-state" role="status">{t("Loading conversation…")}</p>}
