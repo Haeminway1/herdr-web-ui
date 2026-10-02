@@ -2,7 +2,7 @@ import { expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { heldSessionIds, isOmoProcess, omoCandidates, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
+import { heldSessionIds, isOmoProcess, omoSessionFolder, omoCandidates, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
 
 const runtime = (paneId: string, startedAt: number | null = 10_000, paths: string[] = [], ids: string[] = []): OmoRuntime => ({ paneId, startedAt, paths, ids });
 const files = [
@@ -21,6 +21,18 @@ it("takes omo from the program a process runs: its own binary, or the script of 
   expect(isOmoProcess(["omo"])).toBeTrue();
   expect(isOmoProcess(["/home/u/.local/bin/omo", "--session-id", "abcdefgh"])).toBeTrue();
   expect(isOmoProcess([`${OMO_AI}/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`, "--output-format", "stream-json"])).toBeTrue();
+});
+
+it("reads a Windows PC's process words: bun.exe, backslashes, and a drive's colon", () => {
+  const modules = "C:\\Users\\me\\.bun\\install\\global\\node_modules";
+  expect(isOmoProcess(["C:\\Users\\me\\.bun\\bin\\bun.exe", `${modules}\\@code-yeongyu\\senpi\\dist\\bundle\\cli.js`, "--extension", `${modules}\\omo-ai\\plugin`])).toBeTrue();
+  expect(isOmoProcess(["bun.exe", `${modules}\\omo-ai\\plugin\\runtime\\ast-grep-mcp\\cli.js`, "mcp"])).toBeTrue();
+  expect(isOmoProcess(["node.exe", "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\omo-ai\\bin\\omo.js"])).toBeTrue();
+  expect(isOmoProcess(["C:\\Users\\me\\AppData\\Roaming\\npm\\omo.cmd"])).toBeTrue();
+  // still only the program: bun.exe running something else, or a PATH list, is not omo
+  expect(isOmoProcess(["bun.exe", "C:\\work\\app\\server.js"])).toBeFalse();
+  expect(isOmoProcess(["bun.exe", "C:\\a\\omo-ai\\bin;D:\\b"])).toBeFalse();
+  expect(isOmoProcess(["/bin/sh", "-c", "a:/x/omo-ai/bin"])).toBeFalse();
 });
 
 it("takes the engine a global bun install hoists next to omo-ai for omo when it loads omo-ai's plugin", () => {
@@ -111,4 +123,10 @@ it("does not pin a launch session id after a new unclaimed session appears", () 
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, [], ["old-session"])], 20_000)).toBeNull();
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, ["/old.jsonl"], ["old-session"])], 20_000)).toBe("/old.jsonl");
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, [], ["old-session"]), runtime("b", 14_000, ["/new.jsonl"])], 20_000)).toBe("/old.jsonl");
+});
+
+it("names a cwd's session folder as omo's engine does, a Windows cwd included", () => {
+  expect(omoSessionFolder("/home/u/dev/app")).toBe("--home-u-dev-app--");
+  expect(omoSessionFolder("C:\\Users\\me\\dev\\app")).toBe("--C--Users-me-dev-app--");
+  expect(omoSessionFolder("C:/Users/me/app")).toBe("--C--Users-me-app--");
 });

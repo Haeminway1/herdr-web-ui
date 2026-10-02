@@ -7,6 +7,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Added
+- Settings can choose Chat, Terminal, or Auto as the default view for panes. Changing it resets
+  remembered pane views on this device. Shell panes still open in Terminal.
+  ([#325](https://github.com/devswha/herdr-web-ui/pull/325) by @Haeminway1)
+
 ## [0.3.43] - 2026-10-02
 
 ### Changed
