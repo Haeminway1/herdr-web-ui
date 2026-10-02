@@ -43,6 +43,8 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     // the app must have seen the pane work before it waits: a wait first seen is no news
     const seen = (pane: string, status: string) => page.locator(`.pane-item:has(.pane-select[title^="${pane} —"]) [data-status="${status}"]`).first().waitFor({ state: "attached" });
     const block = async (pane: string) => {
+      // the alert shows only in a focused window: with the suite's other pages open, this one must be in front
+      await page.bringToFront();
       await report(pane, "working");
       await seen(pane, "working");
       await report(pane, "blocked");
@@ -121,6 +123,7 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
       await deskPage.locator(".conn-live").waitFor();
       const seenHere = (pane: string, status: string) => deskPage.locator(`.pane-item:has(.pane-select[title^="${pane} —"]) [data-status="${status}"]`).first().waitFor({ state: "attached" });
       await report(otherPane, "idle");
+      await deskPage.bringToFront();
       await report(otherPane, "working"); await seenHere(otherPane, "working"); await report(otherPane, "blocked");
       const toast = deskPage.locator(".alert-toast[data-shown]");
       await toast.waitFor();
