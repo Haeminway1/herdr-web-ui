@@ -469,6 +469,10 @@ export interface PushPayload {
   title: string;
   body: string;
   tag: string;
+  /** What happened, for the device's own alert list (public/sw.js); absent on a test push. */
+  kind?: "blocked" | "done" | "ended";
+  /** When the server saw it (ms since epoch): a push held back for a while arrives later. */
+  at?: number;
 }
 
 /** WebSocket at /ws

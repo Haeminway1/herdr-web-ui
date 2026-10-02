@@ -427,8 +427,10 @@ One set for both themes: the card is island black wherever it shows.
   last 30): a red count of new ones on the bell; a click opens a menu with the alerts switch on top
   (where alerts are possible) and the list, newest first, each with its mark, pane, what happened
   in its status colour and how long ago, a dot before the time while new. A click opens the pane;
-  closing the list marks them seen; Clear empties it. An alert about the pane already open in
-  front is kept as seen.
+  closing the list marks them seen; Clear empties it, and so does signing out. An alert about the
+  pane already open in front, with no dialog over it, is kept as seen. A push that came while no
+  window of the app ran is written down by the service worker and joins the list when the app is
+  next on screen, once even if the page heard it live too. Every tab shows the same list.
 
 ### In-app alert
 - While the app is on screen, a pane that needs input, finishes a turn (by the device's Finished

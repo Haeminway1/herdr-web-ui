@@ -44,6 +44,7 @@ import { watchDrawerSwipe } from "./lib/edgeSwipe.ts";
 import { Droplet } from "./components/Droplet.tsx";
 import { AlertBell } from "./components/AlertBell.tsx";
 import { alertLog } from "./lib/alertLog.ts";
+import { clearPushedAlerts, takePushedAlerts } from "./lib/pushedAlerts.ts";
 import { dropletAllows, endedTurn, showDroplet, trackTurn, type DropletKind } from "./lib/droplet.ts";
 
 const APP_TITLE = "herdr web ui";
@@ -206,6 +207,9 @@ export function App() {
   const lastTurnRef = useRef<Map<string, number>>(new Map());
   const alertInAppRef = useRef(settings.alertInApp);
   alertInAppRef.current = settings.alertInApp;
+  // a dialog over the pane (settings, palette, files, a file, a new session) hides it from the user
+  const coveredRef = useRef(false);
+  coveredRef.current = settingsOpen || paletteOpen || filesOpen || newSessionOpen || viewing !== null;
   const refetchTimer = useRef<number | null>(null);
   const snapshotRef = useRef<typeof snapshot>(null);
   snapshotRef.current = snapshot;
@@ -277,9 +281,9 @@ export function App() {
   // its system notifications - and never for the pane already open in front of the user.
   const dropIn = useCallback((machine: Machine, pane: HerdrPane, kind: DropletKind) => {
     // every alert goes in the bell's list (components/AlertBell.tsx), seen there already when it is
-    // about the pane open in front of the user
+    // about the pane open in front of the user, with nothing drawn over it
     const watched = selectionRef.current.machineId === machine.id && selectionRef.current.paneId === pane.pane_id
-      && !drawerOpenRef.current && document.visibilityState === "visible";
+      && !drawerOpenRef.current && !coveredRef.current && document.visibilityState === "visible";
     alertLog.add({ at: Date.now(), machineId: machine.id, paneId: pane.pane_id, agent: pane.agent ?? null, title: displayPaneTitle(pane), machine: machinesRef.current.length > 1 ? machine.name : null, kind }, watched);
     if (!alertsOnRef.current || !alertInAppRef.current || document.visibilityState !== "visible") return;
     const open = selectionRef.current;
@@ -292,6 +296,18 @@ export function App() {
       machine: machinesRef.current.length > 1 ? machine.name : null,
       kind,
     });
+  }, []);
+
+  // The pushes that came while no page ran (public/sw.js wrote them down) join the bell's list
+  // whenever the app comes on screen; one the page heard live too stays one entry.
+  useEffect(() => {
+    const merge = (): void => {
+      if (document.visibilityState !== "visible") return;
+      void takePushedAlerts().then((pushed) => alertLog.merge(pushed)).catch(() => undefined);
+    };
+    merge();
+    document.addEventListener("visibilitychange", merge);
+    return () => document.removeEventListener("visibilitychange", merge);
   }, []);
 
   // One SSE subscription watches every PC, even when no terminal is selected.
@@ -429,6 +445,10 @@ export function App() {
       await signOut();
     } catch {
       /* the cookie may still be set: the health answer decides whether the gate shows */
+    } finally {
+      // the next one to sign in on this device must not see these panes' names
+      alertLog.clear();
+      await clearPushedAlerts().catch(() => undefined);
     }
     await loadHealth();
   }, [loadHealth]);
