@@ -133,6 +133,11 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 - `palette`: `amber`, `report` or `charcoal`; default `amber`.
 - `density`: `comfortable` or `compact`; default `comfortable`.
 - Terminal font size is independent: default `13px`, clamped to `10–22px`.
+- Terminal and chat font families are comma-separated lists, default empty. They go in front of the
+  terminal's built-in fonts (after the bundled Symbols Nerd Font Mono, which only draws icons) and of
+  `--font-ui` in the chat's prose (as `--font-chat`), never in place of them; code in the chat keeps
+  `--font-mono`. At most 200 characters, with `;`, `{`, `}`, `<`,
+  `>`, `\` and control characters stripped and names with spaces quoted.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
 - All settings share one sanitized `localStorage["herdr-web-ui:settings"]` record.
 
@@ -196,6 +201,22 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--z-scrim` | `15` | Mobile drawer scrim |
 | `--z-drawer` | `20` | Mobile drawer |
 | `--z-modal` | `30` | Dialog and palette scrims |
+| `--z-droplet` | `40` | In-app alert, over dialogs |
+
+### In-app alert
+
+One set for both themes: the card is island black wherever it shows.
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| `--droplet-bg` | `#000` | Drop, anchor and card |
+| `--droplet-text` | `#f5f5f7` | Pane name |
+| `--droplet-text-dim` | `rgba(245, 245, 247, 0.62)` | Ended detail, blank mark |
+| `--droplet-blocked` | `#ff8a80` | Needs-input detail and dot |
+| `--droplet-done` | `#9fd47a` | Finished detail and dot |
+| `--droplet-mark-bg` | `rgba(255, 255, 255, 0.1)` | Agent mark disc |
+| `--droplet-ring` | `rgba(255, 255, 255, 0.1)` | Card hairline |
+| `--droplet-shadow` | `rgba(0, 0, 0, 0.35)` | Drop shadow under the liquid |
 
 ### Shell
 - `.app` is a full-viewport column: `.app-header` over `.app-body`; the body is sidebar plus
@@ -259,6 +280,18 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 
 ### Sidebar roster row and footer
 - Top bar: **New session** only. Search lives in the command palette, not the roster.
+- Appearance's **Sidebar grouping** is **By workspace** by default, preserving the original
+  workspace headers, folds and merged single-pane rows. **By folder** opts into the grouping below.
+  The choice applies immediately and persists in the browser's existing Settings record. Workspace
+  and folder fold keys remain independent when switching modes; original workspace keys are retained.
+- In folder mode, within each PC, panes with the same full cwd share a folder group, including panes from
+  different workspaces. Trailing separators and Windows slash styles are normalized; case and
+  symlinks are not resolved. Unknown cwd stays with its workspace rather than merging unrelated sessions.
+- Every folder has a caret, folder glyph, basename, full-path subtitle and pane count, even for
+  one pane. Its indented contents use the existing spacing and border tokens. Folder folds are
+  remembered per PC and path; opening a pane unfolds its folder, but status updates do not.
+- Folder order follows the first workspace in server order; workspace handles still reorder
+  workspaces, not filesystem directories. Workspace names and rename actions remain inside the group.
 - A workspace header shows drag handle, number, editable label, roll-up status and rename action.
   Drag/drop reorders; `Alt+↑/↓` on the handle is the keyboard equivalent.
 - Every pane row is two lines: agent/shell mark, then the editable title alone on line one (full
@@ -349,8 +382,17 @@ Comfortable values are `:root`; the final column is the complete compact overrid
   preview, uploads through `POST /api/pane/image`, and inserts a removable editable `@path` mention.
 - While a phone's keyboard is up, a tap on the transcript or a drag down it (`32px`) puts the
   keyboard away. Each only blurs the field, so the draft stays.
+- On a touch screen, picking a pane (drawer, palette, notification) or switching its lens never
+  raises the keyboard: the user reads first, and a tap on the message box or the grid raises it.
+  A desktop's picked pane takes typing at once.
 - Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. IME Enter
   is ignored. While working, Stop sends Escape and Queue stores the next message.
+
+### Voice input
+- A mic button sits beside Attach in the composer and beside Send in the terminal input line; it
+  fills with `--accent` while recording. Dictated text is inserted at the caret, never sent.
+- The recording pill shows Cancel, a **Recording** label, the level bars, a mono timer and Done.
+  Amber only; `--danger` stays for errors.
 
 ### Command palette
 - `Mod+Shift+K` opens a top-offset `--palette-w` dialog searching panes and actions. Recent panes
@@ -359,8 +401,12 @@ Comfortable values are `:root`; the final column is the complete compact overrid
   `.kbd` hints where a global shortcut exists.
 
 ### Settings dialog
-- Appearance: Dark / Light / System, Comfortable / Compact, terminal font `10–22px`.
-- Composer: Enter sends. Chat: Show thinking. Shortcuts: the complete platform-resolved table.
+- Appearance: Dark / Light / System, Comfortable / Compact, terminal font `10–22px`, terminal font
+  family.
+- Composer: Enter sends. Chat: Show thinking, chat font size and family. Shortcuts: the complete
+  platform-resolved table.
+- A font family is a text field saved when it is left, on Enter or when the dialog closes, not
+  per keystroke.
 - Install reflects installed, promptable or browser-instructions state; About links the repository.
 - Subscription usage: the on switch with one description, then (when on) Used / Remaining and one
   hairline card of accounts (`.usage-accounts`, `--radius-md`): an uppercase `--bg-elevated` header
@@ -375,6 +421,16 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 - Terminal banners stack top-right for ended, reconnecting, observe and held-draft review states.
 - The mobile key bar is Esc, Tab, one-shot Ctrl, arrows and `^C`; it never steals xterm focus.
 - The mobile drawer slides over a scrim. Closed visibility removes its controls from the tab order.
+
+### In-app alert
+- While the app is on screen, a pane that needs input, finishes a turn (by the device's Finished
+  choice) or ends drops a card from the top edge: a black drop falls from above the safe area,
+  spreads into the card, and its text shows. It hangs from `env(safe-area-inset-top)` only, so a
+  Dynamic Island, a notch and a desktop window take the same path; no device is guessed.
+- One at a time; a newer one folds the current one away first. Tap opens the pane; a drag or flick
+  up puts it away; it leaves by itself 3.6s after its text shows, and waits while touched.
+- Not for the pane already open, and not while the app is hidden (system notifications cover that).
+- Reduced motion: it fades in and out where it rests, without falling or spreading.
 
 ### Token gate
 - A centered password card replaces the entire shell while authentication is required. It has a real
@@ -398,13 +454,19 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | Pulse | `--dur-pulse` | `1600ms` | Working and reconnecting dots (trough opacity 0.35; text never pulses) |
 | Easing | `--ease-out` | `cubic-bezier(0.2, 0, 0, 1)` | Finite transitions |
 | Pulse easing | `--ease-pulse` | `steps(2, jump-none)` | Endless working and reconnecting dots; avoids drawing every display refresh |
+| Spring easing | `--ease-spring` | `cubic-bezier(0.32, 0.72, 0, 1)` | Voice recording pill enter (180ms, scale 0.96->1 + opacity, from the mic button) and exit (120ms) |
 
 ### Rules
 - Only state changes move: hover/press, the drawer, settings switches, working and reconnecting.
 - Dialogs and their scrims snap open and closed; they have no entrance or exit animation. On mobile,
   their static layout changes to a bottom sheet.
+- The voice recording waveform is the one surface allowed to draw every frame: only while
+  recording, driven by the live microphone level, transform-only (`scaleY` on 7 bars). The pill is
+  a state change, not a dialog, so the snap rule above does not apply to it.
 - `prefers-reduced-motion: reduce` removes pulses, drawer/control transitions, smooth chat scrolling
   and settings toggle motion. State remains legible without animation.
+- Under reduced motion the voice pill swaps its bars for one level bar updated at 4 Hz and drops
+  the ring and the morph; the **Recording** label and the timer stay.
 
 ## 7. Depth & Surface
 

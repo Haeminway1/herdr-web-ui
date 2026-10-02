@@ -8,11 +8,14 @@ import { useInstallPrompt } from "../lib/install.ts";
 import { SHORTCUTS, formatKeys } from "../lib/shortcuts.ts";
 import { CHAT_FONT_MAX, CHAT_FONT_MIN, chatFontSize, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, useSettings } from "../lib/settings.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useT } from "../lib/i18n.ts";
+import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
 import type { MachineSettings } from "../../shared/machines.ts";
-import { fetchRemoteAccess, machineRequest } from "../lib/api.ts";
+import { fetchRemoteAccess, fetchVoiceStatus, machineRequest, saveVoiceConfig } from "../lib/api.ts";
 import { isLoopbackHost, phonePlan } from "../lib/phone.ts";
 import type { HealthAuth, ProviderUsage, RemoteAccess } from "../../shared/protocol.ts";
+import type { VoiceStatus } from "../../shared/voice.ts";
+import { VOICE_CONFIG_EVENT } from "../lib/voice.ts";
 import { moveInOrder, orderProviders, PROVIDER_MARK, PROVIDER_NAME, usageName, useUsage } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { DevicesPanel } from "./DevicesPanel.tsx";
@@ -35,6 +38,47 @@ function Toggle({ checked, label, onChange }: { checked: boolean; label: string;
     <button type="button" className="settings-toggle" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)}>
       <span className="settings-toggle-thumb" />
     </button>
+  );
+}
+
+const FONT_FAMILY_PLACEHOLDER = 'D2Coding, "Cascadia Mono"';
+
+/**
+ * A font family list, saved when the field is left, on Enter or when the dialog closes: saving
+ * every keystroke would sanitize away the comma or space being typed, and each change of the
+ * terminal's font refits the grid and resizes the pane.
+ */
+function FontFamilyInput({ value, label, onCommit }: { value: string; label: string; onCommit: (family: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = (): void => {
+    const next = sanitizeFontFamily(draft);
+    setDraft(next);
+    if (next !== value) onCommit(next);
+  };
+  // closing the dialog with Escape unmounts the field without a blur
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+  useEffect(() => () => commitRef.current(), []);
+  return (
+    <input
+      className="input settings-font-input"
+      value={draft}
+      placeholder={FONT_FAMILY_PLACEHOLDER}
+      maxLength={FONT_FAMILY_MAX_CHARS}
+      aria-label={label}
+      spellCheck={false}
+      autoCapitalize="off"
+      autoCorrect="off"
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        // an IME keeps its Enter, including the committing one WebKit can send after compositionend as key code 229
+        if (event.key !== "Enter" || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+        event.preventDefault();
+        commit();
+      }}
+    />
   );
 }
 
@@ -113,6 +157,36 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
   // where a phone can open this app now, for the pairing QR code: the served address, else this one when it is not loopback
   const pairUrl = plan.kind === "here" || plan.kind === "served" ? plan.url : isLoopbackHost(window.location.hostname) ? null : window.location.origin;
 
+  // Voice input: the server only says whether it holds a key; the key typed here is never kept past a save
+  const [voice, setVoice] = useState<VoiceStatus | null>(null);
+  const [voiceKey, setVoiceKey] = useState("");
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [micDenied, setMicDenied] = useState(false);
+  useEffect(() => {
+    if (open) fetchVoiceStatus().then(setVoice, () => setVoice(null));
+  }, [open]);
+  /** ask now, so the first dictation does not stop at the browser's permission prompt */
+  const toggleVoiceInput = async (voiceInput: boolean) => {
+    update({ voiceInput });
+    setMicDenied(false);
+    if (!voiceInput || !window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return;
+    try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach((track) => track.stop()); }
+    catch { setMicDenied(true); }
+  };
+  const changeVoiceKey = async (api_key: string | null) => {
+    setVoiceBusy(true);
+    try {
+      // the save answers the new status itself: no second request that could fail after it
+      const saved = await saveVoiceConfig({ api_key });
+      setVoiceKey("");
+      setVoiceError(null);
+      setVoice(saved);
+      window.dispatchEvent(new Event(VOICE_CONFIG_EVENT));
+    } catch (e) { setVoiceError(e instanceof Error ? e.message : String(e)); }
+    finally { setVoiceBusy(false); }
+  };
+
   const updatePcSettings = async (patch: Partial<MachineSettings>) => {
     try { setPcSettings(await machineRequest<MachineSettings>("/settings", "PATCH", patch)); setPcSettingsError(null); }
     catch (e) { setPcSettingsError(e instanceof Error ? e.message : String(e)); }
@@ -183,12 +257,26 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
               </div>
             </div>
             <div className="settings-row">
+              <div><span className="settings-label">{t("Sidebar grouping")}</span><span className="settings-description">{t("Group sessions by workspace or by full folder path on each PC")}</span></div>
+              <div className="segmented" aria-label={t("Sidebar grouping")}>
+                {(["workspace", "directory"] as const).map((grouping) => (
+                  <button key={grouping} type="button" aria-pressed={settings.sidebarGrouping === grouping} onClick={() => update({ sidebarGrouping: grouping })}>
+                    {t(grouping === "workspace" ? "By workspace" : "By folder")}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="settings-row">
               <div><span className="settings-label">{t("Terminal font size")}</span><span className="settings-description">{t("Applied to every terminal pane")}</span></div>
               <div className="settings-stepper" aria-label={t("Terminal font size")}>
                 <button type="button" className="icon-button" aria-label={t("Decrease terminal font size")} disabled={settings.terminalFontSize <= TERMINAL_FONT_MIN} onClick={() => update({ terminalFontSize: settings.terminalFontSize - 1 })}><Minus /></button>
                 <output aria-live="polite">{settings.terminalFontSize}px</output>
                 <button type="button" className="icon-button" aria-label={t("Increase terminal font size")} disabled={settings.terminalFontSize >= TERMINAL_FONT_MAX} onClick={() => update({ terminalFontSize: settings.terminalFontSize + 1 })}><Plus /></button>
               </div>
+            </div>
+            <div className="settings-row">
+              <div><span className="settings-label">{t("Terminal font")}</span><span className="settings-description">{t("Comma-separated, tried in order. A font this device does not have falls back to the default.")}</span></div>
+              <FontFamilyInput value={settings.terminalFontFamily} label={t("Terminal font")} onCommit={(terminalFontFamily) => update({ terminalFontFamily })} />
             </div>
             <div className="settings-row">
               <div><span className="settings-label">{t("Wheel scroll speed")}</span><span className="settings-description">{t("How far one turn of the wheel scrolls the terminal")}</span></div>
@@ -212,6 +300,72 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
             </div>
           </section>
 
+          <section className="settings-section voice-settings">
+            <h3>{t("Voice input")}</h3>
+            <div className="voice-group">
+              <h4 className="voice-group-title">{t("Microphone")}</h4>
+              <div className="voice-group-body">
+                <div className="settings-row">
+                  <div><span className="settings-label">{t("Microphone button")}</span><span className="settings-description">{t("In the chat composer and the terminal input line")}</span></div>
+                  <Toggle label={t("Microphone button")} checked={settings.voiceInput} onChange={(voiceInput) => void toggleVoiceInput(voiceInput)} />
+                </div>
+                {settings.voiceInput && !window.isSecureContext && <p className="settings-hint voice-error">{t("Voice input needs HTTPS")}</p>}
+                {settings.voiceInput && window.isSecureContext && micDenied && <p className="settings-hint voice-error">{t("Microphone permission was denied")}</p>}
+              </div>
+            </div>
+
+            <div className="voice-group">
+              <h4 className="voice-group-title">{t("OpenAI API key")}</h4>
+              <div className="voice-group-body">
+                {voice && (
+                  <p className="settings-hint voice-status">
+                    {voice.configured ? t(voice.source === "env" ? "OpenAI key set by HERDR_WEB_OPENAI_API_KEY" : "OpenAI key saved on this PC") : t("No OpenAI key: the browser's speech recognition is used")}
+                  </p>
+                )}
+                {voice && voice.source !== "env" && (
+                  <form className="voice-key" onSubmit={(event) => { event.preventDefault(); if (voiceKey.trim()) void changeVoiceKey(voiceKey.trim()); }}>
+                    <input
+                      className="input voice-key-input"
+                      type="password"
+                      value={voiceKey}
+                      placeholder="sk-..."
+                      aria-label={t("OpenAI API key")}
+                      autoComplete="off"
+                      spellCheck={false}
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      onChange={(event) => setVoiceKey(event.target.value)}
+                    />
+                    <button type="submit" className="btn voice-key-save" disabled={voiceBusy || !voiceKey.trim()}>{t("Save key")}</button>
+                    <button type="button" className="btn btn-ghost voice-key-remove" disabled={voiceBusy || !voice.configured} onClick={() => void changeVoiceKey(null)}>{t("Remove key")}</button>
+                  </form>
+                )}
+                {voiceError && <p className="settings-hint voice-error" role="alert">{voiceError}</p>}
+                <p className="settings-hint voice-privacy">
+                  {voice && !voice.configured
+                    ? t("Without a key the browser recognizes the speech: Chrome and Edge send the audio to Google or Microsoft. Nothing is recorded until you press the mic.")
+                    : t("Audio is sent to OpenAI with your key. Nothing is recorded until you press the mic.")}
+                </p>
+              </div>
+            </div>
+
+            {settings.voiceInput && (
+              <div className="voice-group">
+                <h4 className="voice-group-title">{t("Tidy dictated text")}</h4>
+                <div className="voice-group-body">
+                  <div className="settings-row">
+                    <div><span className="settings-label">{t("In chat")}</span><span className="settings-description">{t("Drops fillers and fixes spacing; code and paths stay as spoken")}</span></div>
+                    <Toggle label={t("Tidy dictated text in chat")} checked={settings.voicePolishChat} onChange={(voicePolishChat) => update({ voicePolishChat })} />
+                  </div>
+                  <div className="settings-row">
+                    <div><span className="settings-label">{t("In the terminal")}</span><span className="settings-description">{t("Off keeps a command exactly as transcribed")}</span></div>
+                    <Toggle label={t("Tidy dictated text in the terminal")} checked={settings.voicePolishTerminal} onChange={(voicePolishTerminal) => update({ voicePolishTerminal })} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+
           <section className="settings-section">
             <h3>{t("Chat")}</h3>
             <div className="settings-row">
@@ -225,6 +379,10 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
                 <output aria-live="polite">{chatFontSize(settings)}px</output>
                 <button type="button" className="icon-button" aria-label={t("Increase chat font size")} disabled={chatFontSize(settings) >= CHAT_FONT_MAX} onClick={() => update({ chatFontSize: chatFontSize(settings) + 1 })}><Plus /></button>
               </div>
+            </div>
+            <div className="settings-row">
+              <div><span className="settings-label">{t("Chat font")}</span><span className="settings-description">{t("Message text; code stays monospace. Comma-separated, tried in order. A font this device does not have falls back to the default.")}</span></div>
+              <FontFamilyInput value={settings.chatFontFamily} label={t("Chat font")} onCommit={(chatFontFamily) => update({ chatFontFamily })} />
             </div>
           </section>
 
@@ -245,6 +403,10 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="settings-row">
+              <div><span className="settings-label">{t("In the app")}</span><span className="settings-description">{t("While the app is open, these drop in from the top of the screen at once. Tap one to open its pane.")}</span></div>
+              <Toggle label={t("In the app")} checked={settings.alertInApp} onChange={(alertInApp) => update({ alertInApp })} />
             </div>
           </section>
 

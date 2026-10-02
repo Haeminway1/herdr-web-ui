@@ -38,8 +38,10 @@ import {
   paneRename,
   paneSendKeys,
   paneSendText,
+  paneSplit,
   ping,
   sessionSnapshot,
+  tabCreate,
   workspaceClose,
   workspaceCreate,
   workspaceMove,
@@ -57,6 +59,7 @@ import { OutputWindow, OUTPUT_HIGH_BYTES, OUTPUT_HARD_BYTES, OUTPUT_STALL_MS, Re
 import { OUTPUT_STALLED_CLOSE_CODE } from "../shared/terminal-flow.ts";
 import { connectUpdater, handleUpdateRequest, type UpdateService } from "./update-api.ts";
 import { handleUsageRequest, UsageService } from "./usage.ts";
+import { handleVoiceRequest, VoiceService } from "./voice.ts";
 
 import { BRIDGE_PROTOCOL } from "../shared/machines.ts";
 import { bridgeIdentity, registerBridge } from "./bridge.ts";
@@ -229,6 +232,8 @@ export function createServer(
     updates?: UpdateService;
     /** plan limits of the AI subscriptions signed in here; tests pass one without real sign-ins */
     usage?: UsageService;
+    /** voice input's key, provider and models; tests pass one with their own env and fetch */
+    voice?: VoiceService;
     machines?: boolean;
     registerBridge?: boolean;
     /** SUBMIT_DEADLINE_MS; tests shorten it */
@@ -273,6 +278,7 @@ export function createServer(
   /** paired devices (server/devices.ts) and the PC's Tailscale login: the two ways in besides the token and this PC itself */
   const devices = new DeviceStore(options.stateDir ?? defaultStateDir());
   const usage = options.usage ?? new UsageService();
+  const voice = options.voice ?? new VoiceService({ stateDir: options.stateDir ?? defaultStateDir(), env: process.env, fetch });
   /** a login named here is taken as it is: a tagged node has none of its own to read (HERDR_WEB_TAILSCALE_OWNER) */
   const namedOwner = options.tailscaleOwner !== undefined ? options.tailscaleOwner : process.env["HERDR_WEB_TAILSCALE_OWNER"]?.trim() || undefined;
   const identityOf = namedOwner !== undefined ? () => ({ owner: namedOwner, tagged: false }) : tailscaleIdentity;
@@ -795,7 +801,7 @@ export function createServer(
       const url = new URL(request.url);
       let { pathname } = url;
       const bridgeAuthorized = isAuthenticated(request, bridgeToken);
-      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === "/api/agents" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/fs/") || pathname === "/ws";
+      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === "/api/agents" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/tab/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/fs/") || pathname === "/ws";
       const ip = bunServer.requestIP(request);
       const access = decideAccess({
         loopback: ip !== null && isLoopbackAddress(ip.address),
@@ -840,7 +846,7 @@ export function createServer(
         if (pathname.startsWith("/api/machines/local/")) {
           if (!sameOrigin(request) || (request.method !== "GET" && request.headers.get("x-herdr-machine") !== "1")) return jsonResponse({ error: { code: "invalid_origin", message: "Use PC controls from this app" } }, 403);
           pathname = pathname.replace("/api/machines/local/", "/api/");
-          if (!/^\/api\/(session|agents|pane\/|workspace\/)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
+          if (!/^\/api\/(session|agents|pane\/|tab\/|workspace\/)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
           url.pathname = pathname;
         } else {
           bunServer.timeout(request, pathname === "/api/machines/events" ? 0 : 80);
@@ -889,6 +895,8 @@ export function createServer(
       }
 
       if (pathname === "/api/usage") return handleUsageRequest(request, url, usage);
+      // a long clip can keep the provider silent past Bun's 10 s idle limit before the first line
+      if (pathname === "/api/voice" || pathname.startsWith("/api/voice/")) { bunServer.timeout(request, 120); return handleVoiceRequest(request, pathname, voice); }
 
       if (pathname === "/api/push" || pathname.startsWith("/api/push/")) {
         try {
@@ -1062,6 +1070,70 @@ export function createServer(
           else if (pathname === "/api/workspace/move") await workspaceMove(payload.workspace_id, payload.insert_index as number);
           else await workspaceClose(payload.workspace_id);
           return jsonResponse({ ok: true });
+        } catch (error) {
+          return errorResponse(error);
+        }
+      }
+
+      if (pathname === "/api/tab/create") {
+        if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+        let payload: { workspace_id?: unknown; cwd?: unknown; label?: unknown };
+        try {
+          payload = (await request.json()) as typeof payload;
+        } catch {
+          return badRequest("invalid_json", "request body must be JSON");
+        }
+        if (!isJsonObject(payload)) return badRequest("invalid_body", "request body must be a JSON object");
+        if (payload.workspace_id !== undefined && (typeof payload.workspace_id !== "string" || payload.workspace_id.length === 0)) {
+          return badRequest("missing_workspace_id", "workspace_id must be a non-empty string");
+        }
+        if (payload.cwd !== undefined && payload.cwd !== null && typeof payload.cwd !== "string") {
+          return badRequest("invalid_cwd", "cwd must be an existing directory");
+        }
+        const cwd = payload.cwd === undefined || payload.cwd === null ? undefined : expandedDirectory(payload.cwd);
+        if (payload.cwd !== undefined && payload.cwd !== null && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
+        if (payload.label !== undefined && payload.label !== null && typeof payload.label !== "string") {
+          return badRequest("missing_label", "label must be a string");
+        }
+        try {
+          const created = await tabCreate({
+            ...(typeof payload.workspace_id === "string" ? { workspaceId: payload.workspace_id } : {}),
+            ...(cwd === undefined || cwd === null ? {} : { cwd }),
+            ...(typeof payload.label === "string" && payload.label.length > 0 ? { label: payload.label } : {}),
+          });
+          return jsonResponse({ tab_id: created.tab.tab_id, pane_id: created.root_pane.pane_id });
+        } catch (error) {
+          return errorResponse(error);
+        }
+      }
+
+      if (pathname === "/api/pane/split") {
+        if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+        let payload: { pane_id?: unknown; direction?: unknown; cwd?: unknown };
+        try {
+          payload = (await request.json()) as typeof payload;
+        } catch {
+          return badRequest("invalid_json", "request body must be JSON");
+        }
+        if (!isJsonObject(payload)) return badRequest("invalid_body", "request body must be a JSON object");
+        if (payload.pane_id !== undefined && (typeof payload.pane_id !== "string" || payload.pane_id.length === 0)) {
+          return badRequest("missing_pane_id", "pane_id must be a non-empty string");
+        }
+        if (payload.direction !== undefined && payload.direction !== "right" && payload.direction !== "down") {
+          return badRequest("invalid_direction", "direction must be right or down");
+        }
+        if (payload.cwd !== undefined && payload.cwd !== null && typeof payload.cwd !== "string") {
+          return badRequest("invalid_cwd", "cwd must be an existing directory");
+        }
+        const cwd = payload.cwd === undefined || payload.cwd === null ? undefined : expandedDirectory(payload.cwd);
+        if (payload.cwd !== undefined && payload.cwd !== null && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
+        try {
+          const split = await paneSplit({
+            ...(typeof payload.pane_id === "string" ? { paneId: payload.pane_id } : {}),
+            ...(payload.direction === "right" || payload.direction === "down" ? { direction: payload.direction } : {}),
+            ...(cwd === undefined || cwd === null ? {} : { cwd }),
+          });
+          return jsonResponse({ pane_id: split.pane.pane_id });
         } catch (error) {
           return errorResponse(error);
         }

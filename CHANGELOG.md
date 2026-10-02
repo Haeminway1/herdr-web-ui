@@ -8,18 +8,45 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
+- Voice input in the chat composer and the terminal input line. Hold or tap the mic and speak,
+  Korean and English mixed; the text lands in the box at the caret and is never sent by itself.
+  It uses your own OpenAI API key, kept on the server (Settings → Voice input), and falls back to
+  the browser's speech recognition without one. Off by default. Silence before, between and after
+  the words is left out of the recording, so it is neither uploaded nor billed.
+  ([#231](https://github.com/devswha/herdr-web-ui/pull/231) by @nahwan-kim)
+- While the app is open, an alert drops in from the top edge as a card: an agent that needs input,
+  one that finished (by this device's alert choice) or a terminal that ended. A tap opens that
+  pane, a flick up puts the card away, and it leaves by itself after a few seconds. No card for
+  the pane already open, and none while the bell is off. Settings → Alerts → In the app turns it
+  off; it is on by default. Push and tab alerts are unchanged.
+  ([#313](https://github.com/devswha/herdr-web-ui/pull/313) by @Haeminway1)
+- The sidebar opens a new tab in a workspace (a `+` on the workspace, or on the row when it
+  holds a single pane) and splits a pane beside itself, through `POST /api/tab/create` and
+  `POST /api/pane/split`. The new pane is selected once herdr reports it.
+  ([#307](https://github.com/devswha/herdr-web-ui/pull/307) by @piotrchabros)
+- Settings → Appearance lets you group sidebar sessions by folder, combining panes with the
+  same full working-directory path within each PC. Grouping by workspace remains the default;
+  the selected mode and each mode's collapsed groups are remembered independently.
+  ([#299](https://github.com/devswha/herdr-web-ui/pull/299) by @beomq)
 - While an OmO pane has background tasks running, the chat's status line says how many, and tapping
   it lists them: what each is doing, its category and model, how long it has run, its turns, tool
-  calls and tokens, and below, the tasks that ended in the last day and whether they finished,
-  failed, were cancelled or were lost with OmO's process. A remote PC lists them once it runs a
-  bridge that knows this list. ([#305](https://github.com/devswha/herdr-web-ui/pull/305))
+  calls and tokens. The newest tasks that ended in the last day (up to ten) are one line under
+  them that says how many ended and how many failed, and opens to show whether each finished,
+  failed, was cancelled or was lost with OmO's process. A remote PC lists them once it runs a bridge that knows this list.
+  ([#305](https://github.com/devswha/herdr-web-ui/pull/305), [#310](https://github.com/devswha/herdr-web-ui/pull/310))
 - The same list shows the workflows (DAG runs) the OmO session started: each one's name, how many
   steps are done, running or failed, and its steps wave by wave, with why a failed step failed.
+  A workflow that ended folds into the same line as the tasks that ended.
   ([#306](https://github.com/devswha/herdr-web-ui/pull/306))
 - An OmO turn that set or updated a goal shows it on the turn, beside the skills, also while its work
   is folded: the objective, whether it is in progress, complete, blocked, paused or out of budget, and
   opened, the whole objective, why it is blocked and the time and tokens spent on it so far.
   ([#303](https://github.com/devswha/herdr-web-ui/pull/303))
+- Terminal and chat font families in Settings: a comma-separated list, such as
+  `D2Coding, "Cascadia Mono"`, tried in order before the built-in fonts, so a font this device
+  lacks falls back as before. The chat font applies to message text; code stays monospace.
+  Stored per browser, like the other appearance settings.
+  ([#308](https://github.com/devswha/herdr-web-ui/pull/308) by @Kuhave)
 
 ### Changed
 - With an access token set (`HERDR_WEB_TOKEN`), your own Tailscale devices are asked for it too:
@@ -36,6 +63,15 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#292](https://github.com/devswha/herdr-web-ui/pull/292))
 
 ### Fixed
+- On a phone, picking a pane (from the drawer, the palette or a notification) or switching between
+  chat and terminal no longer raises the keyboard over it: you read first, and a tap on the message
+  box or the terminal raises it. Turning direct typing on still does. A desktop is unchanged.
+  ([#315](https://github.com/devswha/herdr-web-ui/pull/315) by @Haeminway1)
+- On a phone the status line above the message box is always one row. With a background-task
+  count, a model name and a reasoning level it wrapped to two rows, three with the context text
+  open, and took that room from the conversation. On a narrow screen the background-task chip now
+  shows its icon and the number (the icon alone while nothing runs), the reasoning chip the level
+  alone, and a model name that still does not fit is shortened. ([#312](https://github.com/devswha/herdr-web-ui/pull/312))
 - The terminal accepts dropped file paths and uploads dropped or pasted files to
   the pane's working directory before inserting their quoted paths, without submitting them.
   ([#304](https://github.com/devswha/herdr-web-ui/pull/304) by @beomq)

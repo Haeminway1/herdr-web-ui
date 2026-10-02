@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { createServer } from "./index.ts";
 import type { AgentKind, AgentStatus, ApiError, HealthAuth, PushKey, RemoteAccess, SessionSnapshot, PaneReadResult, UsageReport, WorkspaceCreated } from "../shared/protocol.ts";
 import { UsageService } from "./usage.ts";
+import { VoiceService } from "./voice.ts";
 import { herdrRpc, ping, workspaceCreate, workspaceClose } from "./herdr/client.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 
@@ -45,6 +46,50 @@ describe("usage API", () => {
       const withToken = await fetch(`http://localhost:${gated.port}/api/usage`, { headers: { authorization: "Bearer test-usage-token" } });
       expect(withToken.status).toBe(200);
     } finally { open.stop(); gated.stop(); rmSync(usageState, { recursive: true, force: true }); }
+  });
+});
+
+describe("voice API", () => {
+  it("keeps the key on the server, refuses cross-site writes and streams a transcript", async () => {
+    const voiceState = mkdtempSync(join(tmpdir(), "herdr-voice-contract-"));
+    const key = "sk-contract-0123456789";
+    const provider = Bun.serve({
+      port: 0, hostname: "127.0.0.1",
+      async fetch(request) {
+        if (new URL(request.url).pathname !== "/v1/audio/transcriptions") return new Response("not found", { status: 404 });
+        expect(request.headers.get("authorization")).toBe(`Bearer ${key}`);
+        await request.formData();
+        return new Response(`data: ${JSON.stringify({ type: "transcript.text.done", text: "git status" })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+      },
+    });
+    const voice = new VoiceService({ stateDir: voiceState, env: { HERDR_WEB_OPENAI_BASE_URL: `http://127.0.0.1:${provider.port}/v1` }, fetch });
+    const open = createServer({ port: 0, stateDir: voiceState, voice });
+    const gated = createServer({ port: 0, stateDir: voiceState, voice, token: "test-voice-token" });
+    const at = (path: string) => `http://localhost:${open.port}${path}`;
+    try {
+      expect((await fetch(`http://localhost:${gated.port}/api/voice`)).status).toBe(401);
+      expect(await (await fetch(at("/api/voice"))).json()).toMatchObject({ configured: false, source: null });
+
+      const crossSite = await fetch(at("/api/voice/config"), { method: "PUT", headers: { "content-type": "application/json", "sec-fetch-site": "cross-site" }, body: JSON.stringify({ api_key: key }) });
+      expect(crossSite.status).toBe(403);
+      const saved = await fetch(at("/api/voice/config"), { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ api_key: key }) });
+      expect(saved.status).toBe(200);
+      const status = await (await fetch(at("/api/voice"))).text();
+      expect(JSON.parse(status)).toMatchObject({ configured: true, source: "file" });
+      expect(status).not.toContain(key);
+      expect(statSync(join(voiceState, "voice.json")).mode & 0o777).toBe(0o600);
+
+      const form = new FormData();
+      form.append("audio", new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }), "voice.webm");
+      form.append("mode", "chat");
+      form.append("polish", "0");
+      const transcribed = await fetch(at("/api/voice/transcribe"), { method: "POST", body: form });
+      expect(transcribed.headers.get("content-type")).toContain("application/x-ndjson");
+      expect((await transcribed.text()).trim().split("\n").map((line) => JSON.parse(line))).toEqual([{ type: "done", text: "git status" }]);
+    } finally {
+      open.stop(); gated.stop(); provider.stop(true);
+      rmSync(voiceState, { recursive: true, force: true });
+    }
   });
 });
 
@@ -110,8 +155,9 @@ describe("mutation body validation", () => {
   it("rejects non-object JSON without touching herdr or losing the error envelope", async () => {
     for (const path of [
       "/api/workspace/create", "/api/workspace/rename", "/api/workspace/move", "/api/workspace/close",
+      "/api/tab/create",
       "/api/pane/rename", "/api/pane/input", "/api/pane/keys", "/api/pane/close", "/api/pane/image",
-      "/api/pane/scroll",
+      "/api/pane/scroll", "/api/pane/split",
     ]) {
       for (const body of [null, [], "text", 42, true]) {
         const response = await fetch(`${base()}${path}`, {
@@ -130,6 +176,10 @@ describe("mutation body validation", () => {
       ["/api/pane/keys", { pane_id: "unknown", keys: [null] }, "missing_keys"],
       ["/api/pane/image", { pane_id: "unknown", content_type: "image/png", data_base64: {} }, "invalid_image"],
       ["/api/workspace/create", { agent: { kind: "claude", args: "--help" } }, "invalid_agent"],
+      ["/api/tab/create", { workspace_id: 5 }, "missing_workspace_id"],
+      ["/api/tab/create", { cwd: 5 }, "invalid_cwd"],
+      ["/api/pane/split", { pane_id: 5 }, "missing_pane_id"],
+      ["/api/pane/split", { direction: "up" }, "invalid_direction"],
     ] as const) {
       const response = await fetch(`${base()}${path}`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
@@ -236,6 +286,50 @@ describe("workspace and discovery endpoints", () => {
     expect(close.status).toBe(200);
     expect(await close.json()).toEqual({ ok: true });
     workspaceId = null;
+  }, 20_000);
+
+  it("creates, splits, and closes tabs in an owned workspace", async () => {
+    const ws = await fetch(`${base()}/api/workspace/create`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd: tmpdir(), label: `${label}-tabs`, agent: null }),
+    });
+    expect(ws.status).toBe(200);
+    const owned = (await ws.json()) as WorkspaceCreated;
+    try {
+      const create = await fetch(`${base()}/api/tab/create`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspace_id: owned.workspace_id, label: `${label}-tab` }),
+      });
+      expect(create.status).toBe(200);
+      const created = (await create.json()) as { tab_id: string; pane_id: string };
+      expect(typeof created.tab_id).toBe("string");
+      expect(typeof created.pane_id).toBe("string");
+
+      const split = await fetch(`${base()}/api/pane/split`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pane_id: created.pane_id, direction: "right" }),
+      });
+      expect(split.status).toBe(200);
+      expect(typeof ((await split.json()) as { pane_id: string }).pane_id).toBe("string");
+
+      // herdr requires a direction: one left out splits right instead of failing
+      const defaulted = await fetch(`${base()}/api/pane/split`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pane_id: created.pane_id }),
+      });
+      expect(defaulted.status).toBe(200);
+      expect(typeof ((await defaulted.json()) as { pane_id: string }).pane_id).toBe("string");
+    } finally {
+      await fetch(`${base()}/api/workspace/close`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspace_id: owned.workspace_id }),
+      });
+    }
   }, 20_000);
 
   it("uses the shared error envelope for malformed mutation bodies", async () => {
