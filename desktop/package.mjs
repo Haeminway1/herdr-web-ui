@@ -16,9 +16,12 @@ for (const [targetPlatform, targetArch] of targets) {
     arch: targetArch,
     name: "herdr",
     appBundleId: "dev.herdr.desktop",
+    // the app's own icon: herdr's, not Electron's (icon.ico on Windows, icon.icns on a Mac;
+    // a Windows build made elsewhere sets it through rcedit, which needs wine there)
+    icon: `${import.meta.dirname}/icon`,
     asar: true,
     prune: true,
-    ignore: [/^\/out($|\/)/, /\.test\.js$/, /^\/package\.mjs$/],
+    ignore: [/^\/out($|\/)/, /\.test\.js$/, /^\/package\.mjs$/, /^\/e2e\.ts$/],
   });
   console.log(out);
 }
