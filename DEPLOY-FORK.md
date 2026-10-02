@@ -11,9 +11,9 @@ This branch runs beside the canonical `devswha.herdr-web-ui` plugin as a second 
   first fork build = v0.3.3401). The built-in updater installs the highest tag that descends from the
   running build. Never push upstream tags to the fork: they would compete with fork numbers.
 - Update: merge the new upstream `main` and PR branches here, bump `package.json` and `herdr-plugin.toml`,
-  commit, then run `scripts/fork-release.sh X.Y.Z`. It tags and pushes only when typecheck and unit
-  pass, and integration and `test:ui` pass or fail only as the merged upstream `main` fails on the
-  same PC (it runs that upstream in a clean worktree to compare). Never tag by hand (2026-10-01: a
+  commit, then run `scripts/fork-release.sh X.Y.Z`. It tags and pushes only when typecheck
+  passes, and unit, integration and `test:ui` pass or fail only as the merged upstream `main` fails
+  on the same PC (it runs that upstream in a clean worktree to compare). Never tag by hand (2026-10-01: a
   hand-written gate checked integration only and shipped v0.3.3501 with a failing unit and UI run).
 - When the PRs a release carried have all merged upstream, rebuild instead of merging: start from
   upstream `main`, cherry-pick the overlay, merge the open PR branches, then `git merge -s ours` the

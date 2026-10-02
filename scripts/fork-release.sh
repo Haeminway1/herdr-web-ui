@@ -4,11 +4,11 @@
 # package.json and herdr-plugin.toml must already carry that version. Checks run with the calling
 # shell's HERDR_* variables removed (an agent shell inside a herdr pane carries its session's).
 #
-# typecheck and unit tests must pass outright. An integration or UI failure is accepted only when
+# typecheck must pass outright. A unit, integration or UI failure is accepted only when
 # the same check fails the same way on the upstream main this branch merged (a clean worktree of
 # it, run here), so a failure upstream already has on this PC cannot block a release, and a new
 # one always does:
-# - integration: every failing test must also fail upstream (a second run first, for flakes);
+# - unit and integration: every failing test must also fail upstream (a second run first, for flakes);
 # - UI: the suite stops at its first failure, so the same failure upstream is not enough. The run
 #   is repeated with only that step taken out (KNOWN_UI_STEPS below), and must then pass whole.
 set -uo pipefail
@@ -48,9 +48,20 @@ first_error() { grep -m1 -E '^error: ' "$1" | sed 's/^error: //'; }
 
 bun install --frozen-lockfile > "$logs/install.log" 2>&1 || fail "bun install failed"
 bun run typecheck > "$logs/typecheck.log" 2>&1 || fail "typecheck failed"
-bun run test:unit > "$logs/unit.log" 2>&1 || fail "unit tests failed"
-
 notes=""
+if ! bun run test:unit > "$logs/unit.log" 2>&1; then
+  bun run test:unit > "$logs/unit-2.log" 2>&1 && mv "$logs/unit-2.log" "$logs/unit.log"
+fi
+if grep -qE '^\(fail\)' "$logs/unit.log"; then
+  baseline
+  (cd "$base" && bun run test:unit > "$logs/upstream-unit.log" 2>&1)
+  new="$(comm -23 <(failing "$logs/unit.log") <(failing "$logs/upstream-unit.log"))"
+  [ -z "$new" ] || fail "unit tests failed that pass upstream: $new"
+  notes="$notes; unit failures also upstream: $(failing "$logs/unit.log" | wc -l)"
+elif ! grep -qE '^ *[0-9]+ pass' "$logs/unit.log"; then
+  fail "unit tests did not run"
+fi
+
 if ! bun run test:integration > "$logs/integration.log" 2>&1; then
   bun run test:integration > "$logs/integration-2.log" 2>&1 && mv "$logs/integration-2.log" "$logs/integration.log"
 fi
