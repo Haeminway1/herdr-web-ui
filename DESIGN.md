@@ -298,6 +298,9 @@ One set for both themes: the card is island black wherever it shows.
   width), and the status chip followed by workspace and cwd on line two. Mark boxes are neutral;
   the selected row gets the amber rail and an amber-edged mark box. Row actions rename or arm a
   3-second, second-click close. Inline server failures stay beside their row.
+- A title that is a working directory written out (`/home/me/dev/api`, `~/dev/api`, `C:\work\api`)
+  shows as its last folder, here, in the header, the palette and every alert; the full path stays
+  in the row's tooltip. Line two names the workspace and the folder once when they are the same.
 - A PC group header is caret, monitor, name, “This PC” for the local machine and a state dot
   (done = connected, working pulse = connecting/reconnecting, blocked = error). Connected says
   nothing more; every other state is written under the name, with the server's error clamped to
