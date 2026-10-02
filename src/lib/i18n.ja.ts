@@ -334,7 +334,6 @@ export const JA: Record<string, string> = {
   // ---- composer ----
   "Reconnecting… message held here, never queued": "再接続しています… メッセージはここに保持され、キューには入りません",
   "Message {agent}…": "{agent} へのメッセージ…",
-  "Sent as it was. Your changes made while it was sending stayed here and were not sent.": "元の内容で送信しました。送信中に加えた変更はここに残っており、送信されていません。",
   "Message composer": "メッセージ入力欄",
   "Model and reasoning": "モデルと推論",
   "Model not available": "モデル情報なし",
@@ -505,6 +504,7 @@ export const JA: Record<string, string> = {
   "Test notification": "テスト通知",
   "Check whether this device can receive push alerts": "このデバイスでプッシュ通知を受け取れるか確認します",
   "Sending…": "送信中…",
+  "Sent": "送信済み",
   "Send test": "テスト送信",
   "Push alerts need HTTPS or localhost, and on iPhone the home-screen app.": "プッシュ通知には HTTPS または localhost が必要です。iPhone ではホーム画面に追加したアプリを使ってください。",
   "Allow notifications in your browser settings, then try again.": "ブラウザーの設定で通知を許可してから、もう一度お試しください。",
@@ -579,6 +579,7 @@ export const JA: Record<string, string> = {
   "Queued message {n}": "キュー内のメッセージ {n}",
   "Not sent. Reconnect and try again.": "送信できませんでした。再接続してもう一度お試しください。",
   "Not confirmed. Check the terminal before sending again.": "送信を確認できませんでした。再送信する前にターミナルを確認してください。",
+  "Not sent. It is back in the message box.": "送信できませんでした。メッセージは入力欄に戻しました。",
   // ---- subscription usage ----
   "Beside Settings, how much of each plan the AI tools on the server's PC have used. Turning it on sends their sign-ins to each provider's usage endpoint; they are never refreshed here.": "設定の横に、サーバー PC の AI ツールが各プランをどれだけ使ったかを表示します。オンにすると各ツールのサインイン情報を各プロバイダーの使用量エンドポイントに送信します。ここでトークンを更新することはありません。",
   "Accounts": "アカウント",
@@ -623,7 +624,8 @@ export const JA: Record<string, string> = {
   "Couldn't load the background tasks": "バックグラウンドタスクを読み込めませんでした",
   "No background tasks to show yet": "表示できるバックグラウンドタスクはまだありません",
   "Running": "実行中",
-  "Ended in the last day": "この 1 日で終了",
+  "{n} recently ended": "最近終了 {n} 件",
+  "Nothing running right now": "現在実行中のものはありません",
   "{done} of {total} done": "{total} 件中 {done} 件完了",
   "{n} running": "{n} 件実行中",
   "Workflows": "ワークフロー",

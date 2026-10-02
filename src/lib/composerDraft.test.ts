@@ -60,3 +60,16 @@ it("keeps a draft another tab cleared and retyped while this tab's send was on i
   expect(store.settle("a", "sent")).toEqual({ text: "sent again", edited: true });
   store.end("a");
 });
+it("takes a dispatched send out of the box at once, and puts a failed one back before newer text", () => {
+  const { store } = fixture();
+  store.set("a", "hello");
+  expect(store.dispatch("a", "hello")).toBe(true);
+  expect(store.read("a")).toEqual({ text: "", sending: true });
+  expect(store.dispatch("a", "again")).toBe(false);
+  store.set("a", "next");
+  store.restore("a"); store.end("a");
+  expect(store.read("a")).toEqual({ text: "hello\nnext", sending: false });
+  store.set("a", "ok"); store.dispatch("a", "ok"); store.end("a");
+  store.restore("a");
+  expect(store.read("a").text).toBe("");
+});

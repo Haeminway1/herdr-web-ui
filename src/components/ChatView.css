@@ -928,3 +928,7 @@
 .chat-abandoned { margin: var(--space-2) 0; }
 .chat-abandoned > summary { font-style: italic; }
 .chat-abandoned-note { margin: var(--space-2) 0 0; color: var(--text-dim); }
+
+/* a message sent from here, before the transcript holds it (lib/outbox.ts) */
+.chat-turn-user.is-outgoing .chat-bubble { opacity: 0.72; }
+.chat-turn-user.is-outgoing[data-sent] .chat-bubble { opacity: 0.9; }
