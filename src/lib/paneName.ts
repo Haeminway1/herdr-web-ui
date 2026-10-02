@@ -8,11 +8,16 @@ const PATH_TITLE = /^(?:~(?=$|[\\/])|\/|[A-Za-z]:[\\/])/;
 
 export function shortPathTitle(title: string): string {
   const trimmed = title.trim();
-  if (!PATH_TITLE.test(trimmed)) return title;
-  const parts = trimmed.split(/[\\/]+/).filter((part) => part !== "");
-  const last = parts.at(-1);
+  return PATH_TITLE.test(trimmed) ? folderName(trimmed) : title;
+}
+
+/** A path's last folder, split on either platform's separator: "C:\\work\\api" is "api" as "/work/api" is. */
+export function folderName(path: string): string {
+  const trimmed = path.trim();
+  const last = trimmed.split(/[\\/]+/).filter((part) => part !== "").at(-1);
   if (last === undefined) return trimmed; // "/" itself
-  return /^[A-Za-z]:$/.test(last) ? `${last}\\` : last;
+  // a drive root keeps the separator it was written with, so it still reads as a place
+  return /^[A-Za-z]:$/.test(last) ? `${last}${trimmed[2] ?? "\\"}` : last;
 }
 
 /** "workspace · folder", without saying the same name twice. */
