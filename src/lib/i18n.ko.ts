@@ -577,6 +577,7 @@ export const KO: Record<string, string> = {
   "Every turn": "매번",
   "In the app": "앱 안에서",
   "While the app is open, these drop in from the top of the screen at once. Tap one to open its pane.": "앱을 열어 둔 동안에는 화면 위에서 바로 내려옵니다. 누르면 그 패널을 엽니다.",
+  "Dismiss": "닫기",
   "Open pane": "패널 열기",
   "Quick replies": "빠른 답장",
   "One-tap messages above the message box, on this device. Each is sent as if typed: queued while the agent works, an answer when a question is open.": "메시지 입력창 위에 놓이는 한 번 탭 메시지로, 이 기기에 적용됩니다. 직접 입력한 것처럼 보내므로 에이전트가 작업 중이면 대기열에 들어가고, 질문이 열려 있으면 답으로 쓰입니다.",

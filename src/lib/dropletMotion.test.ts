@@ -12,6 +12,15 @@ describe("droplet layout", () => {
     expect(desktop.cardTop).toBe(12);
     expect(desktop.cardWidth).toBe(396);
     expect(desktop.centerX).toBe(640);
+    expect(phone.islandShown).toBe(false);
+  });
+  it("puts the island over a Dynamic Island, with the card below it", () => {
+    const island = dropletLayout(393, 59, 0, 0, true);
+    expect(island.islandShown).toBe(true);
+    expect(island.islandTop).toBe(11);
+    expect(island.islandBottom).toBeCloseTo(48.33);
+    expect(island.cardTop).toBeGreaterThanOrEqual(71);
+    expect(island.cardTop).toBeGreaterThanOrEqual(island.islandBottom + 26);
   });
 });
 

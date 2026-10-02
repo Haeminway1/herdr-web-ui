@@ -1,0 +1,151 @@
+/*
+ * In-app alert with a mouse (AlertToasts.tsx), as the Aquila design system's toast: bottom-right,
+ * up to three stacked, sliding in from the right on a soft spring, a 2px line underneath that
+ * shrinks while it stays. Colours are the app's own surface and status tokens, so it follows the
+ * theme and palette.
+ */
+
+.alert-toasts {
+  position: fixed;
+  right: var(--space-6);
+  bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+  z-index: var(--z-droplet);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.alert-toast {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 280px;
+  max-width: 360px;
+  padding: var(--space-3) var(--space-2) var(--space-3) var(--space-4);
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-strong);
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: none;
+  opacity: 0;
+  transform: translateX(calc(100% + var(--space-6)));
+  transition:
+    transform 420ms cubic-bezier(0.22, 1.2, 0.36, 1),
+    opacity 200ms var(--ease-out);
+  will-change: transform;
+}
+
+.alert-toast[data-shown] {
+  opacity: 1;
+  transform: translateX(var(--toast-drag, 0px));
+}
+
+.alert-toast[data-dragging] { transition: none; }
+
+.alert-toast:not([data-shown]) {
+  transition:
+    transform 250ms var(--ease-out),
+    opacity 200ms var(--ease-out);
+}
+
+.alert-toast:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
+.alert-toast-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+}
+
+.alert-toast-mark .agent-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.alert-toast-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--toast-tone);
+}
+
+.alert-toast-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.alert-toast-title {
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.alert-toast-detail {
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  color: var(--toast-tone);
+}
+
+.alert-toast-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--text-dim);
+}
+
+.alert-toast-close svg {
+  width: 14px;
+  height: 14px;
+}
+
+.alert-toast-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--toast-tone);
+  transform-origin: left;
+  animation: alert-toast-progress var(--toast-hold) linear forwards;
+}
+
+.alert-toast-progress[data-paused] { animation-play-state: paused; }
+
+.alert-toast[data-kind="blocked"] { --toast-tone: var(--status-blocked); }
+.alert-toast[data-kind="done"] { --toast-tone: var(--status-done); }
+.alert-toast[data-kind="ended"] { --toast-tone: var(--text-dim); }
+
+@keyframes alert-toast-progress {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .alert-toast,
+  .alert-toast:not([data-shown]) {
+    transform: none;
+    transition: opacity 160ms var(--ease-out);
+  }
+}

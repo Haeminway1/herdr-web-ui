@@ -27,8 +27,29 @@ const DISMISS_DRAG_PX = -18;
 const DISMISS_VELOCITY = -0.42; // px per ms
 /** a press that moved less than this is a tap */
 const TAP_SLOP_PX = 6;
-const ISLAND: Rgb = [0, 0, 0];
-const CARD: Rgb = [255, 255, 255];
+/** the drop's colours, read from --droplet-island and --droplet-card (the theme decides the card) */
+function themeColors(probe: HTMLElement | null): { island: Rgb; card: Rgb } {
+  const read = (name: string, fallback: Rgb): Rgb => {
+    if (!probe) return fallback;
+    probe.style.color = `var(${name})`;
+    const match = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(probe).color);
+    return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : fallback;
+  };
+  return { island: read("--droplet-island", [0, 0, 0]), card: read("--droplet-card", [28, 28, 30]) };
+}
+
+/** a touch screen gets the drop; a mouse gets the toast (AlertToasts.tsx) */
+export function prefersDroplet(): boolean {
+  return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
+}
+
+/**
+ * An iPhone in portrait whose safe area is as tall as a Dynamic Island's (59px and up; a notch is
+ * 44 to 50): the drop leaves from the island itself. Anything else leaves from the top edge.
+ */
+function hasDynamicIsland(insetTop: number): boolean {
+  return /iPhone/.test(navigator.userAgent) && insetTop >= 54 && window.innerHeight > window.innerWidth;
+}
 
 type Phase = "in" | "out";
 
@@ -40,7 +61,8 @@ function reducedMotion(): boolean {
 function measureLayout(probe: HTMLElement | null): DropletLayout {
   const style = probe ? getComputedStyle(probe) : null;
   const px = (value: string | undefined): number => Number.parseFloat(value ?? "") || 0;
-  return dropletLayout(window.innerWidth, px(style?.paddingTop), px(style?.paddingLeft), px(style?.paddingRight));
+  const top = px(style?.paddingTop);
+  return dropletLayout(window.innerWidth, top, px(style?.paddingLeft), px(style?.paddingRight), hasDynamicIsland(top));
 }
 
 export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string) => void }) {
@@ -56,6 +78,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   /** a folding drop that has not finished by then is done: animation frames stop in a hidden window */
   const exitTimer = useRef<number | null>(null);
   const probe = useRef<HTMLDivElement | null>(null);
+  const colors = useRef<{ island: Rgb; card: Rgb }>({ island: [0, 0, 0], card: [28, 28, 30] });
   // the shapes and the card, moved every frame without React
   const shadowEl = useRef<SVGRectElement | null>(null);
   const neckEl = useRef<SVGRectElement | null>(null);
@@ -86,7 +109,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     shadowEl.current?.setAttribute("opacity", String(g.shadowOpacity));
     set(neckEl.current, g.neckX, g.neckY, g.neckWidth, g.neckHeight + lift, g.neckWidth / 2);
     set(dropEl.current, g.x, g.y + lift, g.width, g.height, g.radius);
-    dropEl.current?.setAttribute("fill", tintColor(s.tint.value, ISLAND, CARD));
+    dropEl.current?.setAttribute("fill", tintColor(s.tint.value, colors.current.island, colors.current.card));
     const look = contentStyle(s.reveal.value, g);
     if (cardEl.current) cardEl.current.style.transform = `translateY(${g.offsetY + lift}px)`;
     if (bodyEl.current) {
@@ -180,6 +203,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   };
 
   useEffect(() => onDroplet((notice) => {
+    if (!prefersDroplet()) return;
     if (!currentRef.current) {
       setCurrent(notice);
       return;
@@ -192,6 +216,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   // each notice starts its fall once its shapes are in the page
   useLayoutEffect(() => {
     if (!current) return;
+    colors.current = themeColors(probe.current);
     setLayout(measureLayout(probe.current));
   }, [current]);
   useLayoutEffect(() => {
@@ -275,6 +300,9 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
             <rect ref={neckEl} className="droplet-island" />
             <rect ref={dropEl} />
           </g>
+          {/* the phone's own island, drawn sharp over it so the liquid leaves from it */}
+          {box.islandShown && <rect className="droplet-island" x={box.centerX - box.islandWidth / 2} y={box.islandTop}
+            width={box.islandWidth} height={box.islandHeight} rx={box.islandRadius} />}
         </svg>
         <button
           ref={cardEl}
@@ -297,7 +325,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
           onPointerCancel={(event) => endPress(event, true)}
         >
           <span ref={bodyEl} className="droplet-body">
-            <span className="droplet-mark">{current.agent ? <AgentMark agent={current.agent} size={26} /> : null}</span>
+            <span className="droplet-mark">{current.agent ? <AgentMark agent={current.agent} size={18} /> : null}</span>
             <span className="droplet-text">
               <span className="droplet-title">{current.title}</span>
               <span className="droplet-detail">{detail}</span>

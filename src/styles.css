@@ -138,8 +138,19 @@
   --z-modal: 30;
   --z-droplet: 40;
 
-  /* in-app alert (components/Droplet.css): the original's white card out of island black, in either theme */
+  /* in-app alert (components/Droplet.css): island black; the card follows the theme (light: below) */
   --droplet-island: #000;
+  --droplet-card: #1c1c1e;
+  --droplet-title: #f5f5f7;
+  --droplet-message: #98989f;
+  --droplet-avatar: rgba(255, 255, 255, 0.1);
+  --droplet-blocked: #0a84ff;
+  --droplet-done: #30d158;
+  --droplet-shadow: rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="light"] {
+  /* in-app alert: the original's white card */
   --droplet-card: #fff;
   --droplet-title: #1c1c1e;
   --droplet-message: #77787d;
@@ -147,9 +158,7 @@
   --droplet-blocked: #2f9bff;
   --droplet-done: #30a46c;
   --droplet-shadow: rgba(16, 19, 28, 0.2);
-}
 
-[data-theme="light"] {
   color-scheme: light;
   --bg: #eeeae2;
   --bg-panel: #faf8f3;

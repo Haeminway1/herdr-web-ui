@@ -43,6 +43,7 @@ import { useScreenWakeLock } from "./lib/wakeLock.ts";
 import { watchDrawerSwipe } from "./lib/edgeSwipe.ts";
 import { watchPresence } from "./lib/presence.ts";
 import { Droplet } from "./components/Droplet.tsx";
+import { AlertToasts } from "./components/AlertToasts.tsx";
 import { dropletAllows, endedTurn, showDroplet, trackTurn, type DropletKind } from "./lib/droplet.ts";
 
 const APP_TITLE = "herdr web ui";
@@ -277,6 +278,15 @@ export function App() {
 
   useEffect(() => () => {
     if (refetchTimer.current !== null) window.clearTimeout(refetchTimer.current);
+  }, []);
+
+  // an in-app alert's pane: the drop on a touch screen, the toast with a mouse
+  const openAlertPane = useCallback((machineId: string, paneId: string) => {
+    // an ended pane's card outlives the pane: the refetch has dropped it, and selecting it attaches nothing
+    if (!machinesRef.current.find((m) => m.id === machineId)?.snapshot?.panes.some((p) => p.pane_id === paneId)) return;
+    // Files lists the pane it was opened on, and would open its paths on the new one
+    setFilesOpen(false);
+    selectTargetRef.current(machineId, paneId);
   }, []);
 
   // In-app alerts (components/Droplet.tsx): only while the app is on screen - a hidden app has
@@ -747,13 +757,8 @@ export function App() {
         }}
       /></MachineContext.Provider>
       {machineDialog && <MachineDialog updateRemote={updateRemote} machine={machineDialog === "new" ? undefined : machineDialog} onClose={() => setMachineDialog(null)} onConnected={(id) => { setMachineDialog(null); selectTarget(id, null); void load(); }} />}
-      <Droplet onOpen={(machineId, paneId) => {
-        // an ended pane's card outlives the pane: the refetch has dropped it, and selecting it attaches nothing
-        if (!machinesRef.current.find((m) => m.id === machineId)?.snapshot?.panes.some((p) => p.pane_id === paneId)) return;
-        // Files lists the pane it was opened on, and would open its paths on the new one
-        setFilesOpen(false);
-        selectTargetRef.current(machineId, paneId);
-      }} />
+      <Droplet onOpen={openAlertPane} />
+      <AlertToasts onOpen={openAlertPane} />
       <SettingsDialog auth={auth} open={settingsOpen} onClose={closeSettings} actions={actions} updates={updates} onEnableNotifications={enableNotifications} />
       {filesOpen && selectedPane && (
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} viewing={viewing !== null} onOpenFile={viewFile} onClose={() => setFilesOpen(false)} />
