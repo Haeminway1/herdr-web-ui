@@ -771,12 +771,13 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   const userSeen = useRef(new Map<number, ReadonlySet<string>>());
   for (const item of outgoing) if (!userSeen.current.has(item.id)) userSeen.current.set(item.id, new Set(userTurns.map((turn) => turn.key)));
   const recordedOut = recordedIds(outgoing.map((item) => ({ id: item.id, text: item.text, sent: item.sent, seen: userSeen.current.get(item.id) ?? new Set<string>() })), userTurns);
-  const pendingOut = outgoing.filter((item) => state.source === "conversation" && !recordedOut.has(item.id));
+  // a pane read from its screen (no conversation to record it) shows the message until the pane took it
+  const pendingOut = outgoing.filter((item) => !recordedOut.has(item.id));
   const [, setOutboxTick] = useState(0);
   useEffect(() => {
     for (const item of outgoing) {
       const shown = pendingOut.some((pending) => pending.id === item.id);
-      if (item.sent && (!shown || Date.now() - item.at > OUTGOING_KEEP_MS)) { userSeen.current.delete(item.id); onOutgoingDone?.(item.id); }
+      if (item.sent && (!shown || state.source !== "conversation" || Date.now() - item.at > OUTGOING_KEEP_MS)) { userSeen.current.delete(item.id); onOutgoingDone?.(item.id); }
     }
     if (outgoing.length === 0) return;
     const timer = window.setTimeout(() => setOutboxTick((tick) => tick + 1), 2_000);
