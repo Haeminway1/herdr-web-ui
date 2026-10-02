@@ -630,6 +630,8 @@ export const ZH: Record<string, string> = {
   "used": "已用",
   "Fold plan limits": "收起套餐额度",
   "{percent} left": "剩余 {percent}",
+  "Limit shown": "显示的限额",
+  "Nearest to its limit": "最接近上限的",
   "Meters show": "计量显示",
   "Beside Settings": "设置旁边",
   "Top of the list": "列表顶部",
