@@ -62,6 +62,37 @@ export function trackTurn(started: Map<string, number>, key: string, previous: A
   return since === undefined ? null : now - since;
 }
 
+/**
+ * How long the turn before a pane's end took, for the same finished-turn choice: the turn it
+ * ended in the middle of, else the last one it finished (kept by the caller in `lasted`),
+ * null when this page saw neither. The pane is gone, so both records go with it.
+ */
+export function endedTurn(started: Map<string, number>, lasted: Map<string, number>, key: string, now: number): number | null {
+  const since = started.get(key);
+  const last = lasted.get(key);
+  started.delete(key);
+  lasted.delete(key);
+  if (since !== undefined) return now - since;
+  return last ?? null;
+}
+
+/** Only movement this recent counts as a flick: a finger that rested first has not slowed it. */
+export const FLICK_WINDOW_MS = 100;
+
+export interface PressSample {
+  y: number;
+  t: number;
+}
+
+/**
+ * The vertical speed at release (px per ms, up is negative), over the samples of the last
+ * FLICK_WINDOW_MS only. Measured over the whole press, a hold before a flick reads as slow.
+ */
+export function flickVelocity(samples: readonly PressSample[], y: number, now: number): number {
+  const from = samples.find((sample) => now - sample.t <= FLICK_WINDOW_MS);
+  return from ? (y - from.y) / Math.max(1, now - from.t) : 0;
+}
+
 type Listener = (notice: QueuedDroplet) => void;
 const listeners = new Set<Listener>();
 let nextId = 1;

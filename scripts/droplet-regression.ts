@@ -67,7 +67,7 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "droplet-phone.png") });
     await card.tap();
     await droplet.waitFor({ state: "detached" });
-    await page.waitForFunction((pane) => document.querySelector(`[data-pane-id="${pane}"][aria-current="true"]`) !== null || new URLSearchParams(location.search).get("pane") === pane, otherPane).catch(() => undefined);
+    await page.locator(`.pane-select[title^="${otherPane} —"][aria-current="true"]`).waitFor({ state: "attached", timeout: 5_000 });
     assert.equal(await selected(), otherPane, "a tap opens the pane it is about");
     console.log("PASS an in-app alert drops in for another pane, and a tap opens it");
 

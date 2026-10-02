@@ -42,7 +42,7 @@ import { useT } from "./lib/i18n.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
 import { watchDrawerSwipe } from "./lib/edgeSwipe.ts";
 import { Droplet } from "./components/Droplet.tsx";
-import { dropletAllows, showDroplet, trackTurn, type DropletKind } from "./lib/droplet.ts";
+import { dropletAllows, endedTurn, showDroplet, trackTurn, type DropletKind } from "./lib/droplet.ts";
 
 const APP_TITLE = "herdr web ui";
 const POLL_MS = 5000;
@@ -200,6 +200,8 @@ export function App() {
   const statusRef = useRef<Map<string, AgentStatus>>(new Map());
   // when each pane's turn began, so an in-app alert knows a long turn from a quick one
   const turnStartRef = useRef<Map<string, number>>(new Map());
+  // how long each pane's last finished turn took: a pane that ends is told by it too
+  const lastTurnRef = useRef<Map<string, number>>(new Map());
   const alertInAppRef = useRef(settings.alertInApp);
   alertInAppRef.current = settings.alertInApp;
   const refetchTimer = useRef<number | null>(null);
@@ -272,7 +274,7 @@ export function App() {
   // In-app alerts (components/Droplet.tsx): only while the app is on screen - a hidden app has
   // its system notifications - and never for the pane already open in front of the user.
   const dropIn = useCallback((machine: Machine, pane: HerdrPane, kind: DropletKind) => {
-    if (!alertInAppRef.current || document.visibilityState !== "visible") return;
+    if (!alertsOnRef.current || !alertInAppRef.current || document.visibilityState !== "visible") return;
     const open = selectionRef.current;
     if (open.machineId === machine.id && open.paneId === pane.pane_id && !drawerOpenRef.current) return;
     showDroplet({
@@ -313,6 +315,7 @@ export function App() {
         statusRef.current.set(key, message.agent_status);
         const pane = machine.snapshot?.panes.find((p) => p.pane_id === message.pane_id);
         const worked = trackTurn(turnStartRef.current, key, previous, message.agent_status, Date.now());
+        if (worked !== null) lastTurnRef.current.set(key, worked);
         if (pane && shouldNotifyStatus(previous, message.agent_status) && dropletAllows(alertsRef.current, message.agent_status, worked)) dropIn(machine, pane, message.agent_status === "blocked" ? "blocked" : "done");
         if (pane && shouldNotifyStatus(previous, message.agent_status) && alertsOnRef.current && !pushOnRef.current && alertsAllow(alertsRef.current, message.agent_status)) showPaneStatusNotification(message.pane_id, `${machine.name} · ${paneTitle(pane)}`, message.agent_status, () => selectTargetRef.current(machine.id, message.pane_id), machine.id);
         setMachines((list) => {
@@ -327,9 +330,10 @@ export function App() {
           return changed ? next : list;
         });
       }
-      if (message.type === "pane-exited" && alertsRef.current.done !== "off") {
+      if (message.type === "pane-exited") {
         const pane = machine.snapshot?.panes.find((p) => p.pane_id === message.pane_id);
-        if (pane) dropIn(machine, pane, "ended");
+        const worked = endedTurn(turnStartRef.current, lastTurnRef.current, paneStorageId(machine.id, message.pane_id), Date.now());
+        if (pane && dropletAllows(alertsRef.current, "done", worked)) dropIn(machine, pane, "ended");
       }
       if (message.type === "pane-exited" && alertsOnRef.current && !pushOnRef.current && alertsRef.current.done !== "off") {
         const pane = machine.snapshot?.panes.find((p) => p.pane_id === message.pane_id);
@@ -732,7 +736,13 @@ export function App() {
         }}
       /></MachineContext.Provider>
       {machineDialog && <MachineDialog updateRemote={updateRemote} machine={machineDialog === "new" ? undefined : machineDialog} onClose={() => setMachineDialog(null)} onConnected={(id) => { setMachineDialog(null); selectTarget(id, null); void load(); }} />}
-      <Droplet onOpen={(machineId, paneId) => selectTargetRef.current(machineId, paneId)} />
+      <Droplet onOpen={(machineId, paneId) => {
+        // an ended pane's card outlives the pane: the refetch has dropped it, and selecting it attaches nothing
+        if (!machinesRef.current.find((m) => m.id === machineId)?.snapshot?.panes.some((p) => p.pane_id === paneId)) return;
+        // Files lists the pane it was opened on, and would open its paths on the new one
+        setFilesOpen(false);
+        selectTargetRef.current(machineId, paneId);
+      }} />
       <SettingsDialog auth={auth} open={settingsOpen} onClose={closeSettings} actions={actions} updates={updates} onEnableNotifications={enableNotifications} />
       {filesOpen && selectedPane && (
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} viewing={viewing !== null} onOpenFile={viewFile} onClose={() => setFilesOpen(false)} />

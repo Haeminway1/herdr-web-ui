@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { onDroplet, type QueuedDroplet } from "../lib/droplet.ts";
+import { flickVelocity, onDroplet, type PressSample, type QueuedDroplet } from "../lib/droplet.ts";
 import { useT } from "../lib/i18n.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import "./Droplet.css";
@@ -42,7 +42,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   const exitTimer = useRef<number | null>(null);
   // a press that dragged ends in a click on a mouse: that click is not a tap
   const dragged = useRef(false);
-  const press = useRef<{ id: number; y: number; t: number; lastY: number; lastT: number; moved: boolean } | null>(null);
+  const press = useRef<{ id: number; y: number; samples: PressSample[]; moved: boolean } | null>(null);
 
   const clearHold = () => {
     if (holdTimer.current !== null) window.clearTimeout(holdTimer.current);
@@ -93,10 +93,10 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   }, []);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (phaseRef.current === "out") return;
-    const now = event.timeStamp;
+    // a right-click ends in no click: holding for it would leave the card up for good
+    if (phaseRef.current === "out" || event.button !== 0) return;
     dragged.current = false;
-    press.current = { id: event.pointerId, y: event.clientY, t: now, lastY: event.clientY, lastT: now, moved: false };
+    press.current = { id: event.pointerId, y: event.clientY, samples: [{ y: event.clientY, t: event.timeStamp }], moved: false };
     event.currentTarget.setPointerCapture?.(event.pointerId);
     clearHold(); // held while touched
   };
@@ -105,8 +105,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     if (!p || p.id !== event.pointerId) return;
     const dy = event.clientY - p.y;
     if (Math.abs(dy) > TAP_SLOP_PX) p.moved = true;
-    p.lastY = event.clientY;
-    p.lastT = event.timeStamp;
+    p.samples.push({ y: event.clientY, t: event.timeStamp });
     // up follows the finger, down only gives a little
     setDrag(Math.max(-120, Math.min(24, dy < 0 ? dy : dy * 0.35)));
   };
@@ -115,8 +114,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     if (!p || p.id !== event.pointerId) return;
     press.current = null;
     const dy = event.clientY - p.y;
-    const span = Math.max(1, event.timeStamp - p.t);
-    const velocity = dy / span;
+    const velocity = flickVelocity(p.samples, event.clientY, event.timeStamp);
     if (!cancelled && !p.moved) return; // a tap: onClick opens it
     dragged.current = true;
     if (!cancelled && (dy <= DISMISS_DRAG_PX || velocity <= DISMISS_VELOCITY)) {
@@ -131,7 +129,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   const what = t(current.kind === "blocked" ? "Needs input" : current.kind === "done" ? "Finished" : "terminal ended");
   const detail = current.machine ? `${current.machine} · ${what}` : what;
   return (
-    <div className="droplet" data-phase={phase} data-kind={current.kind} data-dragging={drag !== 0 ? "" : undefined} style={{ "--droplet-drag": `${drag}px` } as CSSProperties} key={current.id}>
+    <div className="droplet" role="status" aria-live="polite" data-phase={phase} data-kind={current.kind} data-dragging={drag !== 0 ? "" : undefined} style={{ "--droplet-drag": `${drag}px` } as CSSProperties} key={current.id}>
       <svg className="droplet-defs" width="0" height="0" aria-hidden="true" focusable="false">
         <filter id="droplet-goo" x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
           <feGaussianBlur in="SourceGraphic" stdDeviation="9" result="blur" />
@@ -146,8 +144,6 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
       <button
         type="button"
         className="droplet-card"
-        role="status"
-        aria-live="polite"
         aria-label={`${current.title}, ${detail}. ${t("Open pane")}`}
         onClick={() => {
           if (dragged.current) {
