@@ -34,6 +34,7 @@ import { activeTrigger, applyCompletion, type ActiveTrigger } from "../lib/menti
 import { quickReplyButtons, useSettings } from "../lib/settings.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
+import { composerFileName, desktopFileNames } from "../lib/desktop.ts";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { useT } from "../lib/i18n.ts";
 
@@ -615,6 +616,17 @@ export function Composer({
     [choices, menuOpen, offered, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, trigger],
   );
 
+  // a desktop shell names files from this computer by their path instead (lib/desktop.ts)
+  const nameDesktopFiles = useCallback(
+    (files: readonly File[]): boolean => {
+      const names = desktopFileNames(files.slice(0, MAX_IMAGES_PER_ACTION));
+      if (!names) return false;
+      insertMentionAtCursor(names.map(composerFileName).join(" ") + " ");
+      return true;
+    },
+    [insertMentionAtCursor],
+  );
+
   const onPaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
       const images = Array.from(event.clipboardData.items)
@@ -623,18 +635,21 @@ export function Composer({
         .filter((file): file is File => file !== null);
       if (images.length === 0) return;
       event.preventDefault();
+      if (nameDesktopFiles(images)) return;
       void uploadImages(images);
     },
-    [uploadImages],
+    [nameDesktopFiles, uploadImages],
   );
 
   const onDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
       event.preventDefault();
       setDragging(false);
-      void uploadImages(Array.from(event.dataTransfer.files));
+      const files = Array.from(event.dataTransfer.files);
+      if (nameDesktopFiles(files)) return;
+      void uploadImages(files);
     },
-    [uploadImages],
+    [nameDesktopFiles, uploadImages],
   );
 
   const isWorking = agentStatus === "working";
@@ -823,6 +838,7 @@ export function Composer({
             onChange={(event) => {
               const picked = Array.from(event.currentTarget.files ?? []);
               event.currentTarget.value = "";
+              if (nameDesktopFiles(picked)) return;
               void uploadImages(picked);
             }}
           />

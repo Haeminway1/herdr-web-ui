@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <title>herdr</title>
+  <style>
+    :root { color-scheme: dark; --bg: #12100e; --panel: #181613; --border: #2d2924; --text: #d8d0c3; --dim: #9b9183; --strong: #f2ebdf; --accent: #f0a830; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif; }
+    form { width: min(460px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel); display: grid; gap: 16px; }
+    h1 { margin: 0; font-size: 18px; color: var(--strong); }
+    label { display: grid; gap: 6px; color: var(--strong); font-weight: 600; }
+    small { color: var(--dim); font-weight: 400; }
+    input[type="text"], input[type="url"] { height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+    input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .row { display: flex; gap: 8px; align-items: center; font-weight: 400; color: var(--text); }
+    button { height: 36px; border: 0; border-radius: 8px; background: var(--accent); color: #1b1407; font: inherit; font-weight: 600; cursor: pointer; }
+    p[role="alert"] { margin: 0; color: #ff7b70; min-height: 1.5em; }
+  </style>
+</head>
+<body>
+  <form id="setup">
+    <h1>herdr desktop</h1>
+    <label>Server
+      <input id="url" type="url" required placeholder="https://your-pc.tailnet.ts.net:10443/" autocomplete="url">
+      <small>The address of the herdr web ui this window opens.</small>
+    </label>
+    <label>File path prefix
+      <input id="prefix" type="text" placeholder="laptop:" spellcheck="false">
+      <small>Put in front of a dropped file's path. Leave empty when herdr runs on this computer; with herdr elsewhere, a name the agent can fetch from (for scp, "this-pc:").</small>
+    </label>
+    <label class="row"><input id="login" type="checkbox"> Start at login, in the tray</label>
+    <button type="submit">Open</button>
+    <p role="alert" id="error"></p>
+  </form>
+  <script>
+    const form = document.getElementById("setup");
+    const url = document.getElementById("url");
+    const prefix = document.getElementById("prefix");
+    const login = document.getElementById("login");
+    const error = document.getElementById("error");
+    window.herdrSetup.get().then((settings) => {
+      if (!settings) return;
+      url.value = settings.url;
+      prefix.value = settings.pathPrefix;
+      login.checked = settings.openAtLogin;
+      url.focus();
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.textContent = "";
+      const saved = await window.herdrSetup.save({ url: url.value, pathPrefix: prefix.value, openAtLogin: login.checked });
+      if (!saved || !saved.url) error.textContent = "Enter an http or https address.";
+    });
+  </script>
+</body>
+</html>

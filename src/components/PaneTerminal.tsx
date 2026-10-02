@@ -27,6 +27,7 @@ import { Composer } from "./Composer.tsx";
 import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, ServerMessage } from "../../shared/protocol.ts";
 import type { PaneView } from "../lib/actions.ts";
 import { terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
+import { desktopFileNames, shellFileName } from "../lib/desktop.ts";
 import { loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "../lib/fontFamily.ts";
 import { useT } from "../lib/i18n.ts";
 import { isAppShortcut } from "../lib/shortcuts.ts";
@@ -752,6 +753,16 @@ export function PaneTerminal({
     const uploadFiles = (files: File[]): void => {
       const pane = paneRef.current;
       if (!pane || !socket.connected || term.options.disableStdin) return;
+      // a desktop shell names files from this computer by their path: nothing to upload
+      const names = desktopFileNames(files);
+      if (names) {
+        fileQueue = fileQueue.then(() => {
+          if (paneRef.current !== pane || chatViewRef.current || !socket.connected || term.options.disableStdin) return;
+          term.paste(names.map(shellFileName).join(" ") + " ");
+          term.focus();
+        });
+        return;
+      }
       fileQueue = fileQueue.then(() => uploadBatch(pane, files));
     };
     const uploadBatch = async (pane: string, files: File[]): Promise<void> => {

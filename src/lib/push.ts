@@ -1,4 +1,5 @@
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
+import { desktopShowsAlerts } from "./desktop.ts";
 import { fetchPushKey, registerPushSubscription, sendTestPush, unregisterPushSubscription } from "./api.ts";
 
 /**
@@ -13,6 +14,8 @@ import { fetchPushKey, registerPushSubscription, sendTestPush, unregisterPushSub
 const WORKER_READY_TIMEOUT_MS = 10_000;
 
 export function pushSupported(): boolean {
+  // a desktop shell has no push service: it shows the tab's alerts natively (lib/desktop.ts)
+  if (desktopShowsAlerts()) return false;
   return typeof navigator !== "undefined" && "serviceWorker" in navigator && typeof globalThis.PushManager !== "undefined";
 }
 

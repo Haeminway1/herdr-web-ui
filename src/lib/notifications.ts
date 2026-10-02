@@ -1,5 +1,6 @@
 import type { AgentStatus } from "../../shared/protocol.ts";
 import { ENDED_NOTIFICATION_BODY, paneNotificationTag, statusNotificationBody } from "../../shared/notify-policy.ts";
+import { desktopNotify } from "./desktop.ts";
 
 /**
  * Tab alerts: Web Notifications for pane status transitions while this page is open
@@ -32,9 +33,12 @@ export async function requestNotificationPermission(): Promise<NotificationState
  * pane. The constructor is the fallback for a page without a worker.
  */
 async function show(paneId: string, title: string, body: string, onClick?: () => void, machineId = "local"): Promise<void> {
+  // a desktop shell (lib/desktop.ts) shows it natively, and says which pane a click wants. The
+  // shell knows best whether its window is in front, behind others or in the tray: it decides.
+  if (desktopNotify({ title, body, tag: paneNotificationTag(paneId, machineId), pane_id: paneId, machine_id: machineId })) return;
+  if (typeof document !== "undefined" && !document.hidden) return; // visible tab: the UI already shows it
   if (typeof globalThis.Notification === "undefined") return;
   if (globalThis.Notification.permission !== "granted") return;
-  if (typeof document !== "undefined" && !document.hidden) return; // visible tab: the UI already shows it
   const options: NotificationOptions = { body, tag: paneNotificationTag(paneId, machineId), data: { pane_id: paneId, machine_id: machineId }, icon: "/icons/icon-192.png?v=ram1" };
   try {
     const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
