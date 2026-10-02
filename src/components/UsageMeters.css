@@ -323,7 +323,7 @@
 
 .usage-panel-percent {
   font-family: var(--font-mono);
-  font-size: 22px;
+  font-size: var(--fs-xl);
   font-weight: var(--fw-semibold);
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -341,9 +341,10 @@
   color: var(--text-dim);
 }
 
-.usage-panel-row.is-left-low .usage-panel-percent {
-  color: var(--meter-low);
-}
+/* the percent takes its bar's colour */
+.usage-panel-row.is-left-ok .usage-panel-percent { color: var(--meter-ok); }
+.usage-panel-row.is-left-mid .usage-panel-percent { color: var(--meter-mid); }
+.usage-panel-row.is-left-low .usage-panel-percent { color: var(--meter-low); }
 
 /* old or missing numbers dim as the footer chip does; the reason reads under them */
 .usage-panel-row.has-problem .usage-panel-value,
