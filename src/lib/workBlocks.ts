@@ -118,12 +118,16 @@ function shortly(text: string, max = 48): string {
 export function workNow(turns: readonly ConversationTurn[], live: boolean): WorkNow | null {
   const last = turns.at(-1);
   if (!live || !last) return null;
-  let since: number | null = null;
+  // its own start unless its user message says earlier: an assistant turn before it with no user
+  // message between (a Codex task_started run, a page cut mid-run) belongs to an older run
+  const lastAt = last.ts ? Date.parse(last.ts) : Number.NaN;
+  let since: number | null = Number.isFinite(lastAt) ? lastAt : null;
   for (let index = turns.length - 1; index >= 0; index--) {
     const turn = turns[index]!;
+    if (turn.role !== "user") continue;
     const at = turn.ts ? Date.parse(turn.ts) : Number.NaN;
     if (Number.isFinite(at)) since = at;
-    if (turn.role === "user") break;
+    break;
   }
   const tool = [...last.parts].reverse().find((part): part is Extract<ConversationPart, { kind: "tool" }> => part.kind === "tool" && !isTodoTool(part.name));
   const what = tool ? shortly(tool.summary || tool.name) : null;
