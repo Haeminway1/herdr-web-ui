@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, splitTurn, workSummary } from "./workBlocks.ts";
+import { formatWorkDuration, splitTurn, workSummary, workNow, formatElapsed } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -92,4 +92,24 @@ it("does not title a finished turn as running after a message was sent over it",
   // nothing sent over keeps following the status
   expect(isLiveWorkTurn(finished, true, "working", null)).toBe(true);
   expect(isLiveWorkTurn(finished, true, "working")).toBe(true);
+});
+
+describe("what a running turn is doing", () => {
+  const tool = (name: string, summary: string) => ({ kind: "tool" as const, name, summary, input: "", output: "" });
+  const turns = [
+    { role: "user" as const, ts: "2026-10-03T10:00:00Z", parts: [{ kind: "text" as const, text: "fix it" }] },
+    { role: "assistant" as const, ts: "2026-10-03T10:00:05Z", parts: [tool("Read", "src/app.ts"), tool("Bash", "bun test   --watch")] },
+  ];
+  it("starts at its user message and says its latest tool", () => {
+    const now = workNow(turns as never, true)!;
+    expect(now.since).toBe(Date.parse("2026-10-03T10:00:00Z"));
+    expect(now.doing).toBe("Running bun test --watch");
+  });
+  it("is nothing for a turn that is not running", () => {
+    expect(workNow(turns as never, false)).toBeNull();
+  });
+  it("says how long, in the work block's units", () => {
+    expect(formatElapsed(0, 192_000)).toBe("3m 12s");
+    expect(formatElapsed(0, 45_000)).toBe("45s");
+  });
 });

@@ -92,3 +92,45 @@ export function isLiveWorkTurn(turn: ConversationTurn, last: boolean, status?: s
   if (turn === sentOver) return false;
   return last && turn.role === "assistant" && (status === "working" || status === "blocked");
 }
+
+/** What a running turn is doing now, for the line over the message box (Composer.tsx). */
+export interface WorkNow {
+  /** when the turn began (its user message, else its own first record), ms; null when unknown */
+  since: number | null;
+  /** its latest tool call, said shortly: "Running git status", "Editing src/app.ts" */
+  doing: string | null;
+}
+
+// each said in full here, so the dictionaries' check finds every one of them
+const DOING: Record<WorkCategory, (what: string) => string> = {
+  edit: (what) => t("Editing {what}", { what }),
+  read: (what) => t("Reading {what}", { what }),
+  command: (what) => t("Running {what}", { what }),
+  other: (what) => t("Using {what}", { what }),
+};
+
+function shortly(text: string, max = 48): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/** The running turn's start and latest tool, or null when the last turn is not running. */
+export function workNow(turns: readonly ConversationTurn[], live: boolean): WorkNow | null {
+  const last = turns.at(-1);
+  if (!live || !last) return null;
+  let since: number | null = null;
+  for (let index = turns.length - 1; index >= 0; index--) {
+    const turn = turns[index]!;
+    const at = turn.ts ? Date.parse(turn.ts) : Number.NaN;
+    if (Number.isFinite(at)) since = at;
+    if (turn.role === "user") break;
+  }
+  const tool = [...last.parts].reverse().find((part): part is Extract<ConversationPart, { kind: "tool" }> => part.kind === "tool" && !isTodoTool(part.name));
+  const what = tool ? shortly(tool.summary || tool.name) : null;
+  return { since, doing: tool && what ? DOING[categorize(tool.name)](what) : null };
+}
+
+/** "45s", "3m 12s", "1h 4m" from `since` to `now`. */
+export function formatElapsed(since: number, now: number): string | null {
+  return formatWorkDuration(new Date(since).toISOString(), new Date(Math.max(now, since)).toISOString());
+}

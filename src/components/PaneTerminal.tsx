@@ -30,6 +30,7 @@ import { terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings
 import { desktopFileNames, shellFileName } from "../lib/desktop.ts";
 import type { Outgoing } from "../lib/outbox.ts";
 import { loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "../lib/fontFamily.ts";
+import type { WorkNow } from "../lib/workBlocks.ts";
 import { useT } from "../lib/i18n.ts";
 import { isAppShortcut } from "../lib/shortcuts.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
@@ -217,6 +218,8 @@ export function PaneTerminal({
   useEffect(() => {
     if (agentStatus === "working") setPendingAnswer(null);
   }, [agentStatus]);
+  const [chatWork, setChatWork] = useState<{ pane: string; value: WorkNow | null } | null>(null);
+  const onChatWork = useCallback((pane: string, value: WorkNow | null) => setChatWork({ pane, value }), []);
   const onChatMetadata = useCallback((pane: string, value: ConversationMetadata | null) => {
     // the same settings keep the same object: every 2 s poll would otherwise re-render the composer
     setChatMetadata((previous) => previous?.pane === pane && previous.value?.model === value?.model
@@ -1317,6 +1320,7 @@ export function PaneTerminal({
             agent={agent}
             agentStatus={agentStatus}
             onMetadata={onChatMetadata}
+            onWork={onChatWork}
             onPrompt={onChatPrompt}
             onSuggestion={onChatSuggestion}
             promptRefreshKey={promptRefresh}
@@ -1390,6 +1394,7 @@ export function PaneTerminal({
           agentStatus={agentStatus}
           backgroundTasks={backgroundTasks}
           metadata={chatMetadata?.pane === paneId ? chatMetadata.value : null}
+          work={chatWork?.pane === paneId ? chatWork.value : null}
           connected={connected && !held}
           queueMode={busy}
           answerHint={answering === null ? null

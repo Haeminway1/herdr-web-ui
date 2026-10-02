@@ -36,6 +36,7 @@ import { AgentMark } from "./AgentMark.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { composerFileName, desktopFileNames } from "../lib/desktop.ts";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
+import { formatElapsed, type WorkNow } from "../lib/workBlocks.ts";
 import { useT } from "../lib/i18n.ts";
 
 export interface ComposerProps {
@@ -45,6 +46,8 @@ export interface ComposerProps {
   autoFocus?: boolean;
   agent: string | null;
   agentStatus?: AgentStatus;
+  /** what the running turn is doing now: shown after the status while it works */
+  work?: WorkNow | null;
   /** an OmO pane's running background tasks: the status line opens their list */
   backgroundTasks?: number;
   metadata?: ConversationMetadata | null;
@@ -183,6 +186,7 @@ export function Composer({
   agentStatus,
   backgroundTasks = 0,
   metadata,
+  work = null,
   queueMode = false,
   answerHint = null,
   suggestion = null,
@@ -666,6 +670,7 @@ export function Composer({
         <span className="composer-agent-label">{agentLabel}</span>
         <span className="composer-status-separator" aria-hidden="true">·</span>
         <strong>{t(composerStatusWord(agentStatus))}</strong>
+        {agentStatus === "working" && work && <WorkLine work={work} />}
         <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} />
         {(metadata?.model || metadata?.reasoning_effort) && <span className="composer-model-info" aria-label={t("Model and reasoning")}>
           <span className="composer-model" title={metadata.model ?? t("Model not available")}>{metadata.model ?? t("Model —")}</span>
@@ -909,5 +914,23 @@ export function Composer({
       {/* above the whole composer: inside the surface it would cover the agent status line */}
       {dictation.shown && <VoiceRecordingPill dictation={dictation} align="start" />}
     </div>
+  );
+}
+
+/** "· 3m 12s · Running git status": how long the turn has worked, ticking, and what it does now. */
+function WorkLine({ work }: { work: WorkNow }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (work.since === null) return;
+    const tick = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(tick);
+  }, [work.since]);
+  const elapsed = work.since !== null ? formatElapsed(work.since, now) : null;
+  if (!elapsed && !work.doing) return null;
+  return (
+    <span className="composer-work">
+      {elapsed && <><span aria-hidden="true">·</span> <span className="composer-work-time">{elapsed}</span></>}
+      {work.doing && <> <span aria-hidden="true">·</span> <span className="composer-work-doing" title={work.doing}>{work.doing}</span></>}
+    </span>
   );
 }

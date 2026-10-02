@@ -17,7 +17,7 @@ import { turnSkills } from "../lib/skillActivity.ts";
 import { ApiError } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
-import { isLiveWorkTurn, formatWorkDuration, splitTurn, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { isLiveWorkTurn, formatWorkDuration, splitTurn, workNow, workSummary, type ToolPart as ToolPartType, type WorkNow } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -58,6 +58,8 @@ export interface ChatViewProps {
   agent: string | null;
   agentStatus?: AgentStatus;
   onMetadata?: (paneId: string, metadata: ConversationMetadata | null) => void;
+  /** what the running turn is doing now (lib/workBlocks.ts workNow), null once it is not running */
+  onWork?: (paneId: string, work: WorkNow | null) => void;
   /** the agent's waiting prompt, for the composer to answer too */
   onPrompt?: (paneId: string, prompt: InteractivePrompt | null) => void;
   /** with no prompt waiting, the next prompt the agent suggests (Claude's grey input text) */
@@ -451,7 +453,7 @@ function FallbackTurn({ paneId, message }: { paneId: string; message: Transcript
 const NO_OUTGOING: readonly Outgoing[] = [];
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0, outgoing = NO_OUTGOING, onOutgoingDone, connected, ended, agent, agentStatus, onMetadata, onPrompt, onSuggestion, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0, outgoing = NO_OUTGOING, onOutgoingDone, connected, ended, agent, agentStatus, onMetadata, onWork, onPrompt, onSuggestion, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -752,6 +754,14 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
     stickToBottom.current = true; setNewMessages(false); setAway(false);
   };
   const turns = useMemo(() => older.length > 0 ? [...older, ...state.turns] : state.turns, [older, state.turns]);
+  // the line over the message box says how long the running turn has worked and what it does now
+  const finishedBefore = sentOver !== null && sentOver.page === state.turns ? sentOver.turn : null;
+  const work = useMemo(() => {
+    const last = state.turns.at(-1);
+    return workNow(state.turns, state.source === "conversation" && last !== undefined && isLiveWorkTurn(last, true, agentStatus, finishedBefore));
+  }, [state.turns, state.source, agentStatus, finishedBefore]);
+  const workKey = work ? `${work.since}|${work.doing}` : "";
+  useEffect(() => { onWork?.(paneId, work); }, [paneId, workKey]); // eslint-disable-line react-hooks/exhaustive-deps
   heldPage.current = state.turns;
   const finishedBeforeSend = sentOver !== null && sentOver.page === state.turns ? sentOver.turn : null;
   const empty = state.source === "conversation" ? turns.length === 0 && outgoing.length === 0 : state.messages.length === 0;

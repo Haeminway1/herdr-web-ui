@@ -727,3 +727,26 @@
   color: var(--text-dim);
   font-size: var(--fs-xs);
 }
+
+/* how long the running turn has worked, and what it does now (WorkLine): quiet, and the part that
+   gives way first on a narrow screen */
+.composer-work {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.composer-work-time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-work-doing {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
