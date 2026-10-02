@@ -15,13 +15,17 @@ const path = require("node:path");
 
 const DEFAULTS = Object.freeze({ url: "", pathPrefix: "", openAtLogin: true });
 
-/** Only an http(s) address is opened; anything else is no address. */
+/** plain http only to this computer: anywhere else the page and its traffic could be read or changed on the way */
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Only an https address, or http on this computer, is opened; anything else is no address. */
 function parseUrl(value) {
   if (typeof value !== "string" || value.trim() === "") return "";
   try {
     const url = new URL(value.trim());
-    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
-    return url.href;
+    if (url.protocol === "https:") return url.href;
+    if (url.protocol === "http:" && LOOPBACK.has(url.hostname)) return url.href;
+    return "";
   } catch {
     return "";
   }

@@ -29,7 +29,7 @@ npm --prefix desktop run package           # Windows x64, macOS arm64 and x64 in
 npm --prefix desktop run package -- win32 x64
 ```
 
-`desktop/out/<name>` is the whole app: copy the folder and run `herdr.exe` or `herdr.app`. A Mac build copied from another computer needs its ad-hoc signature again: `codesign --force --deep --sign - herdr.app`.
+`desktop/out/<name>` is the whole app: copy the folder and run `herdr.exe` or `herdr.app`. On Windows, the first start adds a Start menu shortcut with the app's ID, without which Windows shows none of its notifications. The server address must be https, or http on this computer. A Mac build copied from another computer needs its ad-hoc signature again: `codesign --force --deep --sign - herdr.app`.
 
 ## How it fits the web ui
 
@@ -43,6 +43,6 @@ In a browser the object is absent, and nothing changes. `HERDR_DESKTOP_PROFILE=<
 ## Tests
 
 ```bash
-node --test desktop/                       # settings and file naming
+npm --prefix desktop test                  # settings and file naming
 bun run build && xvfb-run -a bun desktop/e2e.ts   # the shell on a real server and owned herdr panes
 ```

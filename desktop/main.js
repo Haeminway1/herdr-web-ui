@@ -41,7 +41,10 @@ function start() {
   settings = config.load(configFile());
   applyLoginItem();
   createTray();
-  createWindow(process.argv.includes("--hidden") || app.getLoginItemSettings().wasOpenedAsHidden);
+  // started at login: in the tray (Windows passes --hidden; a Mac login item says it opened at login)
+  const atLogin = process.argv.includes("--hidden") || (process.platform === "darwin" && app.getLoginItemSettings().wasOpenedAtLogin === true);
+  registerWindowsShortcut();
+  createWindow(atLogin);
 }
 
 function createWindow(hidden) {
@@ -78,11 +81,14 @@ function createWindow(hidden) {
     openOutside(url);
     return { action: "deny" };
   });
-  win.webContents.on("will-navigate", (event, url) => {
+  // a link, and a redirect the server answers with, stay in the window only on the server's origin
+  const keepInside = (event, url) => {
     if (sameOrigin(url) || url.startsWith("file:")) return;
     event.preventDefault();
     openOutside(url);
-  });
+  };
+  win.webContents.on("will-navigate", keepInside);
+  win.webContents.on("will-redirect", keepInside);
   load();
 }
 
@@ -90,6 +96,23 @@ function load() {
   if (!win) return;
   if (settings.url) win.loadURL(settings.url);
   else win.loadFile(path.join(__dirname, "setup.html"));
+}
+
+/**
+ * Windows shows an app's notifications only for an app with a Start menu shortcut carrying its
+ * AppUserModelID: a copied folder has none, so the first start makes it (and keeps it current).
+ */
+function registerWindowsShortcut() {
+  if (process.platform !== "win32" || !app.isPackaged) return;
+  const link = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "herdr.lnk");
+  const options = { target: process.execPath, appUserModelId: APP_ID, description: "herdr" };
+  try {
+    const current = shell.readShortcutLink(link);
+    if (current.target === process.execPath && current.appUserModelId === APP_ID) return;
+    shell.writeShortcutLink(link, "replace", options);
+  } catch {
+    shell.writeShortcutLink(link, "create", options);
+  }
 }
 
 function sameOrigin(url) {
@@ -140,7 +163,7 @@ function refreshTrayMenu() {
 function applyLoginItem() {
   // not where the OS keeps no login items for a bare binary (Linux): the user's desktop does that
   if (process.platform !== "win32" && process.platform !== "darwin") return;
-  app.setLoginItemSettings({ openAtLogin: settings.openAtLogin, openAsHidden: true, args: ["--hidden"] });
+  app.setLoginItemSettings({ openAtLogin: settings.openAtLogin, args: ["--hidden"] });
 }
 
 function saveSettings(next) {
