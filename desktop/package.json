@@ -8,7 +8,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node --test",
+    "test": "node --test config.test.js",
     "package": "node package.mjs"
   },
   "devDependencies": {

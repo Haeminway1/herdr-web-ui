@@ -18,6 +18,10 @@ import { herdrRpc, paneRead, workspaceClose, workspaceCreate } from "../server/h
 
 const root = mkdtempSync(join(tmpdir(), "herdr-desktop-e2e-"));
 const workspaces: string[] = [];
+// everything below is cleaned up in the finally block, whatever fails first
+let app: Awaited<ReturnType<typeof electron.launch>> | null = null;
+let server: ReturnType<typeof createServer> | null = null;
+try {
 // the panes come first: the server's status stream then knows them from its start
 const panes: string[] = [];
 for (const name of ["open", "other"]) {
@@ -31,7 +35,7 @@ const [openPane, otherPane] = panes as [string, string];
 const report = (pane: string, state: string) => herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state });
 await report(openPane, "idle");
 await report(otherPane, "idle");
-const server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), usage: new UsageService(undefined, []) });
+server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), usage: new UsageService(undefined, []) });
 const origin = `http://127.0.0.1:${server.port}/`;
 const profile = join(root, "profile");
 mkdirSync(profile);
@@ -45,12 +49,11 @@ async function until(check: () => boolean | Promise<boolean>, label: string): Pr
   }
 }
 
-const app = await electron.launch({
+app = await electron.launch({
   executablePath: join(import.meta.dir, "node_modules", "electron", "dist", "electron"),
   args: [import.meta.dir, "--no-sandbox"],
   env: { ...process.env, HERDR_DESKTOP_PROFILE: profile },
 });
-try {
 
   const page = await app.firstWindow();
   const errors: string[] = [];
@@ -150,8 +153,8 @@ try {
   console.log("PASS a file dropped on the terminal goes in by its path, quoted, without Enter");
   assert.deepEqual(errors, []);
 } finally {
-  await app.close().catch(() => undefined);
-  server.stop();
+  await app?.close().catch(() => undefined);
+  server?.stop();
   for (const workspace of workspaces) await workspaceClose(workspace).catch(() => undefined);
   rmSync(root, { recursive: true, force: true });
 }
