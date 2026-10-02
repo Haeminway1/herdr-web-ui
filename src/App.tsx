@@ -279,7 +279,9 @@ export function App() {
   // In-app alerts (components/Droplet.tsx): only while the app is on screen - a hidden app has
   // its system notifications - and never for the pane already open in front of the user.
   const dropIn = useCallback((machine: Machine, pane: HerdrPane, kind: DropletKind) => {
-    if (!alertsOnRef.current || !alertInAppRef.current || document.visibilityState !== "visible") return;
+    // in front and focused only: a window behind others (a desktop app's, which still reads as
+    // visible) gets the system notification instead, and could not run the drop's animation
+    if (!alertsOnRef.current || !alertInAppRef.current || document.visibilityState !== "visible" || !document.hasFocus()) return;
     const open = selectionRef.current;
     if (open.machineId === machine.id && open.paneId === pane.pane_id && !drawerOpenRef.current) return;
     showDroplet({

@@ -34,7 +34,8 @@ export async function requestNotificationPermission(): Promise<NotificationState
 async function show(paneId: string, title: string, body: string, onClick?: () => void, machineId = "local"): Promise<void> {
   if (typeof globalThis.Notification === "undefined") return;
   if (globalThis.Notification.permission !== "granted") return;
-  if (typeof document !== "undefined" && !document.hidden) return; // visible tab: the UI already shows it
+  // in front and focused: the in-app alert shows it. A window behind others still notifies.
+  if (typeof document !== "undefined" && !document.hidden && document.hasFocus()) return;
   const options: NotificationOptions = { body, tag: paneNotificationTag(paneId, machineId), data: { pane_id: paneId, machine_id: machineId }, icon: "/icons/icon-192.png?v=ram1" };
   try {
     const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
