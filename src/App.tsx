@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bell, FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
+import { FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ClientRole, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
 import { ApiError, authenticate, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, sendTestPush, signOut, type HealthInfo } from "./lib/api.ts";
@@ -42,6 +42,8 @@ import { useT } from "./lib/i18n.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
 import { watchDrawerSwipe } from "./lib/edgeSwipe.ts";
 import { Droplet } from "./components/Droplet.tsx";
+import { AlertBell } from "./components/AlertBell.tsx";
+import { alertLog } from "./lib/alertLog.ts";
 import { dropletAllows, endedTurn, showDroplet, trackTurn, type DropletKind } from "./lib/droplet.ts";
 
 const APP_TITLE = "herdr web ui";
@@ -274,6 +276,11 @@ export function App() {
   // In-app alerts (components/Droplet.tsx): only while the app is on screen - a hidden app has
   // its system notifications - and never for the pane already open in front of the user.
   const dropIn = useCallback((machine: Machine, pane: HerdrPane, kind: DropletKind) => {
+    // every alert goes in the bell's list (components/AlertBell.tsx), seen there already when it is
+    // about the pane open in front of the user
+    const watched = selectionRef.current.machineId === machine.id && selectionRef.current.paneId === pane.pane_id
+      && !drawerOpenRef.current && document.visibilityState === "visible";
+    alertLog.add({ at: Date.now(), machineId: machine.id, paneId: pane.pane_id, agent: pane.agent ?? null, title: displayPaneTitle(pane), machine: machinesRef.current.length > 1 ? machine.name : null, kind }, watched);
     if (!alertsOnRef.current || !alertInAppRef.current || document.visibilityState !== "visible") return;
     const open = selectionRef.current;
     if (open.machineId === machine.id && open.paneId === pane.pane_id && !drawerOpenRef.current) return;
@@ -668,18 +675,7 @@ export function App() {
           <button type="button" className="icon-button" aria-label={t("Command palette")} title={t("Command palette (⌘⇧K)")} onClick={() => setPaletteOpen(true)}>
             <Search />
           </button>
-          {bellVisible && (
-            <button
-              type="button"
-              className={`icon-button bell-button${bell.on ? " is-on" : ""}`}
-              aria-label={bell.label}
-              aria-pressed={bell.on}
-              title={bell.title}
-              onClick={() => void bell.run()}
-            >
-              <Bell />
-            </button>
-          )}
+          <AlertBell bell={bell} canToggle={bellVisible} onOpen={(machineId, paneId) => selectTargetRef.current(machineId, paneId)} />
           {canSignOut && (
             <button type="button" className="icon-button lock-button header-desktop-only" aria-label={t("Sign out")} title={t("Sign out")} onClick={() => void lock()}>
               <Lock />

@@ -17,6 +17,7 @@ import { checkUsageMeters } from "./usage-regression.ts";
 import { checkNotificationStartup } from "./notification-startup-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
+import { checkAlertBell } from "./alert-bell-regression.ts";
 import { checkComposerReconnect } from "./composer-reconnect-regression.ts";
 import { checkDroplet } from "./droplet-regression.ts";
 import { UsageService } from "../server/usage.ts";
@@ -189,6 +190,8 @@ try {
 
   // the bell turns this device's alerts on, and off again (it stayed disabled once on)
   await context.grantPermissions(["notifications"], { origin });
+  // the switch sits in the bell's menu, above the alerts it keeps
+  await page.locator(".alert-bell-button").click();
   const bell = page.locator(".bell-button");
   await bell.click();
   await until(async () => await bell.getAttribute("aria-pressed") === "true", "bell on");
@@ -199,6 +202,7 @@ try {
   assert.equal(await page.evaluate(async () => (await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription()) ?? null), null, "turning alerts off drops the push subscription");
   await bell.click();
   await until(async () => await bell.getAttribute("aria-pressed") === "true", "bell on again");
+  await page.keyboard.press("Escape");
   console.log("PASS the bell turns alerts off and on again");
 
   await checkPushSettings(browser, origin);
@@ -209,6 +213,7 @@ try {
   await checkUsageMeters(browser, origin);
   await checkNotificationStartup(browser, origin, paneA, paneB);
   await checkMobileViewport(browser, origin, paneB);
+  await checkAlertBell(browser, origin);
   await checkComposerReconnect(browser, origin, paneB);
   await checkDroplet(browser, origin);
 

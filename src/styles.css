@@ -402,6 +402,8 @@ button {
   /* Keep the header's painted background at the top of the app. The home-screen
      status-bar layout is controlled by index.html; see docs/ios-home-screen-testing.md. */
   position: sticky;
+  /* sticky makes it a layer of its own: above the body, so the bell's list is not under the chat */
+  z-index: var(--z-popover);
   top: 0;
 }
 
@@ -568,7 +570,7 @@ button {
 /* the bell while notifications are live: the accent reads as "on"; a plain
    .icon-button is the idle/asking state. The button is disabled once granted:
    browsers cannot re-ask, and the title explains the state */
-.bell-button.is-on {
+.alert-bell-button.is-on {
   color: var(--accent);
   border-color: var(--accent);
 }

@@ -1,0 +1,172 @@
+/* The header's bell and the alerts it keeps (AlertBell.tsx). */
+
+.alert-bell {
+  position: relative;
+  display: inline-flex;
+}
+
+.alert-bell-count {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--status-blocked);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.alert-bell-panel {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: var(--z-popover);
+  width: min(340px, calc(100vw - 2 * var(--space-3)));
+  max-height: min(480px, 70vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.alert-bell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-2) var(--space-1) var(--space-3);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--text-strong);
+}
+
+.alert-bell-clear {
+  height: auto;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+.alert-bell-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 var(--space-1) var(--space-1);
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.alert-bell-switch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--text-dim);
+}
+
+.alert-bell-switch-dot[data-on] { background: var(--status-done); }
+
+.alert-bell-empty {
+  margin: 0;
+  padding: var(--space-4) var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.alert-bell-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.alert-bell-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.alert-bell-item:hover,
+.alert-bell-item:focus-visible { background: var(--bg-hover); }
+
+.alert-bell-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.alert-bell-mark .agent-mark {
+  display: inline-flex;
+  line-height: 0;
+}
+
+.alert-bell-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--text-dim);
+}
+
+.alert-bell-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.alert-bell-title {
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-strong);
+}
+
+.alert-bell-what {
+  font-size: var(--fs-xs);
+  color: var(--alert-tone, var(--text-dim));
+}
+
+.alert-bell-item[data-kind="blocked"] { --alert-tone: var(--status-blocked); }
+.alert-bell-item[data-kind="done"] { --alert-tone: var(--status-done); }
+
+.alert-bell-time {
+  flex: none;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+/* a new one carries a dot before its time */
+.alert-bell-item.is-new .alert-bell-time::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  vertical-align: middle;
+}

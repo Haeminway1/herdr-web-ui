@@ -46,7 +46,7 @@ export async function checkPushSettings(browser: Browser, origin: string): Promi
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(origin);
     await page.locator(".conn-live").waitFor();
-    await page.waitForFunction(() => document.querySelector(".bell-button")?.getAttribute("aria-label") === "Alerts on");
+    await page.waitForFunction(() => document.querySelector(".alert-bell-button")?.getAttribute("data-alerts") === "on");
     await page.keyboard.press("Control+Shift+Comma");
     const send = page.getByRole("button", { name: "Send test", exact: true });
     hold = new Promise<void>((resolve) => { release = resolve; });
@@ -88,7 +88,9 @@ export async function checkPushSettings(browser: Browser, origin: string): Promi
     assert.equal(tests.length, beforeMissing);
 
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
+    await page.locator(".alert-bell-button").click();
     await page.locator(".bell-button").click();
+    await page.keyboard.press("Escape");
     await page.keyboard.press("Control+Shift+Comma");
     assert.equal(await send.isDisabled(), true, "testing must not turn alerts on implicitly");
     await page.getByRole("button", { name: "Turn alerts on again", exact: true }).waitFor();

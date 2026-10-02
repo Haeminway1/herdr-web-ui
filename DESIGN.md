@@ -422,6 +422,14 @@ One set for both themes: the card is island black wherever it shows.
 - The mobile key bar is Esc, Tab, one-shot Ctrl, arrows and `^C`; it never steals xterm focus.
 - The mobile drawer slides over a scrim. Closed visibility removes its controls from the tab order.
 
+### Alert list (header bell)
+- The header's bell keeps the alerts this device heard (`lib/alertLog.ts`, this browser only, the
+  last 30): a red count of new ones on the bell; a click opens a menu with the alerts switch on top
+  (where alerts are possible) and the list, newest first, each with its mark, pane, what happened
+  in its status colour and how long ago, a dot before the time while new. A click opens the pane;
+  closing the list marks them seen; Clear empties it. An alert about the pane already open in
+  front is kept as seen.
+
 ### In-app alert
 - While the app is on screen, a pane that needs input, finishes a turn (by the device's Finished
   choice) or ends drops a card from the top edge: a black drop falls from above the safe area,
