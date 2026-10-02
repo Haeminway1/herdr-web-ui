@@ -17,7 +17,7 @@ describe("applyToDraft", () => {
   });
 
   it("counts escape sequences, arrows and control codes as special keys", () => {
-    for (const special of ["\u001b[A", "\u0003", "\u001b", "\t", "paste chunk"]) {
+    for (const special of ["\u001b[A", "\u0003", "\u001b", "\t"]) {
       expect(applyToDraft(EMPTY_DRAFT, special).droppedSpecial).toBe(1);
     }
   });
@@ -40,4 +40,10 @@ describe("draftIsEmpty", () => {
     expect(draftIsEmpty({ text: "", droppedSpecial: 1 })).toBe(false);
     expect(draftIsEmpty({ text: "a", droppedSpecial: 0 })).toBe(false);
   });
+});
+
+it("holds multi-codepoint IME commits without splitting a surrogate at the limit", () => {
+  for (const text of ["한글", "😀", "e\u0301", "abc"]) expect(applyToDraft(EMPTY_DRAFT, text).text).toBe(text);
+  expect(applyToDraft({ text: "a".repeat(1023), droppedSpecial: 0 }, "😀").text).toHaveLength(1023);
+  expect(applyToDraft(EMPTY_DRAFT, "\x1b[200~text\x1b[201~").text).toBe("");
 });

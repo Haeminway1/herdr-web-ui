@@ -28,7 +28,11 @@ export type UsagePlacement = "footer" | "top";
 /** the lens a pane opens in until it is switched there: auto is chat for an agent on a touch screen, else terminal */
 export type DefaultView = "auto" | "chat" | "terminal";
 
+import { sanitizeShortcutOverrides, type ShortcutOverrides } from "./shortcutBindings.ts";
+
 export interface Settings {
+  terminalInputMode: "auto" | "line" | "direct";
+  shortcutOverrides: ShortcutOverrides;
   theme: ThemeSetting;
   density: Density;
   /** The sidebar's display grouping; workspaces themselves remain independent. */
@@ -90,6 +94,8 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  terminalInputMode: "auto",
+  shortcutOverrides: {},
   theme: "dark",
   density: "comfortable",
   sidebarGrouping: "workspace",
@@ -174,6 +180,8 @@ export function sanitizeSettings(raw: unknown): Settings {
   const font = record["terminalFontSize"];
   const chatFont = record["chatFontSize"];
   return {
+    terminalInputMode: record["terminalInputMode"] === "line" || record["terminalInputMode"] === "direct" ? record["terminalInputMode"] : "auto",
+    shortcutOverrides: sanitizeShortcutOverrides(record["shortcutOverrides"]),
     theme: theme === "dark" || theme === "light" || theme === "system" ? theme : DEFAULT_SETTINGS.theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarGrouping: record["sidebarGrouping"] === "workspace" || record["sidebarGrouping"] === "directory" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,

@@ -69,11 +69,11 @@ describe("usage meters", () => {
 describe("the top panel's reset and colour", () => {
   const at = (iso: string) => Date.parse(iso);
   it("says the time left in the same short units in every language", () => {
-    const now = at("2026-10-03T10:00:00");
-    expect(formatResetShort("2026-10-04T13:00:00", now)).toBe("1d 3h");
-    expect(formatResetShort("2026-10-03T13:12:00", now)).toBe("3h 12m");
-    expect(formatResetShort("2026-10-03T10:12:00", now)).toBe("12m");
-    expect(formatResetShort("2026-10-03T09:00:00", now)).toBeNull();
+    const now = at("2026-10-03T10:00:00Z");
+    expect(formatResetShort("2026-10-04T13:00:00Z", now)).toBe("1d 3h");
+    expect(formatResetShort("2026-10-03T13:12:00Z", now)).toBe("3h 12m");
+    expect(formatResetShort("2026-10-03T10:12:00Z", now)).toBe("12m");
+    expect(formatResetShort("2026-10-03T09:00:00Z", now)).toBeNull();
   });
   it("names the reset's local time, with the date when it is not today", () => {
     const now = at("2026-10-03T10:00:00");

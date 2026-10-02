@@ -414,7 +414,7 @@ class DemoSocket extends EventTarget {
       const open = new Event("open");
       this.onopen?.(open);
       this.dispatchEvent(open);
-      this.push({ type: "snapshot", snapshot: snapshot(), features: ["submit", "secret-input"] });
+      this.push({ type: "snapshot", snapshot: snapshot(), features: ["submit", "secret-input", "input-ready"] });
     }, 20);
     this.timers.add(opening);
   }
@@ -456,6 +456,7 @@ class DemoSocket extends EventTarget {
 
   private attach(paneId: string): void {
     this.attached.add(paneId);
+    this.push({ type: "input-ready", pane_id: paneId });
     const key = keyOfPane.get(paneId);
     const pane = paneOf(paneId);
     if (key === "shell") {

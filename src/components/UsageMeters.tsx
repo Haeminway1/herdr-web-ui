@@ -185,11 +185,21 @@ export function UsagePanel() {
   // a phone's drawer gives the sessions the room: one line of percents, the rows a tap away
   const narrow = useNarrow();
   const [unfolded, setUnfolded] = useState(false);
+  // folding swaps the toggles: the keyboard follows to the one that takes the pressed one's place
+  const lineRef = useRef<HTMLButtonElement>(null);
+  const foldRef = useRef<HTMLButtonElement>(null);
+  const toggled = useRef(false);
+  useEffect(() => {
+    if (!toggled.current) return;
+    toggled.current = false;
+    (unfolded ? foldRef : lineRef).current?.focus();
+  }, [unfolded]);
   if (!top || shown.length === 0) return null;
   if (narrow && !unfolded) {
     return (
       <section className="usage-panel is-folded" aria-label={t("Subscription usage")}>
-        <button type="button" className="usage-panel-line" aria-expanded={false} aria-label={`${t("Show plan limits")}: ${shown.map((usage) => { const window = glanceWindow(usage, glance); return `${PROVIDER_NAME[usage.id]} ${window ? meterText(window, count) : "—"}`; }).join(", ")}`} title={t("Show plan limits")} onClick={() => setUnfolded(true)}>
+        <button ref={lineRef} type="button" className="usage-panel-line" aria-expanded={false} aria-label={`${t("Show plan limits")}: ${shown.map((usage) => { const window = glanceWindow(usage, glance); return `${usageName(usage)} ${window ? meterText(window, count) : "—"}`; }).join(", ")}`} title={t("Show plan limits")} onClick={() => { toggled.current = true; setUnfolded(true); }}>
+          <span className="usage-panel-line-chips">
           {shown.map((usage) => {
             const window = glanceWindow(usage, glance);
             return (
@@ -199,6 +209,7 @@ export function UsagePanel() {
               </span>
             );
           })}
+          </span>
           <span className="usage-panel-line-count">{t(count === "left" ? "left" : "used")}</span>
           <ChevronDown className="usage-panel-line-caret" aria-hidden="true" />
         </button>
@@ -208,7 +219,7 @@ export function UsagePanel() {
   return (
     <section className="usage-panel" aria-label={t("Subscription usage")}>
       {narrow && (
-        <button type="button" className="usage-panel-fold" aria-expanded={true} aria-label={t("Fold plan limits")} title={t("Fold plan limits")} onClick={() => { setUnfolded(false); setOpen(false); }}>
+        <button ref={foldRef} type="button" className="usage-panel-fold" aria-expanded={true} aria-label={t("Fold plan limits")} title={t("Fold plan limits")} onClick={() => { toggled.current = true; setUnfolded(false); setOpen(false); }}>
           <ChevronUp aria-hidden="true" />
         </button>
       )}
@@ -217,7 +228,7 @@ export function UsagePanel() {
           const window = glanceWindow(usage, glance);
           const value = window ? meterPercent(window, count) : 0;
           const reset = window ? formatResetShort(window.resets_at, now) : null;
-          const resetAt = window ? formatResetAt(window.resets_at, now) : null;
+          const resetAt = window && reset !== null ? formatResetAt(window.resets_at, now) : null;
           const problem = problemText(t, usage);
           // two accounts of one provider are told apart by the account; one alone needs no address
           const twin = shown.some((other) => other !== usage && other.id === usage.id);

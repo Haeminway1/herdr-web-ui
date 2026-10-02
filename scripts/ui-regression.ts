@@ -17,6 +17,7 @@ import { checkUsageMeters } from "./usage-regression.ts";
 import { checkNotificationStartup } from "./notification-startup-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
+import { checkTerminalInput } from "./terminal-input-regression.ts";
 import { checkDefaultView } from "./default-view-regression.ts";
 import { checkAlertBell, checkPushedAlertWhileClosed } from "./alert-bell-regression.ts";
 import { checkDroplet } from "./droplet-regression.ts";
@@ -647,6 +648,8 @@ try {
   assert.deepEqual(errors, []);
   console.log("PASS a phone offers Claude's suggestion as a chip only once Settings turns it on");
 
+  await checkTerminalInput(browser, origin, paneA, paneB);
+
   // the terminal lens on a touch screen: an input line sends whole lines; the grid raises no keyboard
   const touch = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const touchPage = await touch.newPage();
@@ -677,19 +680,35 @@ try {
   await touchPage.waitForTimeout(NO_SEND_WAIT_MS);
   assert.equal(touchSent.length, imeSent);
   assert.equal(await line.inputValue(), "echo 한글");
+  await line.dispatchEvent("compositionstart", { data: "" });
+  const beforeComposeSend = touchSent.length;
+  await touchPage.getByRole("button", { name: "Send to the terminal", exact: true }).click();
+  await touchPage.waitForTimeout(NO_SEND_WAIT_MS);
+  assert.equal(touchSent.length, beforeComposeSend, "button cannot submit an unfinished composition");
+  await line.dispatchEvent("compositionend", { data: "한글" });
   await line.fill("");
   // an empty line's button is Enter alone
   const enters = touchSent.length;
   await touchPage.getByRole("button", { name: "Press Enter in the terminal", exact: true }).click();
   await until(() => touchSent.length > enters && touchSent.at(-1)?.type === "input" && touchSent.at(-1)?.text === "\r", "enter from the empty line");
+  await line.fill("unsent 한글 😀");
   // typing straight into the grid is one tap away, and gives the keyboard back to it
   await touchPage.getByRole("button", { name: "Type straight into the terminal", exact: true }).click();
   assert.equal(await touchPage.locator(".terminal-input").count(), 0);
   assert.equal(await touchPage.locator(".xterm-helper-textarea").getAttribute("inputmode"), null);
   await touchPage.getByRole("button", { name: "Type straight into the terminal", exact: true }).click();
   await line.waitFor();
+  assert.equal(await line.inputValue(), "unsent 한글 😀", "mode switches preserve the unsent line");
+  await touchPage.reload();
+  await line.waitFor();
+  assert.equal(await line.inputValue(), "unsent 한글 😀", "reload preserves the unsent line");
+  await line.fill("");
   assert.equal(await touchPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.deepEqual(errors, []);
+  if (process.env.UI_EVIDENCE_DIR) {
+    mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
+    await touchPage.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "terminal-input-mobile.png") });
+  }
   await touch.close();
   console.log("PASS touch terminal input line sends whole lines, Enter alone, and yields to direct typing");
 

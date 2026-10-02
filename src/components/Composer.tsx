@@ -199,6 +199,7 @@ export function Composer({
   const { fetchPaneCommands, fetchPaneFiles } = useMachineApi();
   const { settings } = useSettings();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const composingRef = useRef(false);
   // the chat lens's input surface takes the keyboard when it appears (a pane switch remounts
   // it), as the grid does in the terminal lens: a pane picked from the drawer is typed into
   // and once the user picks the pane App had switched to on its own
@@ -531,6 +532,7 @@ export function Composer({
   }, []);
 
   const send = useCallback(() => {
+    if (composingRef.current) return;
     if (!connected || uploading || sending || text.trim().length === 0) return;
     const sent = text;
     const sentAttachments = attachments;
@@ -814,6 +816,8 @@ export function Composer({
 
         <textarea
           ref={textareaRef}
+        onCompositionStart={() => { composingRef.current = true; }}
+        onCompositionEnd={() => { composingRef.current = false; }}
           className={`composer-text${manualHeight !== null ? " is-sized" : ""}`}
           rows={1}
           maxLength={MAX_COMPOSER_CHARS}
