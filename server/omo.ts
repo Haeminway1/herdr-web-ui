@@ -79,11 +79,13 @@ export function selectOmoTranscript(paneId: string, candidates: OmoCandidate[], 
   return fresh.length === 1 ? fresh[0]!.path : null;
 }
 
+/** `root` is already canonical: one realpath per store, not one per candidate and store */
 function inStore(path: string, root: string): boolean {
-  try {
-    const inside = relative(realpathSync(root), path);
-    return !!inside && inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside);
-  } catch { return false; }
+  const inside = relative(root, path);
+  return !!inside && inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside);
+}
+function canonicalRoots(roots: readonly string[]): string[] {
+  return roots.flatMap((root) => { try { return [realpathSync(root)]; } catch { return []; } });
 }
 
 function candidate(path: string, roots: readonly string[], cwd: string): OmoCandidate | null {
@@ -113,7 +115,9 @@ const AGENT_DIR_ENV = ["OMO_CODING_AGENT_DIR", "SENPI_CODING_AGENT_DIR", "PI_COD
 export const defaultOmoAgentDir = (home: string) => join(home, ".omo", "agent");
 
 /** The agent directory of one omo process, from its environment (null when unreadable: the default). */
-export function omoAgentDir(environ: readonly string[] | null, home: string, cwd: string): string {
+export function omoAgentDir(environ: readonly string[] | null, serverHome: string, cwd: string): string {
+  // senpi reads its home from the process: `~` and the default store follow that HOME, not ours
+  const home = environ?.find((word) => word.startsWith("HOME="))?.slice(5) || serverHome;
   for (const name of AGENT_DIR_ENV) {
     const entry = environ?.find((word) => word.startsWith(`${name}=`));
     if (entry === undefined) continue;
@@ -202,7 +206,7 @@ export function earliestStart(starts: readonly (number | null)[]): number | null
 
 /** Bounded, canonical store reads; exact descriptor paths can live outside the cwd slug. */
 export function omoCandidates(cwd: string, home: string, exactPaths: string[] = [], agentDirs: readonly string[] = [defaultOmoAgentDir(home)]): OmoCandidate[] {
-  const roots = agentDirs.map((agentDir) => join(agentDir, "sessions"));
+  const roots = canonicalRoots(agentDirs.map((agentDir) => join(agentDir, "sessions")));
   const paths = new Set(exactPaths);
   for (const agentDir of new Set(agentDirs)) {
     const dir = sessionDir(cwd, agentDir);
