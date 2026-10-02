@@ -21,6 +21,8 @@ test("saves atomically and reads back what it saved, or the defaults", () => {
     assert.deepEqual(config.load(file), { ...config.DEFAULTS });
     config.save(file, { url: "http://localhost:7317", pathPrefix: "" });
     assert.deepEqual(config.load(file), { url: "http://localhost:7317/", pathPrefix: "", openAtLogin: true });
+    fs.writeFileSync(file, "\uFEFF" + JSON.stringify({ url: "https://pc.ts.net:10445/", pathPrefix: "laptop:" }));
+    assert.equal(config.load(file).pathPrefix, "laptop:", "a byte-order mark is not the end of the settings");
     fs.writeFileSync(file, "{not json");
     assert.deepEqual(config.load(file), { ...config.DEFAULTS });
   } finally {
