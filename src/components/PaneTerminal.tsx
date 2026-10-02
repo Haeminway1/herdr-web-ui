@@ -27,6 +27,7 @@ import { Composer } from "./Composer.tsx";
 import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, ServerMessage } from "../../shared/protocol.ts";
 import type { PaneView } from "../lib/actions.ts";
 import { terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
+import type { Outgoing } from "../lib/outbox.ts";
 import { useT } from "../lib/i18n.ts";
 import { isAppShortcut } from "../lib/shortcuts.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
@@ -189,6 +190,10 @@ export function PaneTerminal({
   const [chatRefresh, setChatRefresh] = useState(0);
   // bumped as a composer message goes out: the chat must not title the turn before it as running
   const [chatSent, setChatSent] = useState(0);
+  // composer messages on their way, shown in the chat at once (lib/outbox.ts)
+  const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
+  const outgoingId = useRef(0);
+  const outgoingDone = useCallback((id: number) => setOutgoing((current) => current.filter((item) => item.id !== id)), []);
   const [chatMetadata, setChatMetadata] = useState<{ pane: string; value: ConversationMetadata | null } | null>(null);
   // The prompt the chat shows: while it waits, a message from the composer answers it.
   const [chatPrompt, setChatPrompt] = useState<{ pane: string; value: InteractivePrompt } | null>(null);
@@ -1068,9 +1073,12 @@ export function PaneTerminal({
     if (sent === null) return false;
     term.scrollToBottom();
     setChatSent((current) => current + 1);
+    const id = ++outgoingId.current;
+    setOutgoing((current) => [...current, { id, pane, text, sent: false, at: Date.now() }]);
     // a message went out, from the box or a queued one: the agent's suggestion was for the turn before it
     onChatSuggestion(pane, null);
     return sent.then((result) => {
+      setOutgoing((current) => result.ok ? current.map((item) => (item.id === id ? { ...item, sent: true } : item)) : current.filter((item) => item.id !== id));
       if (!result.ok) return submitNote(result.code, result.message);
       // the chat lens refetches at once so the sent prompt appears without a poll beat
       setChatRefresh((current) => current + 1);
@@ -1277,6 +1285,8 @@ export function PaneTerminal({
             paneId={paneId}
             refreshKey={chatRefresh}
             sentKey={chatSent}
+            outgoing={outgoing.filter((item) => item.pane === paneId)}
+            onOutgoingDone={outgoingDone}
             connected={connected}
             ended={ended}
             agent={agent}

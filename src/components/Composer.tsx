@@ -501,29 +501,30 @@ export function Composer({
     if (!connected || uploading || sending || text.trim().length === 0) return;
     const sent = text;
     const sentAttachments = attachments;
-    const settle = (result: boolean | string): void => {
-      const acknowledged = result === true ? composerDrafts.settle(draftKey, sent) : null;
-      if (!mounted.current) return;
-      if (typeof result === "string") setNote(result);
-      if (acknowledged === null) return;
-      // only what was sent leaves the box: text added after it stays exactly as typed. Changed
-      // inside while on its way, the whole edit stays, and the note says it was not sent
-      const { text: rest, edited } = acknowledged;
-      setCaret(rest.length);
-      textRef.current = rest;
-      caretRef.current = rest.length;
-      setNote(edited ? t("Sent as it was. Your changes made while it was sending stayed here and were not sent.") : null);
-      for (const attachment of sentAttachments) URL.revokeObjectURL(attachment.previewUrl);
-      setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
+    // sent at once: the text leaves the box now and the chat shows it as sending; a send the pane
+    // refused puts it back in front of anything typed since
+    if (!composerDrafts.dispatch(draftKey, sent)) return;
+    setCaret(0);
+    textRef.current = "";
+    caretRef.current = 0;
+    setNote(null);
+    for (const attachment of sentAttachments) URL.revokeObjectURL(attachment.previewUrl);
+    setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
+    const failed = (note: string): void => {
+      composerDrafts.restore(draftKey);
+      if (mounted.current) setNote(note);
     };
-    if (!composerDrafts.begin(draftKey, sent)) return;
+    const settle = (result: boolean | string): void => {
+      if (result === true) return;
+      failed(typeof result === "string" ? result : t("Not sent. It is back in the message box."));
+    };
     try {
       const result = onSend(text);
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return; }
-      void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
+      void result.then(settle).catch(() => failed(t("Not confirmed. Check the terminal before sending again."))).finally(() => composerDrafts.end(draftKey));
     } catch {
+      failed(t("Not confirmed. Check the terminal before sending again."));
       composerDrafts.end(draftKey);
-      if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
   }, [attachments, connected, draftKey, onSend, sending, text, uploading]);
 
