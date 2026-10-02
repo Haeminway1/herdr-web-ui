@@ -150,9 +150,6 @@ it("finds omo's agent directory where the process's environment moved it", () =>
   expect(omoAgentDir(["SENPI_CODING_AGENT_DIR=/senpi", "OMO_CODING_AGENT_DIR=/omo"], "/home/u", "/project")).toBe("/omo");
   expect(omoAgentDir(["OMO_CODING_AGENT_DIR=~/.local/state/omo"], "/home/u", "/project")).toBe("/home/u/.local/state/omo");
   expect(omoAgentDir(["OMO_CODING_AGENT_DIR=rel/agent"], "/home/u", "/project")).toBe("/project/rel/agent");
-  // the process's own HOME places the default store and expands ~, as senpi's homedir() does
-  expect(omoAgentDir(["HOME=/srv/other"], "/home/u", "/project")).toBe("/srv/other/.omo/agent");
-  expect(omoAgentDir(["HOME=/srv/other", "OMO_CODING_AGENT_DIR=~/state"], "/home/u", "/project")).toBe("/srv/other/state");
   // set but empty: senpi keeps its default and looks no further
   expect(omoAgentDir(["OMO_CODING_AGENT_DIR=", "SENPI_CODING_AGENT_DIR=/senpi"], "/home/u", "/project")).toBe("/home/u/.omo/agent");
 });

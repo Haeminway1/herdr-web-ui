@@ -115,9 +115,7 @@ const AGENT_DIR_ENV = ["OMO_CODING_AGENT_DIR", "SENPI_CODING_AGENT_DIR", "PI_COD
 export const defaultOmoAgentDir = (home: string) => join(home, ".omo", "agent");
 
 /** The agent directory of one omo process, from its environment (null when unreadable: the default). */
-export function omoAgentDir(environ: readonly string[] | null, serverHome: string, cwd: string): string {
-  // senpi reads its home from the process: `~` and the default store follow that HOME, not ours
-  const home = environ?.find((word) => word.startsWith("HOME="))?.slice(5) || serverHome;
+export function omoAgentDir(environ: readonly string[] | null, home: string, cwd: string): string {
   for (const name of AGENT_DIR_ENV) {
     const entry = environ?.find((word) => word.startsWith(`${name}=`));
     if (entry === undefined) continue;
