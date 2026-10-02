@@ -17,3 +17,6 @@ _site/
 
 # film footage and renders, made by scripts/film/
 _film/
+
+# desktop shell packages (desktop/package.mjs)
+desktop/out/

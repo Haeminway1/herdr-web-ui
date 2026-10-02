@@ -1,0 +1,18 @@
+{
+  "name": "herdr-desktop",
+  "productName": "herdr",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A desktop window for herdr web ui: it stays in the tray, starts at login, shows alerts natively, and names dropped files by their path.",
+  "license": "MIT",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "package": "node package.mjs"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "44.5.1"
+  }
+}
