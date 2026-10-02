@@ -53,7 +53,7 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 | Danger/tint | `--danger-tint` | `rgba(255, 123, 112, 0.12)` | `rgba(168, 35, 35, 0.1)` |
 | Danger/text | `--danger-text` | `#ffd9d4` | `#8f1d1d` |
 | Meter/plenty | `--meter-ok` | `var(--status-done)` | `var(--status-done)` |
-| Meter/getting low | `--meter-mid` | `#e2b93b` | `#9a6c00` |
+| Meter/getting low | `--meter-mid` | `#e2b93b` | `#865900` |
 | Meter/low | `--meter-low` | `var(--status-blocked)` | `var(--status-blocked)` |
 | Overlay/scrim | `--scrim` | `rgba(8, 6, 4, 0.55)` | `rgba(40, 32, 22, 0.35)` |
 | Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.6)` | `0 0 40px rgba(40, 32, 22, 0.22)` |
