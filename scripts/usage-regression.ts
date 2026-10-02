@@ -171,6 +171,9 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     await panel.waitFor();
     assert.equal(await page.locator(".usage-strip").count(), 0, "the strip beside Settings gives way to the panel");
     assert.equal(asked.length, 1, "only the panel asks for usage");
+    // a phone's drawer shows one line of percents first; the rows unfold from it
+    assert.equal(await panel.locator(".usage-panel-chip").count(), 7, "one chip per account on the folded line");
+    await panel.getByRole("button", { name: "Show plan limits" }).click();
     const rows = panel.locator(".usage-panel-row");
     assert.equal(await rows.count(), 7);
     assert.match(await rows.nth(0).textContent() ?? "", /me@work\.example/, "two Codex accounts are told apart");
