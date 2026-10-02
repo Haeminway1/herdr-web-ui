@@ -16,6 +16,7 @@ import { turnSkills } from "../lib/skillActivity.ts";
 import { ApiError } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
+import { splitIntent } from "../lib/agentIntent.ts";
 import { isLiveWorkTurn, formatWorkDuration, splitTurn, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
@@ -394,6 +395,13 @@ interface TurnProps {
 }
 
 // a turn that did not change keeps its object across polls: skip re-rendering it
+/** what a runtime notice was: gjc's background results by name, anything else by its own first line */
+function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPart, { kind: "notice" }>): string {
+  if (notice.source === undefined || notice.source === "async-result") return t("Background result delivered");
+  const first = notice.text.split("\n").find((line) => line.trim().length > 0)?.trim() ?? notice.source;
+  return first.length > 96 ? `${first.slice(0, 95)}…` : first;
+}
+
 const Turn = memo(function Turn({ paneId, turn, live, last, showThinking }: TurnProps) {
   const t = useT();
   const time = formatTime(turn.ts);
@@ -408,7 +416,7 @@ const Turn = memo(function Turn({ paneId, turn, live, last, showThinking }: Turn
   const notice = turn.parts.find((part): part is Extract<ConversationPart, { kind: "notice" }> => part.kind === "notice");
   if (notice !== undefined) {
     return <details className="chat-compact chat-notice">
-      <summary>{t("Background result delivered")}{time !== null && <> · <time dateTime={turn.ts ?? undefined}>{time}</time></>}</summary>
+      <summary><span className="chat-notice-label">{noticeLabel(t, notice)}</span>{time !== null && <> · <time dateTime={turn.ts ?? undefined}>{time}</time></>}</summary>
       <pre className="chat-compact-text chat-notice-text">{notice.text}</pre>
     </details>;
   }
@@ -422,14 +430,18 @@ const Turn = memo(function Turn({ paneId, turn, live, last, showThinking }: Turn
       <div className="chat-turn-meta">{time !== null && <time dateTime={turn.ts ?? undefined}>{time}</time>}{text.length > 0 && <CopyButton text={text} label={t("Copy message")} />}</div>
     </article>;
   }
-  const { work, answer } = splitTurn(turn.parts);
-  const answerText = answer.map((part) => part.text).join("\n\n");
+  const { work, answer: parts } = splitTurn(turn.parts);
+  // OmO's "I read this as …" lead is its bookkeeping: a quiet line above the answer, not part of it
+  const { intent, answer: lead } = splitIntent(parts[0]?.text ?? "");
+  const answer = parts.map((part, index) => (index === 0 ? lead : part.text));
+  const answerText = answer.join("\n\n");
   const goal = turnGoal(turn.parts);
   return <article className="chat-turn chat-turn-agent">
     <SkillActivityList parts={turn.parts} />
     {goal !== null && <GoalActivity goal={goal} />}
     {work.length > 0 && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} defaultOpen={last} showThinking={showThinking} />}
-    {answer.map((part, index) => <Markdown key={index}>{part.text}</Markdown>)}
+    {intent.length > 0 && <p className="chat-intent">{intent.join(" · ")}</p>}
+    {answer.map((text, index) => <Markdown key={index}>{text}</Markdown>)}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       <CopyButton className="chat-meta-btn" text={answerText} label={t("Copy as markdown")}>MD</CopyButton>
       <CopyButton className="chat-meta-btn" text={plainText(answerText)} label={t("Copy as plain text")}>TXT</CopyButton>

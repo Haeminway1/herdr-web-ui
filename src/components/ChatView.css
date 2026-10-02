@@ -930,3 +930,20 @@
 .chat-abandoned { margin: var(--space-2) 0; }
 .chat-abandoned > summary { font-style: italic; }
 .chat-abandoned-note { margin: var(--space-2) 0 0; color: var(--text-dim); }
+
+/* a notice named by its own first line: one line, cut short, between the divider rules */
+.chat-notice-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* how the agent read the request (OmO's lead line): said once, quietly, above the answer */
+.chat-intent {
+  margin: 0 0 var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
