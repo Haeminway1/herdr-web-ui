@@ -8,6 +8,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
+- While the app is open, an alert drops in from the top edge as a card: an agent that needs input,
+  one that finished (by this device's alert choice) or a terminal that ended. A tap opens that
+  pane, a flick up puts the card away, and it leaves by itself after a few seconds. No card for
+  the pane already open, and none while the bell is off. Settings → Alerts → In the app turns it
+  off; it is on by default. Push and tab alerts are unchanged.
+  ([#313](https://github.com/devswha/herdr-web-ui/pull/313) by @Haeminway1)
 - The sidebar opens a new tab in a workspace (a `+` on the workspace, or on the row when it
   holds a single pane) and splits a pane beside itself, through `POST /api/tab/create` and
   `POST /api/pane/split`. The new pane is selected once herdr reports it.
