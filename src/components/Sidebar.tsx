@@ -11,7 +11,7 @@ import { useInstallPrompt } from "../lib/install.ts";
 import { knownStatus, STATUS_WORD } from "../lib/status.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { UsageMeters } from "./UsageMeters.tsx";
-import { placeLine, shortPathTitle } from "../lib/paneName.ts";
+import { folderName, placeLine, shortPathTitle } from "../lib/paneName.ts";
 import { useT } from "../lib/i18n.ts";
 import { groupDirectories } from "../lib/directoryGroups.ts";
 import { useSettings, type SidebarGrouping } from "../lib/settings.ts";
@@ -85,10 +85,7 @@ export function BackgroundBadge({ count }: { count?: number }) {
 }
 
 function cwdBasename(cwd: string | null | undefined): string {
-  if (!cwd) return "unknown directory";
-  if (/^[A-Za-z]:\/$/u.test(cwd)) return cwd;
-  const trimmed = cwd.replace(/\/+$/, "");
-  return trimmed.split("/").pop() || cwd;
+  return cwd ? folderName(cwd) : "unknown directory";
 }
 
 interface InlineError {

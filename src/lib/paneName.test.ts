@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { placeLine, shortPathTitle } from "./paneName.ts";
+import { folderName, placeLine, shortPathTitle } from "./paneName.ts";
 
 it("shows a path title as its last folder, and leaves any other title alone", () => {
   expect(shortPathTitle("/tmp/audit-oDjsU2/lms-backend")).toBe("lms-backend");
@@ -18,4 +18,17 @@ it("says a workspace and its folder once when they are the same", () => {
   expect(placeLine("lms-backend", "lms-backend")).toBe("lms-backend");
   expect(placeLine("api", "server")).toBe("api · server");
   expect(placeLine("api", "")).toBe("api");
+});
+
+it("finds the folder of a Windows path as of a POSIX one", () => {
+  expect(folderName("C:\\work\\api")).toBe("api");
+  expect(folderName("C:\\work\\api\\")).toBe("api");
+  expect(folderName("C:/work/api")).toBe("api");
+  expect(folderName("\\\\server\\share\\api")).toBe("api");
+  expect(folderName("C:\\")).toBe("C:\\");
+  expect(folderName("C:/")).toBe("C:/");
+  expect(folderName("/home/haemin/dev/api/")).toBe("api");
+  expect(folderName("/")).toBe("/");
+  expect(placeLine("api", folderName("C:\\work\\api"))).toBe("api");
+  expect(placeLine("api", folderName("C:\\work\\server"))).toBe("api · server");
 });
