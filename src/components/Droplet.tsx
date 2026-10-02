@@ -20,6 +20,8 @@ import "./Droplet.css";
 
 /** how long it stays once its text shows */
 export const DROPLET_HOLD_MS = 3600;
+/** the longest a drop takes to fold back up (EXIT_DROP_DELAY and RETURN_SPRING, with room) */
+const EXIT_DEADLINE_MS = 2200;
 /** a drag up this far, or a flick up this fast, puts it away */
 const DISMISS_DRAG_PX = -18;
 const DISMISS_VELOCITY = -0.42; // px per ms
@@ -51,6 +53,8 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   const phaseRef = useRef(phase); phaseRef.current = phase;
   const layoutRef = useRef(layout); layoutRef.current = layout;
   const holdTimer = useRef<number | null>(null);
+  /** a folding drop that has not finished by then is done: animation frames stop in a hidden window */
+  const exitTimer = useRef<number | null>(null);
   const probe = useRef<HTMLDivElement | null>(null);
   // the shapes and the card, moved every frame without React
   const shadowEl = useRef<SVGRectElement | null>(null);
@@ -133,6 +137,13 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     }
     s.drag.to(0, DRAG_SPRING, now);
     run();
+    if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
+    exitTimer.current = window.setTimeout(() => {
+      exitTimer.current = null;
+      if (phaseRef.current !== "out") return;
+      if (frame.current !== null) { cancelAnimationFrame(frame.current); frame.current = null; }
+      settle.current();
+    }, EXIT_DEADLINE_MS);
   }, [run]);
 
   const hold = useCallback((ms: number) => {
@@ -160,6 +171,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   }, [hold, paint, run]);
 
   settle.current = () => {
+    if (exitTimer.current !== null) { window.clearTimeout(exitTimer.current); exitTimer.current = null; }
     const next = pending.current;
     pending.current = null;
     phaseRef.current = "in";
@@ -196,6 +208,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
 
   useEffect(() => () => {
     clearHold();
+    if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
     if (frame.current !== null) cancelAnimationFrame(frame.current);
   }, []);
 

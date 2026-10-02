@@ -25,17 +25,22 @@ export function reportPresence(endpoint: string, visible: boolean): void {
 }
 
 export function watchPresence(endpoint: string, report: (visible: boolean) => void = (visible) => reportPresence(endpoint, visible)): () => void {
-  const visible = (): boolean => document.visibilityState === "visible";
+  // on screen and in front: a window behind others shows no in-app alert, so its pushes go on
+  const visible = (): boolean => document.visibilityState === "visible" && document.hasFocus();
   const now = (): void => report(visible());
   const tick = (): void => { if (visible()) report(true); };
   const gone = (): void => report(false);
   now();
   const timer = window.setInterval(tick, PRESENCE_EVERY_MS);
   document.addEventListener("visibilitychange", now);
+  window.addEventListener("focus", now);
+  window.addEventListener("blur", now);
   window.addEventListener("pagehide", gone);
   return () => {
     window.clearInterval(timer);
     document.removeEventListener("visibilitychange", now);
+    window.removeEventListener("focus", now);
+    window.removeEventListener("blur", now);
     window.removeEventListener("pagehide", gone);
     report(false);
   };

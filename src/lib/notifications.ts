@@ -36,7 +36,8 @@ async function show(paneId: string, title: string, body: string, onClick?: () =>
   // a desktop shell (lib/desktop.ts) shows it natively, and says which pane a click wants. The
   // shell knows best whether its window is in front, behind others or in the tray: it decides.
   if (desktopNotify({ title, body, tag: paneNotificationTag(paneId, machineId), pane_id: paneId, machine_id: machineId })) return;
-  if (typeof document !== "undefined" && !document.hidden) return; // visible tab: the UI already shows it
+  // in front and focused: the in-app alert shows it. A window behind others still notifies.
+  if (typeof document !== "undefined" && !document.hidden && document.hasFocus()) return;
   if (typeof globalThis.Notification === "undefined") return;
   if (globalThis.Notification.permission !== "granted") return;
   const options: NotificationOptions = { body, tag: paneNotificationTag(paneId, machineId), data: { pane_id: paneId, machine_id: machineId }, icon: "/icons/icon-192.png?v=ram1" };
