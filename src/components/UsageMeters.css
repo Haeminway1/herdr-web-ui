@@ -264,6 +264,7 @@
   }
 }
 
+/* mark | name, bar, window | the value, large, as tall as the three lines beside it */
 .usage-panel-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -274,8 +275,17 @@
 
 .usage-panel-row .usage-bar,
 .usage-panel-window {
-  grid-column: 2 / -1;
+  grid-column: 2;
 }
+
+.usage-panel-row .usage-bar {
+  height: 5px;
+}
+
+/* the bar says how much is left at a glance: plenty, getting low, low */
+.usage-panel-row.is-left-ok .usage-bar > span { background: var(--meter-ok); }
+.usage-panel-row.is-left-mid .usage-bar > span { background: var(--meter-mid); }
+.usage-panel-row.is-left-low .usage-bar > span { background: var(--meter-low); }
 
 .usage-panel-name {
   display: flex;
@@ -300,10 +310,29 @@
 }
 
 .usage-panel-value {
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  font-variant-numeric: tabular-nums;
+  grid-column: 3;
+  grid-row: 1 / span 3;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  padding-left: var(--space-1);
   color: var(--text-strong);
+}
+
+.usage-panel-percent {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-panel-count {
+  font-size: var(--fs-2xs);
+  line-height: 1;
+  color: var(--text-dim);
 }
 
 .usage-panel-window {
@@ -312,9 +341,10 @@
   color: var(--text-dim);
 }
 
-.usage-panel-row.is-high .usage-panel-value {
-  color: var(--status-blocked);
-}
+/* the percent takes its bar's colour */
+.usage-panel-row.is-left-ok .usage-panel-percent { color: var(--meter-ok); }
+.usage-panel-row.is-left-mid .usage-panel-percent { color: var(--meter-mid); }
+.usage-panel-row.is-left-low .usage-panel-percent { color: var(--meter-low); }
 
 /* old or missing numbers dim as the footer chip does; the reason reads under them */
 .usage-panel-row.has-problem .usage-panel-value,

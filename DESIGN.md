@@ -52,6 +52,9 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 | Done/tint | `--status-done-tint` | `rgba(147, 195, 107, 0.14)` | `rgba(47, 99, 23, 0.12)` |
 | Danger/tint | `--danger-tint` | `rgba(255, 123, 112, 0.12)` | `rgba(168, 35, 35, 0.1)` |
 | Danger/text | `--danger-text` | `#ffd9d4` | `#8f1d1d` |
+| Meter/plenty | `--meter-ok` | `var(--status-done)` | `var(--status-done)` |
+| Meter/getting low | `--meter-mid` | `#e2b93b` | `#865900` |
+| Meter/low | `--meter-low` | `var(--status-blocked)` | `var(--status-blocked)` |
 | Overlay/scrim | `--scrim` | `rgba(8, 6, 4, 0.55)` | `rgba(40, 32, 22, 0.35)` |
 | Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.6)` | `0 0 40px rgba(40, 32, 22, 0.22)` |
 | Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border)` | `0 16px 48px rgba(40, 32, 22, 0.16), 0 0 0 1px var(--border)` |
@@ -280,8 +283,8 @@ One set for both themes: the card is island black wherever it shows.
 
 ### Sidebar roster row and footer
 - Top bar: **New session** only. Search lives in the command palette, not the roster.
-- Appearance's **Sidebar grouping** is **By workspace** by default, preserving the original
-  workspace headers, folds and merged single-pane rows. **By folder** opts into the grouping below.
+- Appearance's **Sidebar grouping** is **By workspace** by default, with numbered, foldable
+  workspace headers even for one pane. **By folder** opts into the grouping below.
   The choice applies immediately and persists in the browser's existing Settings record. Workspace
   and folder fold keys remain independent when switching modes; original workspace keys are retained.
 - In folder mode, within each PC, panes with the same full cwd share a folder group, including panes from
@@ -295,14 +298,20 @@ One set for both themes: the card is island black wherever it shows.
 - A workspace header shows drag handle, number, editable label, roll-up status and rename action.
   Drag/drop reorders; `Alt+↑/↓` on the handle is the keyboard equivalent.
 - Every pane row is two lines: agent/shell mark, then the editable title alone on line one (full
-  width), and the status chip followed by workspace and cwd on line two. Mark boxes are neutral;
+  width), and the status chip followed by the pane's place on line two. Mark boxes are neutral;
   the selected row gets the amber rail and an amber-edged mark box. Row actions rename or arm a
   3-second, second-click close. Inline server failures stay beside their row.
+- A title that is a working directory written out (`/home/me/dev/api`, `~/dev/api`, `C:\work\api`)
+  shows as its last folder, here, in the header, the palette and every alert; the full path stays
+  in the row's tooltip. Line two names what the group header does not: the folder under a
+  workspace header (nothing when the title or the workspace is already that folder), the workspace under a folder
+  header. The palette, which has no header, names the workspace and the folder, once when they
+  are the same.
 - A PC group header is caret, monitor, name, “This PC” for the local machine and a state dot
   (done = connected, working pulse = connecting/reconnecting, blocked = error). Connected says
   nothing more; every other state is written under the name, with the server's error clamped to
   two lines and complete in the tooltip.
-- Single-pane workspaces merge their workspace handle into the pane row.
+- In folder mode, single-pane workspaces merge their workspace handle into the pane row.
 - Footer holds the contextual **Install app** action, Settings with the plan meters beside it,
   product name and herdr version.
 
@@ -317,6 +326,11 @@ One set for both themes: the card is island black wherever it shows.
   footer and scrolling past the sidebar's top bar: per account its mark, name and plan pill with
   the email or login right-aligned and ellipsized, then one row per limit (label, reset time, right-aligned percent) over a 4px bar. A problem
   note is dim, red for an expired sign-in or a failed request.
+- At the top of the sidebar (Settings → Where), a panel with one row per account: mark, provider
+  and plan (the account only when two of one provider show), a 5px bar, the limit's window and its
+  reset as `1d 3h (10/4 15:00)` (time left in short units, then the local date and time), and the
+  percent large (`--fs-xl`) as tall as those three lines. The bar is coloured by what is left:
+  `--meter-ok` from half, `--meter-mid` from a fifth, `--meter-low` under it (the percent too).
 
 ### New session dialog
 - Agent select comes from `GET /api/agents`; shell-only is always available. Directory defaults to

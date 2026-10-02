@@ -10,6 +10,7 @@ import { rankPanes } from "../lib/paletteSearch.ts";
 import { SHORTCUTS, formatKeys, type ShortcutId } from "../lib/shortcuts.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { displayPaneTitle, StatusBadge } from "./Sidebar.tsx";
+import { placeLine } from "../lib/paneName.ts";
 import { useT } from "../lib/i18n.ts";
 
 const RECENT_KEY = "herdr-web-ui:recent-panes";
@@ -179,7 +180,7 @@ export function CommandPalette({ open, onClose, snapshot, selectedPaneId, view, 
             return (
               <button key={pane.pane_id} id={`palette-item-${index}`} type="button" role="option" className="menu-item palette-pane" aria-selected={activeIndex === index} onMouseEnter={() => setActiveIndex(index)} onClick={() => runPane(pane)}>
                 <span className="palette-mark"><AgentMark agent={pane.agent ?? "shell"} /></span>
-                <span className="menu-item-main"><span className="palette-row-title">{displayPaneTitle(pane)}{selected && <span className="palette-selected">{t("Selected")}</span>}</span><span className="palette-row-subtitle">{workspace?.label ?? t("Unknown workspace")} · {cwdBasename(pane.foreground_cwd ?? pane.cwd)}</span></span>
+                <span className="menu-item-main"><span className="palette-row-title">{displayPaneTitle(pane)}{selected && <span className="palette-selected">{t("Selected")}</span>}</span><span className="palette-row-subtitle">{placeLine(workspace?.label ?? t("Unknown workspace"), cwdBasename(pane.foreground_cwd ?? pane.cwd))}</span></span>
                 <StatusBadge status={pane.agent_status} />
               </button>
             );

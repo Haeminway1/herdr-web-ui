@@ -6,7 +6,7 @@ import "./UsageMeters.css";
 import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
 import { useT, type Translate } from "../lib/i18n.ts";
 import { useSettings, type UsageCount } from "../lib/settings.ts";
-import { formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, tightestWindow, usageName, useUsage, windowLabel } from "../lib/usage.ts";
+import { formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, tightestWindow, usageName, useUsage, windowLabel, formatResetAt, formatResetShort, leftLevel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 
 /** chips the strip beside Settings holds before the rest fold into "+N" */
@@ -187,20 +187,30 @@ export function UsagePanel() {
         {shown.map((usage) => {
           const window = tightestWindow(usage);
           const value = window ? meterPercent(window, count) : 0;
-          const reset = window ? formatResetIn(window.resets_at, now) : null;
+          const reset = window ? formatResetShort(window.resets_at, now) : null;
+          const resetAt = window && reset !== null ? formatResetAt(window.resets_at, now) : null;
           const problem = problemText(t, usage);
+          // two accounts of one provider are told apart by the account; one alone needs no address
+          const twin = shown.some((other) => other !== usage && other.id === usage.id);
           return (
-            <span key={usage.key} className={`usage-panel-row${level(window)}${usage.problem ? " has-problem" : ""}`}>
+            <span key={usage.key} className={`usage-panel-row${level(window)}${window ? ` is-left-${leftLevel(window)}` : ""}${usage.problem ? " has-problem" : ""}`}>
               <AgentMark agent={PROVIDER_MARK[usage.id]} size={16} />
               <span className="usage-panel-name">
                 {PROVIDER_NAME[usage.id]}
                 {usage.plan && <span className="usage-plan" title={usage.plan}>{usage.plan}</span>}
-                {/* two accounts of one provider are told apart by the account */}
-                {usage.account && <span className="usage-account" title={usage.account}>{usage.account}</span>}
+                {twin && usage.account && <span className="usage-account" title={usage.account}>{usage.account}</span>}
               </span>
-              <span className="usage-panel-value">{window ? meterText(window, count) : "—"}</span>
+              {/* the number large; whether it counts what is used or what is left, small under it */}
+              <span className="usage-panel-value" aria-label={window ? meterText(window, count) : undefined}>
+                <span className="usage-panel-percent">{window ? formatPercent(meterPercent(window, count)) : "—"}</span>
+                {window && <span className="usage-panel-count">{t(count === "left" ? "left" : "used")}</span>}
+              </span>
               <span className="usage-bar" aria-hidden="true"><span style={{ width: value > 0 ? `max(4px, ${value}%)` : 0 }} /></span>
-              {window && <span className="usage-panel-window">{windowLabel(window)}{reset ? ` · ${t("Resets in {time}", { time: reset })}` : ""}</span>}
+              {window && (
+                <span className="usage-panel-window" title={reset ? t("Resets in {time}", { time: reset }) : undefined}>
+                  {windowLabel(window)}{reset ? ` · ${reset}` : ""}{resetAt ? ` (${resetAt})` : ""}
+                </span>
+              )}
               {/* the chip beside Settings only dims; the row has room to say why */}
               {problem && (
                 <span className={`usage-panel-problem${isError(usage) ? " is-problem" : ""}`}>

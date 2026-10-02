@@ -174,6 +174,9 @@ for this repository to activate it; the YAML alone does not install the app. Rea
 useful findings versus false positives after two weeks. Keep final merge decisions with
 the maintainer.
 
+See [Terminal input](terminal-input.md) for input readiness, draft ownership and the mobile
+input regression matrix.
+
 ## Layout
 
 | Path | Contents |

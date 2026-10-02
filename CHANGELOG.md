@@ -8,9 +8,63 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
+- Native Windows x64 installation through `install.ps1`, with the same herdr plugin startup
+  and updates. Windows needs Bun and Git, without Node or WSL, and keeps using the terminal
+  screen mirror. ([#330](https://github.com/devswha/herdr-web-ui/pull/330) by @JJLiebig)
 - Settings can choose Chat, Terminal, or Auto as the default view for panes. Changing it resets
   remembered pane views on this device. Shell panes still open in Terminal.
   ([#325](https://github.com/devswha/herdr-web-ui/pull/325) by @Haeminway1)
+- Choose the terminal input line or direct typing on desktop as well as touch screens, and
+  customize or unbind the app's Mod+Shift shortcuts with conflict checks and reset.
+  ([#334](https://github.com/devswha/herdr-web-ui/pull/334))
+
+### Changed
+- In the sidebar's By workspace view, a workspace with one pane keeps its numbered header and
+  can be folded, renamed and reordered from that header, just like a workspace with several panes.
+  ([#332](https://github.com/devswha/herdr-web-ui/pull/332) by @beomq)
+- The top usage panel shows larger percentages, remaining-capacity colors and compact reset
+  countdowns with their local time. Expired reset times stay hidden until fresh usage arrives.
+  ([#336](https://github.com/devswha/herdr-web-ui/pull/336) by @Haeminway1)
+- Pane titles that contain a directory show its last folder, and matching workspace and folder
+  names appear once in the sidebar and command palette, including Windows paths.
+  ([#337](https://github.com/devswha/herdr-web-ui/pull/337) by @Haeminway1)
+- In the sidebar's By workspace view, a pane row no longer repeats the workspace its header names.
+  Its second line shows the folder only when neither the title nor the workspace already says it.
+  ([#358](https://github.com/devswha/herdr-web-ui/pull/358))
+
+### Fixed
+- GJC conversations are resolved from the foreground process directory when it differs from
+  the pane directory. ([#333](https://github.com/devswha/herdr-web-ui/pull/333) by @Kinetic27)
+- Direct terminal input preserves rapid IME commits when punctuation arrives before composition
+  timers run, with a bounded xterm 5.5 backport and Korean final-consonant regression checks.
+  Native Android/Gboard checks also fixed stale editor text after Backspace breaking the next
+  Hangul word. Secret entry now refuses a held or unready attachment and failed PTY writes.
+  ([#334](https://github.com/devswha/herdr-web-ui/pull/334))
+- New session in the browser demo opens the new session instead of leaving a blank page.
+  ([#355](https://github.com/devswha/herdr-web-ui/pull/355))
+- Terminal input keeps multi-character IME commits and emoji while disconnected, waits for the
+  attachment before sending keys, and reports input failures. Unsent input lines survive pane,
+  lens and mode changes; late acknowledgements preserve replacement edits. Composition keeps
+  its Enter and Send button, and terminal key-bar taps wait until it finishes.
+  ([#334](https://github.com/devswha/herdr-web-ui/pull/334))
+- The background tasks list stays below the app header on a short screen, such as a phone held
+  sideways, and scrolls inside the room above the message box.
+  ([#354](https://github.com/devswha/herdr-web-ui/pull/354))
+- The mobile message box sits closer to the home indicator while retaining its base spacing.
+  ([#335](https://github.com/devswha/herdr-web-ui/pull/335) by @Haeminway1)
+- Adding or reconnecting a remote PC says when herdr is not running or not answering there,
+  instead of only `Bridge verification failed (500)`.
+  ([#353](https://github.com/devswha/herdr-web-ui/pull/353))
+- Shift+Enter in the live terminal sends the same newline chord as Alt+Enter, instead of plain
+  Enter that submits an agent's message. Pending IME text is sent before the newline chord.
+  ([#339](https://github.com/devswha/herdr-web-ui/pull/339) by @WOULDU-pres)
+- On Windows, and from an install path with a space or a non-ASCII character, the app page loads
+  instead of the "not built yet" notice. The Windows installer replaces a copy from a release
+  without Windows support, and says so when a release cannot run there.
+  ([#356](https://github.com/devswha/herdr-web-ui/pull/356))
+- On an iPhone home screen app, a text field that keeps its focus with the keyboard down no
+  longer leaves a status-bar band under the message box.
+  ([#349](https://github.com/devswha/herdr-web-ui/pull/349) by @Haeminway1)
 
 ## [0.3.43] - 2026-10-02
 

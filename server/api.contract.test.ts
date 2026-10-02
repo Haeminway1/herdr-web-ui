@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createServer } from "./index.ts";
@@ -737,6 +737,26 @@ describe("WebSocket roles and status push", () => {
   afterAll(async () => {
     if (exitWorkspaceId) await herdrRpc("workspace.close", { workspace_id: exitWorkspaceId }).catch(() => undefined);
     if (qaWorkspaceId) await herdrRpc("workspace.close", { workspace_id: qaWorkspaceId }).catch(() => undefined);
+  });
+
+  it("rejects input from a non-attached client and signals readiness to the owner", async () => {
+    const owner = await RecordingSocket.connect(`ws://localhost:${server.port}/ws`);
+    const stranger = await RecordingSocket.connect(`ws://localhost:${server.port}/ws`);
+    try {
+      owner.send({ type: "attach", pane_id: qaPaneId!, cols: 100, rows: 30 });
+      await owner.waitFor((m) => m.type === "input-ready" && m.pane_id === qaPaneId, "input ready", 15_000);
+      const captured = join(stateDir, "unicode-input.txt");
+      owner.send({ type: "input", pane_id: qaPaneId!, text: `printf '%s' '한글😀' > '${captured}'\r` });
+      const deadline = Date.now() + 5000;
+      while (!existsSync(captured) && Date.now() < deadline) await Bun.sleep(25);
+      expect(readFileSync(captured, "utf8")).toBe("한글😀");
+      stranger.send({ type: "input", pane_id: qaPaneId!, text: "must-not-reach-the-pane" });
+      const error = await stranger.waitFor((m) => m.type === "error", "input rejection", 5000);
+      expect(error.code).toBe("input_not_ready");
+      owner.send({ type: "detach", pane_id: qaPaneId! });
+      owner.send({ type: "input", pane_id: qaPaneId!, text: "must-not-reach-the-pane" });
+      expect((await owner.waitFor((m) => m.type === "error", "detached rejection", 5000)).code).toBe("input_not_ready");
+    } finally { owner.close(); stranger.close(); }
   });
 
   it("never resizes the shared pty for an observe connection, and read-only frames answer input, keys and resize", async () => {

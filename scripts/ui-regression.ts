@@ -17,6 +17,7 @@ import { checkUsageMeters } from "./usage-regression.ts";
 import { checkNotificationStartup } from "./notification-startup-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
+import { checkTerminalInput } from "./terminal-input-regression.ts";
 import { checkDefaultView } from "./default-view-regression.ts";
 import { checkComposerReconnect } from "./composer-reconnect-regression.ts";
 import { checkDroplet } from "./droplet-regression.ts";
@@ -165,6 +166,56 @@ try {
     await until(() => inputs.length > beforeCancel, "terminal Ctrl+C");
     assert.equal(inputs.at(-1)?.text, "\x03", "other terminal control keys must still work");
   }
+  // xterm collapses Shift+Enter into CR unless the terminal supplies a newline chord.
+  // Check actual browser key events and the frames sent to an owned pane, including keyup.
+  for (const [shortcut, expected] of [
+    ["Enter", "\r"],
+    ["Shift+Enter", "\x1b\r"],
+    ["Alt+Enter", "\x1b\r"],
+  ]) {
+    await terminalInput.focus();
+    const beforeEnter = inputs.length;
+    await page.keyboard.press(shortcut!);
+    await until(() => inputs.length > beforeEnter, `terminal ${shortcut}`);
+    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    assert.deepEqual(inputs.slice(beforeEnter).map(({ pane_id, text }) => ({ pane_id, text })),
+      [{ pane_id: paneA, text: expected }], `${shortcut} must send its sequence exactly once`);
+  }
+  // A composition commit belongs to xterm/IME; the custom binding must not replace it.
+  for (const composition of [{ isComposing: true, keyCode: 13 }, { isComposing: false, keyCode: 229 }]) {
+    const beforeIme = inputs.length;
+    await terminalInput.dispatchEvent("keydown", {
+      key: "Enter", code: "Enter", shiftKey: true, ...composition, bubbles: true, cancelable: true,
+    });
+    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    assert.equal(inputs.slice(beforeIme).some(({ text }) => text === "\x1b\r"), false,
+      "IME commits must not receive the custom Shift+Enter sequence");
+  }
+  // compositionend queues its send for the next timer. A following non-composing
+  // Shift+Enter must let xterm flush that commit before sending the newline.
+  await terminalInput.focus();
+  const beforeCommittedIme = inputs.length;
+  await terminalInput.evaluate(async (element) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.value = "";
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "한";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "한", bubbles: true }));
+    // An earlier composition update has established the committed span.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "한", bubbles: true }));
+    const enter = { key: "Enter", code: "Enter", keyCode: 13, which: 13,
+      shiftKey: true, isComposing: false, bubbles: true, cancelable: true };
+    textarea.dispatchEvent(new KeyboardEvent("keydown", enter));
+    textarea.dispatchEvent(new KeyboardEvent("keyup", enter));
+  });
+  await until(() => inputs.length >= beforeCommittedIme + 2, "IME commit followed by Shift+Enter");
+  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  assert.deepEqual(inputs.slice(beforeCommittedIme).map(({ pane_id, text }) => ({ pane_id, text })),
+    [{ pane_id: paneA, text: "한" }, { pane_id: paneA, text: "\x1b\r" }],
+    "a pending IME commit must precede Shift+Enter without a delayed duplicate");
+  console.log("PASS terminal Shift+Enter sends a newline chord once and preserves Enter, Alt+Enter and IME");
+  console.log("PASS pending IME commit precedes Shift+Enter without duplicate text");
   // a pane shortcut switches panes and types nothing: xterm used to send ESC[1;6B / ESC[1;6A too
   const selectedTitle = () => page.locator(".pane-item.is-selected .pane-select").getAttribute("title");
   for (const key of ["Control+Shift+ArrowDown", "Control+Shift+ArrowUp"]) {
@@ -629,6 +680,8 @@ try {
   assert.deepEqual(errors, []);
   console.log("PASS a phone offers Claude's suggestion as a chip only once Settings turns it on");
 
+  await checkTerminalInput(browser, origin, paneA, paneB);
+
   // the terminal lens on a touch screen: an input line sends whole lines; the grid raises no keyboard
   const touch = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const touchPage = await touch.newPage();
@@ -659,19 +712,35 @@ try {
   await touchPage.waitForTimeout(NO_SEND_WAIT_MS);
   assert.equal(touchSent.length, imeSent);
   assert.equal(await line.inputValue(), "echo 한글");
+  await line.dispatchEvent("compositionstart", { data: "" });
+  const beforeComposeSend = touchSent.length;
+  await touchPage.getByRole("button", { name: "Send to the terminal", exact: true }).click();
+  await touchPage.waitForTimeout(NO_SEND_WAIT_MS);
+  assert.equal(touchSent.length, beforeComposeSend, "button cannot submit an unfinished composition");
+  await line.dispatchEvent("compositionend", { data: "한글" });
   await line.fill("");
   // an empty line's button is Enter alone
   const enters = touchSent.length;
   await touchPage.getByRole("button", { name: "Press Enter in the terminal", exact: true }).click();
   await until(() => touchSent.length > enters && touchSent.at(-1)?.type === "input" && touchSent.at(-1)?.text === "\r", "enter from the empty line");
+  await line.fill("unsent 한글 😀");
   // typing straight into the grid is one tap away, and gives the keyboard back to it
   await touchPage.getByRole("button", { name: "Type straight into the terminal", exact: true }).click();
   assert.equal(await touchPage.locator(".terminal-input").count(), 0);
   assert.equal(await touchPage.locator(".xterm-helper-textarea").getAttribute("inputmode"), null);
   await touchPage.getByRole("button", { name: "Type straight into the terminal", exact: true }).click();
   await line.waitFor();
+  assert.equal(await line.inputValue(), "unsent 한글 😀", "mode switches preserve the unsent line");
+  await touchPage.reload();
+  await line.waitFor();
+  assert.equal(await line.inputValue(), "unsent 한글 😀", "reload preserves the unsent line");
+  await line.fill("");
   assert.equal(await touchPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.deepEqual(errors, []);
+  if (process.env.UI_EVIDENCE_DIR) {
+    mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
+    await touchPage.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "terminal-input-mobile.png") });
+  }
   await touch.close();
   console.log("PASS touch terminal input line sends whole lines, Enter alone, and yields to direct typing");
 
