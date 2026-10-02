@@ -62,6 +62,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   instead of the "not built yet" notice. The Windows installer replaces a copy from a release
   without Windows support, and says so when a release cannot run there.
   ([#356](https://github.com/devswha/herdr-web-ui/pull/356))
+- On an iPhone home screen app, a text field that keeps its focus with the keyboard down no
+  longer leaves a status-bar band under the message box.
+  ([#349](https://github.com/devswha/herdr-web-ui/pull/349) by @Haeminway1)
 
 ## [0.3.43] - 2026-10-02
 
