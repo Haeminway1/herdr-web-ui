@@ -23,14 +23,30 @@ const OMO_EXTENSION = /\/omo-ai\/plugin\/?$/;
  * Words after a `--` are the prompt, not options: senpi loads no extension from them.
  */
 export function isOmoProcess(argv: readonly string[]): boolean {
-  const runtime = JS_RUNTIME.test(argv[0] ?? "");
-  const program = runtime ? argv.slice(1).find((word) => !word.startsWith("-")) : argv[0];
-  if (program === undefined || program.includes(":")) return false;
+  const words = argv.map(windowsPath);
+  const runtime = JS_RUNTIME.test(words[0] ?? "");
+  const at = runtime ? words.slice(1).findIndex((word) => !word.startsWith("-")) + 1 : 0;
+  const program = at > 0 || !runtime ? words[at] : undefined;
+  if (program === undefined || isPathList(program)) return false;
   if (OMO_PROCESS.test(program)) return true;
   if (!runtime || !SENPI_ENTRY.test(program)) return false;
-  const prompt = argv.indexOf("--", argv.indexOf(program));
-  const options = prompt === -1 ? argv : argv.slice(0, prompt);
-  return options.some((word, at) => options[at - 1] === "--extension" && !word.includes(":") && OMO_EXTENSION.test(word));
+  const prompt = words.indexOf("--", at);
+  const options = prompt === -1 ? words : words.slice(0, prompt);
+  return options.some((word, index) => options[index - 1] === "--extension" && !isPathList(word) && OMO_EXTENSION.test(word));
+}
+
+/**
+ * A Windows PC's process words read as the same paths: backslashes as slashes, and a program's
+ * .exe/.cmd dropped (`C:\Users\me\.bun\bin\bun.exe` is bun, `omo.cmd` is omo).
+ */
+function windowsPath(word: string): string {
+  if (!/\\|^[A-Za-z]:[\\/]|\.(exe|cmd|bat)$/i.test(word)) return word;
+  return word.replace(/\\/g, "/").replace(/\.(exe|cmd|bat)$/i, "");
+}
+
+/** A PATH-like list (`a:b`), not one path: a drive's colon (`C:/…`) does not make one. */
+function isPathList(word: string): boolean {
+  return word.replace(/^[A-Za-z]:\//, "").includes(":");
 }
 
 export interface OmoCandidate { path: string; id: string; createdAt: number | null }
@@ -115,7 +131,15 @@ export function processEnviron(pid: number): string[] | null {
   try { return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0"); } catch { return null; }
 }
 
-const sessionDir = (cwd: string, agentDir: string) => join(agentDir, "sessions", `-${cwd.replaceAll("/", "-")}--`);
+/**
+ * omo's engine (senpi, core/session-manager.js) names a cwd's session folder exactly so: the
+ * leading slash dropped, then every slash, backslash and colon a dash. A Windows cwd
+ * (`C:\\Users\\me\\app`) is `--C--Users-me-app--`; the slash-only rule this used missed it.
+ */
+export function omoSessionFolder(cwd: string): string {
+  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+const sessionDir = (cwd: string, agentDir: string) => join(agentDir, "sessions", omoSessionFolder(cwd));
 
 // A holder's start is floored to the second (as `ps -o lstart`), ours is in clock ticks.
 const HOLDER_START_TOLERANCE_MS = 3000;
@@ -141,6 +165,19 @@ export function heldSessionIds(dir: string, pid: number, startedAt: number | nul
     } catch { /* this pid holds nothing here, or the record is unreadable */ }
   }
   return ids;
+}
+
+/**
+ * A runtime as the sessions its processes hold now (`held`, by id) tell it: the held one
+ * outranks a launch --session-id and herdr's session path or id, which /new leaves behind.
+ * omo writes a session's file with its first message, so one held with no file yet is a
+ * conversation not begun (/new, nothing typed since): it names that id alone, never a file
+ * from before.
+ */
+export function heldRuntime(runtime: OmoRuntime, held: readonly string[], files: readonly OmoCandidate[]): OmoRuntime {
+  if (held.length === 0) return runtime;
+  const current = files.filter((file) => held.includes(file.id)).map((file) => file.path);
+  return { ...runtime, paths: current, ids: current.length > 0 ? [] : [...held] };
 }
 
 /** When the process that holds a session here started, by its own record: where the system does not tell (macOS). */
@@ -246,16 +283,8 @@ export function omoTranscriptsOfCwd(cwd: string, panes: HerdrPane[], infos: Read
   const files = omoCandidates(cwd, home, runtimes.flatMap((runtime) => runtime.paths), [...agentDirs]);
   // Match canonical candidates even when /proc names a symlink into the store.
   for (const runtime of runtimes) runtime.paths = runtime.paths.flatMap((path) => { try { return [realpathSync(path)]; } catch { return []; } });
-  for (const runtime of runtimes) {
-    const ids = held.get(runtime.paneId) ?? [];
-    const current = files.filter((file) => ids.includes(file.id)).map((file) => file.path);
-    if (current.length === 0) continue;
-    // The session held now outranks a launch --session-id and herdr's session path or id,
-    // which /new leaves behind.
-    runtime.paths = current;
-    runtime.ids = [];
-  }
-  return new Map(runtimes.map((runtime) => [runtime.paneId, { path: selectOmoTranscript(runtime.paneId, files, runtimes), startedAt: runtime.startedAt ?? since.get(runtime.paneId) ?? null }]));
+  const current = runtimes.map((runtime) => heldRuntime(runtime, held.get(runtime.paneId) ?? [], files));
+  return new Map(current.map((runtime) => [runtime.paneId, { path: selectOmoTranscript(runtime.paneId, files, current), startedAt: runtime.startedAt ?? since.get(runtime.paneId) ?? null }]));
 }
 
 export async function omoTranscriptForPane(paneId: string, cwd: string, panes: HerdrPane[], home = process.env["HOME"] ?? ""): Promise<string | null> {

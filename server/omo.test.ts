@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane } from "../shared/protocol.ts";
-import { heldSessionIds, isOmoProcess, omoAgentDir, omoCandidates, omoTranscriptsOfCwd, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
+import { heldRuntime, heldSessionIds, isOmoProcess, omoAgentDir, omoSessionFolder, omoCandidates, omoTranscriptsOfCwd, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
 import { processStartedAt } from "./process-start.ts";
 import { parseOmpTranscript } from "./transcript-records.ts";
 
@@ -24,6 +24,18 @@ it("takes omo from the program a process runs: its own binary, or the script of 
   expect(isOmoProcess(["omo"])).toBeTrue();
   expect(isOmoProcess(["/home/u/.local/bin/omo", "--session-id", "abcdefgh"])).toBeTrue();
   expect(isOmoProcess([`${OMO_AI}/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`, "--output-format", "stream-json"])).toBeTrue();
+});
+
+it("reads a Windows PC's process words: bun.exe, backslashes, and a drive's colon", () => {
+  const modules = "C:\\Users\\me\\.bun\\install\\global\\node_modules";
+  expect(isOmoProcess(["C:\\Users\\me\\.bun\\bin\\bun.exe", `${modules}\\@code-yeongyu\\senpi\\dist\\bundle\\cli.js`, "--extension", `${modules}\\omo-ai\\plugin`])).toBeTrue();
+  expect(isOmoProcess(["bun.exe", `${modules}\\omo-ai\\plugin\\runtime\\ast-grep-mcp\\cli.js`, "mcp"])).toBeTrue();
+  expect(isOmoProcess(["node.exe", "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\omo-ai\\bin\\omo.js"])).toBeTrue();
+  expect(isOmoProcess(["C:\\Users\\me\\AppData\\Roaming\\npm\\omo.cmd"])).toBeTrue();
+  // still only the program: bun.exe running something else, or a PATH list, is not omo
+  expect(isOmoProcess(["bun.exe", "C:\\work\\app\\server.js"])).toBeFalse();
+  expect(isOmoProcess(["bun.exe", "C:\\a\\omo-ai\\bin;D:\\b"])).toBeFalse();
+  expect(isOmoProcess(["/bin/sh", "-c", "a:/x/omo-ai/bin"])).toBeFalse();
 });
 
 it("takes the engine a global bun install hoists next to omo-ai for omo when it loads omo-ai's plugin", () => {
@@ -109,6 +121,19 @@ it("reads only the live process's own holder records, never a reused pid's lefto
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+it("shows no earlier conversation after /new, while the session held now has no file yet", () => {
+  // the process started at 10s and wrote /fresh.jsonl; /new then made it hold a session not written yet
+  const afterNew = heldRuntime(runtime("a"), ["new-session"], files);
+  expect(selectOmoTranscript("a", files, [runtime("a")], 20_000)).toBe("/fresh.jsonl");
+  expect(selectOmoTranscript("a", files, [afterNew], 20_000)).toBeNull();
+  expect(selectOmoTranscript("a", files, [heldRuntime(runtime("a", 10_000, [], ["fresh-session"]), ["new-session"], files)], 20_000)).toBeNull();
+  // its first message writes the file, and the chat follows it
+  const written = [...files, { path: "/new.jsonl", id: "new-session", createdAt: 15_000 }];
+  expect(selectOmoTranscript("a", written, [heldRuntime(runtime("a"), ["new-session"], written)], 20_000)).toBe("/new.jsonl");
+  // holding nothing changes nothing
+  expect(heldRuntime(runtime("a", 10_000, ["/old.jsonl"]), [], files)).toEqual(runtime("a", 10_000, ["/old.jsonl"]));
+});
+
 it("does not pin a launch session id after a new unclaimed session appears", () => {
   const newer = [...files, { path: "/new.jsonl", id: "new-session", createdAt: 15_000 }];
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, [], ["old-session"])], 20_000)).toBeNull();
@@ -168,4 +193,10 @@ it("binds an omo pane whose launcher moved its agent directory out of ~/.omo", (
     expect(omoCandidates(cwd, home)).toEqual([]);
     expect(omoCandidates(cwd, home, [], [join(home, ".omo", "agent"), agentDir]).map((file) => file.path)).toEqual([path]);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("names a cwd's session folder as omo's engine does, a Windows cwd included", () => {
+  expect(omoSessionFolder("/home/u/dev/app")).toBe("--home-u-dev-app--");
+  expect(omoSessionFolder("C:\\Users\\me\\dev\\app")).toBe("--C--Users-me-dev-app--");
+  expect(omoSessionFolder("C:/Users/me/app")).toBe("--C--Users-me-app--");
 });
