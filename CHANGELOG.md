@@ -7,6 +7,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Fixed
+- The mobile message box sits closer to the home indicator while retaining its base spacing.
+  ([#335](https://github.com/devswha/herdr-web-ui/pull/335) by @Haeminway1)
+
 ## [0.3.43] - 2026-10-02
 
 ### Changed
