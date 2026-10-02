@@ -1,117 +1,95 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { flickVelocity, onDroplet, type PressSample, type QueuedDroplet } from "../lib/droplet.ts";
 import {
-  COLLAPSE_SPRING, DRAG_SPRING, DROP_SPRING, ENTER_EXPAND_DELAY, ENTER_REVEAL_DELAY, ENTER_TINT_DELAY, EXIT_COLLAPSE_DELAY,
-  EXIT_DROP_DELAY, EXPAND_SPRING, FADE_SPRING, GOO_BLUR, GOO_INSET_RATIO, RETURN_SPRING, REVEAL_SPRING, SHADOW_BLUR, SHADOW_DY,
-  Spring, TINT_SPRING, contentStyle, dropletGeometry, dropletLayout, gooMatrix, tintColor, type DropletLayout, type Rgb,
+  DRAG_SPRING, GROW_SPRING, HIDE_SPRING, REVEAL_DELAY, REVEAL_SPRING, SHRINK_DELAY, SHRINK_SPRING,
+  Spring, contentStyle, islandLayout, islandShape, type IslandLayout,
 } from "../lib/dropletMotion.ts";
 import { useT } from "../lib/i18n.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import "./Droplet.css";
 
 /**
- * The in-app alert (lib/droplet.ts), as the Triad student app shows it (expo-dynamic-notifications,
- * lib/dropletMotion.ts): a drop grows out of the top edge on a neck of liquid, stretches as it
- * falls, turns from black to white, breaks free and spreads into a card. It hangs from the safe
- * area's top, so a Dynamic Island, a notch and a desktop window all take the same path: no device
- * is guessed. One shows at a time; a newer one folds the current one away and takes its place.
- * A tap opens the pane, a flick up puts it away, and it leaves by itself after a while.
+ * The phone's in-app alert (lib/droplet.ts), as the iPhone's Dynamic Island shows one
+ * (lib/dropletMotion.ts): the black island grows into a wide rounded banner with the pane's name
+ * and what it wants, and shrinks back when it is done. On an iPhone with an island it grows out
+ * of the island; elsewhere a pill appears under the top of the screen and grows the same way.
+ * One shows at a time; a newer one has the current one shrink away first. A tap opens the pane,
+ * a flick up puts it away, and it leaves by itself after a while.
  */
 
 /** how long it stays once its text shows: long enough to read a pane's name and what it wants */
 export const DROPLET_HOLD_MS = 5000;
-/** the longest a drop takes to fold back up (EXIT_DROP_DELAY and RETURN_SPRING, with room) */
-const EXIT_DEADLINE_MS = 2200;
+/** the longest the island takes to shrink back (SHRINK_DELAY and SHRINK_SPRING, with room) */
+const EXIT_DEADLINE_MS = 1200;
 /** a drag up this far, or a flick up this fast, puts it away */
 const DISMISS_DRAG_PX = -18;
 const DISMISS_VELOCITY = -0.42; // px per ms
 /** a press that moved less than this is a tap */
 const TAP_SLOP_PX = 6;
-/** the drop's colours, read from --droplet-island and --droplet-card (the theme decides the card) */
-function themeColors(probe: HTMLElement | null): { island: Rgb; card: Rgb } {
-  const read = (name: string, fallback: Rgb): Rgb => {
-    if (!probe) return fallback;
-    probe.style.color = `var(${name})`;
-    const match = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(probe).color);
-    return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : fallback;
-  };
-  return { island: read("--droplet-island", [0, 0, 0]), card: read("--droplet-card", [28, 28, 30]) };
-}
 
-/** a touch screen gets the drop; a mouse gets the toast (AlertToasts.tsx) */
+/** a touch screen gets the island; a mouse gets the toast (AlertToasts.tsx) */
 export function prefersDroplet(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
 }
 
 /**
  * An iPhone in portrait whose safe area is as tall as a Dynamic Island's (59px and up; a notch is
- * 44 to 50): the drop leaves from the island itself. Anything else leaves from the top edge.
+ * 44 to 50): the alert grows out of the island itself. Anything else grows from a pill.
  */
 function hasDynamicIsland(insetTop: number): boolean {
   return /iPhone/.test(navigator.userAgent) && insetTop >= 54 && window.innerHeight > window.innerWidth;
 }
 
-type Phase = "in" | "out";
+/** the safe area as CSS reports it: env() is readable only through a laid-out element */
+function measureLayout(probe: HTMLElement | null): IslandLayout {
+  const style = probe ? getComputedStyle(probe) : null;
+  const px = (value: string | undefined): number => Number.parseFloat(value ?? "") || 0;
+  const top = px(style?.paddingTop);
+  return islandLayout(window.innerWidth, top, px(style?.paddingLeft), px(style?.paddingRight), hasDynamicIsland(top));
+}
 
 function reducedMotion(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 }
 
-/** the safe area as CSS reports it: env() is readable only through a laid-out element */
-function measureLayout(probe: HTMLElement | null): DropletLayout {
-  const style = probe ? getComputedStyle(probe) : null;
-  const px = (value: string | undefined): number => Number.parseFloat(value ?? "") || 0;
-  const top = px(style?.paddingTop);
-  return dropletLayout(window.innerWidth, top, px(style?.paddingLeft), px(style?.paddingRight), hasDynamicIsland(top));
-}
+type Phase = "in" | "out";
 
 export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string) => void }) {
   const t = useT();
   const [current, setCurrent] = useState<QueuedDroplet | null>(null);
   const [phase, setPhase] = useState<Phase>("in");
-  const [layout, setLayout] = useState<DropletLayout | null>(null);
+  const [layout, setLayout] = useState<IslandLayout | null>(null);
   const pending = useRef<QueuedDroplet | null>(null);
   const currentRef = useRef(current); currentRef.current = current;
   const phaseRef = useRef(phase); phaseRef.current = phase;
   const layoutRef = useRef(layout); layoutRef.current = layout;
   const holdTimer = useRef<number | null>(null);
-  /** a folding drop that has not finished by then is done: animation frames stop in a hidden window */
+  /** an island that has not finished shrinking by then is done: animation frames stop in a hidden window */
   const exitTimer = useRef<number | null>(null);
   const probe = useRef<HTMLDivElement | null>(null);
-  const colors = useRef<{ island: Rgb; card: Rgb }>({ island: [0, 0, 0], card: [28, 28, 30] });
-  // the shapes and the card, moved every frame without React
-  const shadowEl = useRef<SVGRectElement | null>(null);
-  const neckEl = useRef<SVGRectElement | null>(null);
-  const dropEl = useRef<SVGRectElement | null>(null);
-  const cardEl = useRef<HTMLButtonElement | null>(null);
+  const islandEl = useRef<HTMLButtonElement | null>(null);
   const bodyEl = useRef<HTMLSpanElement | null>(null);
-  const springs = useRef({ drop: new Spring(0), tint: new Spring(0), expand: new Spring(0), reveal: new Spring(0), drag: new Spring(0) });
+  const springs = useRef({ grow: new Spring(0), reveal: new Spring(0), drag: new Spring(0) });
   const frame = useRef<number | null>(null);
   const lastFrame = useRef(0);
-  const dragging = useRef(false);
   // a press that dragged ends in a click on a mouse: that click is not a tap
   const dragged = useRef(false);
   const press = useRef<{ id: number; y: number; samples: PressSample[]; moved: boolean } | null>(null);
 
   const paint = useCallback(() => {
     const box = layoutRef.current;
-    if (!box) return;
+    const el = islandEl.current;
+    if (!box || !el) return;
     const s = springs.current;
-    const g = dropletGeometry(s.drop.value, s.expand.value, box);
-    const set = (el: SVGRectElement | null, x: number, y: number, w: number, h: number, r: number): void => {
-      if (!el) return;
-      el.setAttribute("x", String(x)); el.setAttribute("y", String(y));
-      el.setAttribute("width", String(Math.max(w, 0))); el.setAttribute("height", String(Math.max(h, 0)));
-      el.setAttribute("rx", String(Math.max(r, 0)));
-    };
-    const lift = s.drag.value;
-    set(shadowEl.current, g.x, g.y + lift, g.width, g.height, g.radius);
-    shadowEl.current?.setAttribute("opacity", String(g.shadowOpacity));
-    set(neckEl.current, g.neckX, g.neckY, g.neckWidth, g.neckHeight + lift, g.neckWidth / 2);
-    set(dropEl.current, g.x, g.y + lift, g.width, g.height, g.radius);
-    dropEl.current?.setAttribute("fill", tintColor(s.tint.value, colors.current.island, colors.current.card));
-    const look = contentStyle(s.reveal.value, g);
-    if (cardEl.current) cardEl.current.style.transform = `translateY(${g.offsetY + lift}px)`;
+    const shape = islandShape(s.grow.value, box);
+    el.style.left = `${shape.left}px`;
+    el.style.top = `${shape.top}px`;
+    el.style.width = `${shape.width}px`;
+    el.style.height = `${shape.height}px`;
+    el.style.borderRadius = `${shape.radius}px`;
+    el.style.opacity = String(shape.opacity);
+    el.style.transform = `translateY(${s.drag.value}px)`;
+    const look = contentStyle(s.reveal.value);
     if (bodyEl.current) {
       bodyEl.current.style.opacity = String(look.opacity);
       bodyEl.current.style.transform = `scale(${look.scale})`;
@@ -126,7 +104,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     const tick = (now: number): void => {
       const s = springs.current;
       let moving = false;
-      for (const spring of [s.drop, s.tint, s.expand, s.reveal, s.drag]) moving = spring.step(lastFrame.current, now) || moving;
+      for (const spring of [s.grow, s.reveal, s.drag]) moving = spring.step(lastFrame.current, now) || moving;
       lastFrame.current = now;
       paint();
       if (moving) frame.current = requestAnimationFrame(tick);
@@ -150,14 +128,8 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     setPhase("out");
     const s = springs.current;
     const now = performance.now();
-    if (reducedMotion()) {
-      for (const spring of [s.drop, s.tint, s.expand, s.reveal]) spring.to(0, FADE_SPRING, now);
-    } else {
-      s.reveal.to(0, FADE_SPRING, now);
-      s.expand.to(0, COLLAPSE_SPRING, now, EXIT_COLLAPSE_DELAY);
-      s.tint.to(0, RETURN_SPRING, now, EXIT_DROP_DELAY);
-      s.drop.to(0, RETURN_SPRING, now, EXIT_DROP_DELAY);
-    }
+    s.reveal.to(0, HIDE_SPRING, now);
+    s.grow.to(0, reducedMotion() ? HIDE_SPRING : SHRINK_SPRING, now, SHRINK_DELAY);
     s.drag.to(0, DRAG_SPRING, now);
     run();
     if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
@@ -176,21 +148,19 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
 
   const enter = useCallback(() => {
     const s = springs.current;
-    for (const spring of [s.drop, s.tint, s.expand, s.reveal, s.drag]) spring.set(0);
+    for (const spring of [s.grow, s.reveal, s.drag]) spring.set(0);
     const now = performance.now();
     if (reducedMotion()) {
-      // no fall and no spread: the card fades in where it rests
-      s.drop.set(1); s.expand.set(1); s.tint.set(1);
-      s.reveal.to(1, FADE_SPRING, now);
+      // no growth: the banner fades in where it rests
+      s.grow.set(1);
+      s.reveal.to(1, HIDE_SPRING, now);
     } else {
-      s.drop.to(1, DROP_SPRING, now);
-      s.tint.to(1, TINT_SPRING, now, ENTER_TINT_DELAY);
-      s.expand.to(1, EXPAND_SPRING, now, ENTER_EXPAND_DELAY);
-      s.reveal.to(1, REVEAL_SPRING, now, ENTER_REVEAL_DELAY);
+      s.grow.to(1, GROW_SPRING, now);
+      s.reveal.to(1, REVEAL_SPRING, now, REVEAL_DELAY);
     }
     paint();
     run();
-    hold(ENTER_REVEAL_DELAY + DROPLET_HOLD_MS);
+    hold(REVEAL_DELAY + DROPLET_HOLD_MS);
   }, [hold, paint, run]);
 
   settle.current = () => {
@@ -208,15 +178,14 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
       setCurrent(notice);
       return;
     }
-    // one at a time: the newest waits for the current one to fold away
+    // one at a time: the newest waits for the current one to shrink away
     pending.current = notice;
     leave();
   }), [leave]);
 
-  // each notice starts its fall once its shapes are in the page
+  // each notice starts growing once its island is in the page
   useLayoutEffect(() => {
     if (!current) return;
-    colors.current = themeColors(probe.current);
     setLayout(measureLayout(probe.current));
   }, [current]);
   useLayoutEffect(() => {
@@ -238,7 +207,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   }, []);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    // a right-click ends in no click: holding for it would leave the card up for good
+    // a right-click ends in no click: holding for it would leave the island up for good
     if (phaseRef.current === "out" || event.button !== 0) return;
     dragged.current = false;
     press.current = { id: event.pointerId, y: event.clientY, samples: [{ y: event.clientY, t: event.timeStamp }], moved: false };
@@ -251,7 +220,6 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     const dy = event.clientY - p.y;
     if (Math.abs(dy) > TAP_SLOP_PX) p.moved = true;
     p.samples.push({ y: event.clientY, t: event.timeStamp });
-    dragging.current = true;
     // up follows the finger, down only gives a little
     springs.current.drag.set(Math.max(-120, Math.min(24, dy < 0 ? dy : dy * 0.35)));
     paint();
@@ -260,7 +228,6 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     const p = press.current;
     if (!p || p.id !== event.pointerId) return;
     press.current = null;
-    dragging.current = false;
     const dy = event.clientY - p.y;
     const velocity = flickVelocity(p.samples, event.clientY, event.timeStamp);
     if (!cancelled && !p.moved) return; // a tap: onClick opens it
@@ -277,38 +244,14 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   if (!current) return <div ref={probe} className="droplet-probe" aria-hidden="true" />;
   const what = t(current.kind === "blocked" ? "Needs input" : current.kind === "done" ? "Finished" : "terminal ended");
   const detail = current.machine ? `${current.machine} · ${what}` : what;
-  const box = layout;
-  const inset = GOO_BLUR * GOO_INSET_RATIO;
   return (
     <div className="droplet" role="status" aria-live="polite" data-phase={phase} data-kind={current.kind} key={current.id}>
       <div ref={probe} className="droplet-probe" aria-hidden="true" />
-      {box && <>
-        <svg className="droplet-canvas" width={box.width} height={box.canvasHeight} viewBox={`0 0 ${box.width} ${box.canvasHeight}`} aria-hidden="true" focusable="false">
-          <defs>
-            <filter id="droplet-goo" x="-50%" y="-200%" width="200%" height="500%" colorInterpolationFilters="sRGB">
-              <feGaussianBlur in="SourceGraphic" stdDeviation={GOO_BLUR} />
-              <feColorMatrix mode="matrix" values={gooMatrix()} />
-            </filter>
-            <filter id="droplet-shadow" x="-50%" y="-100%" width="200%" height="300%">
-              <feDropShadow dx="0" dy={SHADOW_DY} stdDeviation={SHADOW_BLUR / 2} style={{ floodColor: "var(--droplet-shadow)" }} />
-            </filter>
-          </defs>
-          <rect ref={shadowEl} className="droplet-shadow" filter="url(#droplet-shadow)" />
-          <g filter="url(#droplet-goo)">
-            <rect className="droplet-island" x={box.centerX - box.islandWidth / 2 + inset} y={box.islandTop + inset}
-              width={box.islandWidth - inset * 2} height={box.islandHeight - inset * 2} rx={Math.max(box.islandRadius - inset, 0)} />
-            <rect ref={neckEl} className="droplet-island" />
-            <rect ref={dropEl} />
-          </g>
-          {/* the phone's own island, drawn sharp over it so the liquid leaves from it */}
-          {box.islandShown && <rect className="droplet-island" x={box.centerX - box.islandWidth / 2} y={box.islandTop}
-            width={box.islandWidth} height={box.islandHeight} rx={box.islandRadius} />}
-        </svg>
+      {layout && (
         <button
-          ref={cardEl}
+          ref={islandEl}
           type="button"
           className="droplet-card"
-          style={{ top: box.cardTop, left: box.cardLeft, width: box.cardWidth, height: box.cardHeight, borderRadius: box.cardRadius }}
           aria-label={`${current.title}, ${detail}. ${t("Open pane")}`}
           onClick={() => {
             if (dragged.current) {
@@ -333,7 +276,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
             <span className="droplet-dot" aria-hidden="true" />
           </span>
         </button>
-      </>}
+      )}
     </div>
   );
 }
