@@ -7,6 +7,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Changed
+- Pane titles that contain a directory show its last folder, and matching workspace and folder
+  names appear once in the sidebar and command palette, including Windows paths.
+
 ## [0.3.43] - 2026-10-02
 
 ### Changed
