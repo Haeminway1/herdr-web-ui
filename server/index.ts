@@ -121,7 +121,7 @@ const TYPED_SETTLE_MS = 300;
  * reaches the pane later.
  */
 export const SUBMIT_DEADLINE_MS = 45_000;
-const SERVER_FEATURES: ServerFeature[] = ["submit", "secret-input"];
+const SERVER_FEATURES: ServerFeature[] = ["submit", "secret-input", "input-ready"];
 
 /** Bind addresses only this machine can reach, so an unset token is nobody else's business. */
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -181,6 +181,7 @@ type Client = ServerWebSocket<SocketData>;
  * keeps screen state and selection, while herdr owns scrollback.
  */
 interface PaneAttachment {
+  ready: boolean;
   pty: PtySession | MirrorSession;
   /** set when herdr cannot attach here: `pty` repaints the pane's screen (server/mirror.ts), on the pane's own grid */
   mirror?: MirrorSession;
@@ -522,6 +523,7 @@ export function createServer(
     const spawnCols = forObserver || mirrored ? (rect?.width ?? 80) : cols;
     const spawnRows = forObserver || mirrored ? (rect?.height ?? 24) : rows;
     const attachment: PaneAttachment = {
+      ready: mirrored,
       pty: undefined as unknown as PtySession,
       clients: new Set<Client>(),
       cols: spawnCols,
@@ -619,11 +621,15 @@ export function createServer(
           attachment.held = false;
           broadcast(paneId, { type: "attach-resumed", pane_id: paneId });
         }
+        attachment.ready = true;
+        broadcast(paneId, { type: "input-ready", pane_id: paneId });
         release();
       };
       const ended = (code: number | null): void => {
         clearTimeout(holdTimer);
         if (attachments.get(paneId) !== attachment) return;
+        if (attachment.ready) broadcast(paneId, { type: "input-ready", pane_id: paneId, ready: false });
+        attachment.ready = false;
         const now = Date.now();
         if (code !== 0 && ATTACH_READ_RACE_RE.test(output) && now - (refusedSince ??= now) < retryFor) {
           held = null;
@@ -1442,6 +1448,7 @@ export function createServer(
               if (!alreadyAttached && attachment.held) send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
               reconcileOutput(message.pane_id);
               if (client.data.closing) break;
+              if (attachment.ready && !attachment.held) send(client, { type: "input-ready", pane_id: message.pane_id });
               if (attachment.mirror) break;
               if (client.data.mode === "interact") {
                 // an operator's viewport owns the shared grid
@@ -1482,6 +1489,9 @@ export function createServer(
               // the pty holds a lone ESC ~150ms and a Stop would overtake nothing
               // typing reaches an attached pane only, queued or not
               const attachment = attachments.get(message.pane_id);
+              const inputFailed = () => {
+                if (clients.has(client)) send(client, { type: "error", code: "input_failed", message: "Terminal input could not be confirmed. Check the terminal before typing again.", pane_id: message.pane_id });
+              };
               // without a pty (Windows: no terminal, or a mirrored one) typing, the key bar's Enter,
               // Stop and arrows go through herdr itself, each in its turn behind a message in flight.
               // The turn is taken before herdr is asked what it can do: a message sent while
@@ -1490,7 +1500,7 @@ export function createServer(
                 const text = message.text;
                 void serialize(message.pane_id, async () => {
                   // a herdr that attaches: typing reaches an attached pane only
-                  if (await terminalAttach()) return;
+                  if (await terminalAttach()) { inputFailed(); return; }
                   // a pasted block asks herdr what the pane runs, so it is shaped before the checks below
                   const shaped = await mirrorInput(text, async () => (await paneContext(message.pane_id)).agent);
                   // nothing typed outlives its connection
@@ -1499,23 +1509,26 @@ export function createServer(
                   await paneSendText(message.pane_id, shaped);
                   // the echo is read at once, not at the mirror's next idle read
                   attachments.get(message.pane_id)?.mirror?.poke();
-                }).catch(() => undefined);
+                }).catch(inputFailed);
                 break;
               }
               // another web bridge has this pane's terminal: nothing typed here reaches it
-              if (!attachment || attachment.held) break;
+              if (!attachment?.clients.has(client) || !attachment.ready || attachment.held) {
+                send(client, { type: "error", code: "input_not_ready", message: "Terminal input is not ready. Nothing was sent.", pane_id: message.pane_id });
+                break;
+              }
               if (paneQueues.has(message.pane_id)) {
                 const text = message.text;
                 void serialize(message.pane_id, () => {
                   // held while this waited its turn: it goes nowhere, as unqueued typing would
-                  if (attachments.get(message.pane_id)?.held) return;
+                  if (attachments.get(message.pane_id) !== attachment || !attachment.clients.has(client) || !attachment.ready || attachment.held) { inputFailed(); return; }
                   // nothing typed outlives its connection
                   if (!clients.has(client)) return;
                   authorizeSocket(client);
                   return paneSendText(message.pane_id, text);
-                }).catch(() => undefined);
+                }).catch(inputFailed);
               } else {
-                attachment.pty.write(message.text);
+                if (!attachment.pty.write(message.text)) { inputFailed(); break; }
                 lastTyped.set(message.pane_id, Date.now());
                 if (lastTyped.size > 64) {
                   for (const [pane, at] of lastTyped) if (Date.now() - at > TYPED_SETTLE_MS) lastTyped.delete(pane);
@@ -1572,12 +1585,14 @@ export function createServer(
                 if (client.data.mode === "observe") { result(false, "read_only"); break; }
                 const attachment = attachments.get(message.pane_id);
                 if (!attachment?.clients.has(client)) { result(false, "not_attached"); break; }
+                if (!attachment.ready || attachment.held) { result(false, "input_not_ready"); break; }
                 if (paneQueues.has(message.pane_id)) { result(false, "pane_busy"); break; }
                 await serialize(message.pane_id, async () => {
                   const screen = await paneRead({ paneId: message.pane_id, source: "visible", format: "text" });
                   if (client.data.closing || client.data.mode === "observe") { result(false, "read_only"); return; }
                   authorizeSocket(client);
                   if (!attachment.clients.has(client) || attachments.get(message.pane_id) !== attachment) { result(false, "not_attached"); return; }
+                  if (!attachment.ready || attachment.held) { result(false, "input_not_ready"); return; }
                   if (secretPrompt(screen.text, attachment.cols) !== message.prompt) { result(false, "prompt_changed"); return; }
                   if (attachment.mirror) {
                     // A mirrored pane has no pty to type into: the secret is herdr's text, then the
@@ -1587,7 +1602,7 @@ export function createServer(
                     await paneSendKeys(message.pane_id, ["Enter"]);
                   } else {
                     // Direct attach keystrokes: no agent transcript, RPC payload or delayed Enter.
-                    attachment.pty.write(`${message.secret}\r`);
+                    if (!attachment.pty.write(`${message.secret}\r`)) { result(false, "input_not_ready"); return; }
                   }
                   result(true);
                 });

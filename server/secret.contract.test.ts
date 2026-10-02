@@ -1,9 +1,10 @@
-import { expect, it } from "bun:test";
+import { expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Socket } from "bun";
+import { PtySession } from "./pty/session.ts";
 import { createServer } from "./index.ts";
 import { herdrRpc, herdrSocketPath, paneRead, paneSendText, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 
@@ -228,6 +229,27 @@ it("secret frames validate prompts and authority, never queue, and type one no-e
     expect((await result(8)).code).toBe("read_only");
     expect(existsSync(resultFile)).toBe(false);
     send({ type: "role", mode: "interact" });
+    // A second bridge is attached to the pane record but cannot write to the held PTY.
+    const heldServer = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "held-state") });
+    const heldSocket = new WebSocket(`ws://127.0.0.1:${heldServer.port}/ws`);
+    const heldSeen: any[] = [];
+    heldSocket.addEventListener("message", (event) => heldSeen.push(JSON.parse(String(event.data))));
+    try {
+      await until(() => heldSeen.some((frame) => frame.type === "snapshot"));
+      heldSocket.send(JSON.stringify({ type: "attach", pane_id: pane, cols: 80, rows: 24 }));
+      await until(() => heldSeen.some((frame) => frame.code === "attach_held"));
+      heldSocket.send(JSON.stringify({ type: "secret", id: 10, pane_id: pane, prompt: "Password:", secret: "fixture-value" }));
+      await until(() => heldSeen.some((frame) => frame.type === "secret-result"));
+      expect(heldSeen.find((frame) => frame.type === "secret-result")).toMatchObject({ ok: false, code: "input_not_ready" });
+      expect(existsSync(resultFile)).toBe(false);
+    } finally { heldSocket.close(); heldServer.stop(); }
+    // A dead sidecar must not acknowledge bytes that it could not accept.
+    const rejectedWrite = spyOn(PtySession.prototype, "write").mockReturnValue(false);
+    try {
+      secret(9);
+      expect(await result(9)).toMatchObject({ ok: false, code: "input_not_ready" });
+      expect(existsSync(resultFile)).toBe(false);
+    } finally { rejectedWrite.mockRestore(); }
     // One prompt check is in flight: another secret must be refused, never held.
     secret(5); secret(6);
     expect((await result(6)).code).toBe("pane_busy");
