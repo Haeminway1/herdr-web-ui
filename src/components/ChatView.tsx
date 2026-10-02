@@ -774,10 +774,14 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   // a pane read from its screen (no conversation to record it) shows the message until the pane took it
   const pendingOut = outgoing.filter((item) => !recordedOut.has(item.id));
   const [, setOutboxTick] = useState(0);
+  // the screen a pane showed when it took the message: once that screen changes, it shows the message itself
+  const screenAtSent = useRef(new Map<number, TranscriptMessage[]>());
   useEffect(() => {
     for (const item of outgoing) {
       const shown = pendingOut.some((pending) => pending.id === item.id);
-      if (item.sent && (!shown || state.source !== "conversation" || Date.now() - item.at > OUTGOING_KEEP_MS)) { userSeen.current.delete(item.id); onOutgoingDone?.(item.id); }
+      if (item.sent && state.source !== "conversation" && !screenAtSent.current.has(item.id)) screenAtSent.current.set(item.id, state.messages);
+      const screenMoved = state.source !== "conversation" && item.sent && screenAtSent.current.get(item.id) !== state.messages;
+      if (item.sent && (!shown || screenMoved || Date.now() - item.at > OUTGOING_KEEP_MS)) { userSeen.current.delete(item.id); screenAtSent.current.delete(item.id); onOutgoingDone?.(item.id); }
     }
     if (outgoing.length === 0) return;
     const timer = window.setTimeout(() => setOutboxTick((tick) => tick + 1), 2_000);
