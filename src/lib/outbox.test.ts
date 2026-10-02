@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { recordedIds, sameMessage, type UserTurn } from "./outbox.ts";
+import { forgetGone, recordedIds, sameMessage, type UserTurn } from "./outbox.ts";
 
 it("knows a message by its whole text, spaces aside", () => {
   expect(sameMessage("fix the  bug\nplease", "fix the bug please")).toBe(true);
@@ -28,4 +28,13 @@ it("retires a message the pane took when the agent recorded it in other words, o
   // a word-for-word match is not taken by another message's fallback
   const exact = { id: 2, text: "yes", sent: true, seen };
   expect([...recordedIds([pasted, exact], [turn("t2", "yes"), turn("t3", "[Pasted text]")])].sort()).toEqual([1, 2]);
+});
+
+it("forgets what it kept for messages that left the outbox", () => {
+  const kept = new Map([[1, new Set(["t1"])], [2, new Set(["t1"])], [3, new Set<string>()]]);
+  // 1 was refused and 3 retired; only 2 is still on its way
+  forgetGone(kept, [{ id: 2 }]);
+  expect([...kept.keys()]).toEqual([2]);
+  forgetGone(kept, []);
+  expect(kept.size).toBe(0);
 });
