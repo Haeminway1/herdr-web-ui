@@ -16,6 +16,12 @@ export const EXPANDED_MARGIN = 12;
 export const EXPANDED_MAX_WIDTH = 400;
 export const EXPANDED_HEIGHT = 68;
 export const EXPANDED_RADIUS = 30;
+/**
+ * Grown out of a phone's own island, the camera stays where it was: the banner keeps the island's
+ * height clear at its top and puts its content under it, as the system's expanded island does.
+ */
+export const CAMERA_CLEARANCE = Math.ceil(ISLAND_HEIGHT);
+export const EXPANDED_ISLAND_RADIUS = 38;
 /** without an island, the pill's gap under the top of what can be seen */
 export const TOP_SPACING = 12;
 
@@ -42,6 +48,8 @@ export interface IslandLayout {
   compactHeight: number;
   expandedWidth: number;
   expandedHeight: number;
+  /** the content's top inside the grown island: below the camera when it is the phone's own */
+  contentTop: number;
   /** the island is the phone's own: at rest it is simply not drawn over it */
   overIsland: boolean;
 }
@@ -58,7 +66,8 @@ export function islandLayout(width: number, insetTop: number, insetLeft = 0, ins
     compactWidth: ISLAND_WIDTH,
     compactHeight: ISLAND_HEIGHT,
     expandedWidth: Math.max(Math.min(safeWidth - EXPANDED_MARGIN * 2, EXPANDED_MAX_WIDTH), ISLAND_WIDTH),
-    expandedHeight: EXPANDED_HEIGHT,
+    expandedHeight: dynamicIsland ? CAMERA_CLEARANCE + EXPANDED_HEIGHT - 8 : EXPANDED_HEIGHT,
+    contentTop: dynamicIsland ? CAMERA_CLEARANCE - 4 : 0,
     overIsland: dynamicIsland,
   };
 }
@@ -80,7 +89,7 @@ export interface IslandShape {
 export function islandShape(grow: number, layout: IslandLayout): IslandShape {
   const width = mix(grow, layout.compactWidth, layout.expandedWidth);
   const height = mix(clamp(grow, 0, 1.08), layout.compactHeight, layout.expandedHeight);
-  const radius = Math.min(mix(clamp(grow, 0, 1), layout.compactHeight / 2, EXPANDED_RADIUS), height / 2);
+  const radius = Math.min(mix(clamp(grow, 0, 1), layout.compactHeight / 2, layout.overIsland ? EXPANDED_ISLAND_RADIUS : EXPANDED_RADIUS), height / 2);
   return {
     left: layout.centerX - width / 2,
     top: layout.top,

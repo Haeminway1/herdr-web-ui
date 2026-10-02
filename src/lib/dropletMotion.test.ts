@@ -55,3 +55,12 @@ describe("spring", () => {
     expect(spring.value).toBe(1);
   });
 });
+
+describe("the camera under a phone's own island", () => {
+  it("keeps the content below the camera and the banner tall enough for it", () => {
+    const island = islandLayout(393, 59, 0, 0, true);
+    expect(island.contentTop).toBeGreaterThanOrEqual(ISLAND_HEIGHT - 4);
+    expect(island.expandedHeight - island.contentTop).toBeGreaterThanOrEqual(60);
+    expect(islandLayout(390, 47).contentTop).toBe(0);
+  });
+});
