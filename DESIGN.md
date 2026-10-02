@@ -433,7 +433,7 @@ One set for both themes: a white card out of island black, as in the original (e
 - While the app is on screen it tells the server (`POST /api/push/presence`, every 10s), which
   holds this device's web pushes back: no system banner over the app's own alert.
 - One at a time; a newer one folds the current one away first. Tap opens the pane; a drag or flick
-  up puts it away; it leaves by itself 3.6s after its text shows, and waits while touched.
+  up puts it away; it leaves by itself 5s after its text shows, and waits while touched.
 - Not for the pane already open, and not while the app is hidden (system notifications cover that).
 - Reduced motion: it fades in and out where it rests, without falling or spreading.
 

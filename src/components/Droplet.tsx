@@ -18,8 +18,8 @@ import "./Droplet.css";
  * A tap opens the pane, a flick up puts it away, and it leaves by itself after a while.
  */
 
-/** how long it stays once its text shows */
-export const DROPLET_HOLD_MS = 3600;
+/** how long it stays once its text shows: long enough to read a pane's name and what it wants */
+export const DROPLET_HOLD_MS = 5000;
 /** the longest a drop takes to fold back up (EXIT_DROP_DELAY and RETURN_SPRING, with room) */
 const EXIT_DEADLINE_MS = 2200;
 /** a drag up this far, or a flick up this fast, puts it away */

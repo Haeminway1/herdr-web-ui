@@ -36,9 +36,14 @@ const DROP_TINT_END = 0.88;
 const CONTENT_MIN_SCALE = 0.88;
 export const SHADOW_DY = 10;
 export const SHADOW_BLUR = 14;
-export const ENTER_TINT_DELAY = 110;
-export const ENTER_EXPAND_DELAY = 340;
-export const ENTER_REVEAL_DELAY = 560;
+/**
+ * The way in runs at ENTER_PACE of the original's timing (same shapes, same springs, quicker):
+ * an alert is read at a glance, and the original's 1.2s fall felt slow before the text showed.
+ */
+export const ENTER_PACE = 0.5;
+export const ENTER_TINT_DELAY = 110 * ENTER_PACE;
+export const ENTER_EXPAND_DELAY = 340 * ENTER_PACE;
+export const ENTER_REVEAL_DELAY = 560 * ENTER_PACE;
 export const EXIT_COLLAPSE_DELAY = 100;
 export const EXIT_DROP_DELAY = 280;
 /** the card's gap under the top of what can be seen (Triad's top-edge anchor) */
@@ -50,10 +55,10 @@ export interface SpringConfig {
   /** a starting push, in units per second, in the direction it heads */
   velocity?: number;
 }
-export const DROP_SPRING: SpringConfig = { duration: 1150, dampingRatio: 0.82 };
-export const EXPAND_SPRING: SpringConfig = { duration: 1000, dampingRatio: 0.8 };
-export const REVEAL_SPRING: SpringConfig = { duration: 700, dampingRatio: 1 };
-export const TINT_SPRING: SpringConfig = { duration: 700, dampingRatio: 1 };
+export const DROP_SPRING: SpringConfig = { duration: 1150 * ENTER_PACE, dampingRatio: 0.82 };
+export const EXPAND_SPRING: SpringConfig = { duration: 1000 * ENTER_PACE, dampingRatio: 0.8 };
+export const REVEAL_SPRING: SpringConfig = { duration: 700 * ENTER_PACE, dampingRatio: 1 };
+export const TINT_SPRING: SpringConfig = { duration: 700 * ENTER_PACE, dampingRatio: 1 };
 export const COLLAPSE_SPRING: SpringConfig = { duration: 660, dampingRatio: 0.92, velocity: 2 };
 export const RETURN_SPRING: SpringConfig = { duration: 1150, dampingRatio: 0.9 };
 export const FADE_SPRING: SpringConfig = { duration: 360, dampingRatio: 1 };

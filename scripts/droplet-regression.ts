@@ -90,10 +90,10 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     await block(openPane);
     await card.waitFor({ state: "visible" });
     const shown = Date.now();
-    await droplet.waitFor({ state: "detached", timeout: 9_000 });
+    await droplet.waitFor({ state: "detached", timeout: 11_000 });
     const lasted = Date.now() - shown;
-    // 0.56s in, 3.6s held, then the drop folds back up on its springs
-    assert.ok(lasted > 4_000 && lasted < 8_000, `stayed ${lasted}ms`);
+    // 0.28s in, 5s held, then the drop folds back up on its springs
+    assert.ok(lasted > 5_000 && lasted < 9_000, `stayed ${lasted}ms`);
     console.log("PASS an in-app alert goes by itself");
 
     // turned off in Settings: none
