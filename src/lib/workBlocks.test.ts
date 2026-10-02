@@ -105,6 +105,13 @@ describe("what a running turn is doing", () => {
     expect(now.since).toBe(Date.parse("2026-10-03T10:00:00Z"));
     expect(now.doing).toBe("Running bun test --watch");
   });
+  it("starts at its own record when no user message leads it, not at an older run's", () => {
+    const runs = [
+      { role: "assistant" as const, ts: "2026-10-03T09:00:00Z", parts: [tool("Read", "old.ts")] },
+      { role: "assistant" as const, ts: "2026-10-03T10:00:05Z", parts: [tool("Bash", "bun test")] },
+    ];
+    expect(workNow(runs as never, true)!.since).toBe(Date.parse("2026-10-03T10:00:05Z"));
+  });
   it("is nothing for a turn that is not running", () => {
     expect(workNow(turns as never, false)).toBeNull();
   });
