@@ -637,6 +637,8 @@ export const ZH: Record<string, string> = {
   "Beside Settings, how much of each plan the AI tools on the server's PC have used. Turning it on sends their sign-ins to each provider's usage endpoint; they are never refreshed here.": "在设置旁显示服务器电脑上的 AI 工具各计划的用量。开启后会将其登录信息发送到各提供商的用量端点，此处不会刷新令牌。",
   "Accounts": "账户",
   "Show {name}": "显示 {name}",
+  "left": "剩余",
+  "used": "已用",
   "{percent} left": "剩余 {percent}",
   "Meters show": "计量显示",
   "Beside Settings": "设置旁边",
