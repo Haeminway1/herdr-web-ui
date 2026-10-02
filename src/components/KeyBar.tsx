@@ -9,6 +9,7 @@ import { useT } from "../lib/i18n.ts";
 export type { KeyBarKey };
 
 export interface KeyBarProps {
+  disabled?: boolean;
   /** Fires for every key except Control, which toggles the one-shot modifier instead. */
   onKey: (key: KeyBarKey) => void;
   ctrlArmed: boolean;
@@ -27,6 +28,7 @@ function keepFocus(event: PointerEvent<HTMLButtonElement> | MouseEvent<HTMLButto
 }
 
 interface KeyProps {
+  disabled?: boolean;
   dataKey: string;
   label?: string;
   pressed?: boolean;
@@ -34,10 +36,11 @@ interface KeyProps {
   children: ReactNode;
 }
 
-function Key({ dataKey, label, pressed, onPress, children }: KeyProps) {
+function Key({ dataKey, label, pressed, onPress, children, disabled }: KeyProps) {
   return (
     <button
       type="button"
+      disabled={disabled}
       className={`key${pressed ? " is-armed" : ""}`}
       data-key={dataKey}
       aria-label={label}
@@ -81,31 +84,31 @@ export const ARROWS: ReadonlyArray<{ key: KeyBarKey; label: string; direction: D
  * for touch, a hardware keyboard already has all of them. Hence role="group", not
  * toolbar: a toolbar promises arrow-key navigation between items, which these skip.
  */
-export function KeyBar({ onKey, ctrlArmed, onToggleCtrl, directTyping, onToggleDirect }: KeyBarProps) {
+export function KeyBar({ onKey, ctrlArmed, onToggleCtrl, directTyping, onToggleDirect, disabled }: KeyBarProps) {
   const t = useT();
   return (
     <div className="key-bar" role="group" aria-label={t("Terminal keys")}>
       {/* first: on a narrow cover screen the row scrolls, and the mode toggle must not be the key cut off */}
       {onToggleDirect && (
-        <Key dataKey="direct" label={t("Type straight into the terminal")} pressed={directTyping} onPress={onToggleDirect}>
+        <Key disabled={disabled} dataKey="direct" label={t("Type straight into the terminal")} pressed={directTyping} onPress={onToggleDirect}>
           <Keyboard aria-hidden="true" />
         </Key>
       )}
-      <Key dataKey="Escape" onPress={() => onKey("Escape")}>
+      <Key disabled={disabled} dataKey="Escape" onPress={() => onKey("Escape")}>
         Esc
       </Key>
-      <Key dataKey="Tab" onPress={() => onKey("Tab")}>
+      <Key disabled={disabled} dataKey="Tab" onPress={() => onKey("Tab")}>
         Tab
       </Key>
-      <Key dataKey="Control" pressed={ctrlArmed} onPress={onToggleCtrl}>
+      <Key disabled={disabled} dataKey="Control" pressed={ctrlArmed} onPress={onToggleCtrl}>
         Ctrl
       </Key>
       {ARROWS.map((arrow) => (
-        <Key key={arrow.key} dataKey={arrow.key} label={t(arrow.label)} onPress={() => onKey(arrow.key)}>
+        <Key disabled={disabled} key={arrow.key} dataKey={arrow.key} label={t(arrow.label)} onPress={() => onKey(arrow.key)}>
           <Chevron direction={arrow.direction} />
         </Key>
       ))}
-      <Key dataKey="ctrl-c" label={t("Control C")} onPress={() => onKey("ctrl-c")}>
+      <Key disabled={disabled} dataKey="ctrl-c" label={t("Control C")} onPress={() => onKey("ctrl-c")}>
         ^C
       </Key>
     </div>

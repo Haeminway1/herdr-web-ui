@@ -368,3 +368,6 @@
     height: 16px;
   }
 }
+
+.settings-shortcuts { table-layout: fixed; }
+.settings-shortcuts td .input { width: 100%; min-width: 0; }

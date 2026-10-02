@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { matchShortcut, type ShortcutEventLike, keepsArrowsForText } from "./shortcuts.ts";
+import { matchShortcut, type ShortcutEventLike, keepsArrowsForText, shortcutConflict, shortcutKeys } from "./shortcuts.ts";
 
 function keyEvent(key: string, patch: Partial<ShortcutEventLike> = {}): ShortcutEventLike {
   return { key, ctrlKey: false, metaKey: false, shiftKey: true, altKey: false, ...patch };
@@ -55,4 +55,19 @@ describe("new session", () => {
     expect(press("O")).toBe("new-session");
     expect(press("N")).toBe("new-session");
   });
+});
+
+it("overrides remove default bindings, unbinding gives keys back, and IME events never switch panes", () => {
+  const key = (value: string): ShortcutEventLike => ({ key: value, ctrlKey: true, metaKey: false, shiftKey: true, altKey: false });
+  expect(matchShortcut(key("k"), false, { palette: "p" })).toBeNull();
+  expect(matchShortcut(key("p"), false, { palette: "p" })).toBe("palette");
+  expect(matchShortcut(key("n"), false, { "new-session": null })).toBeNull();
+  expect(matchShortcut({ ...key("k"), isComposing: true }, false)).toBeNull();
+  expect(matchShortcut({ ...key("k"), keyCode: 229 }, false)).toBeNull();
+});
+
+it("matches shifted digits and detects alias and default-restoration conflicts", () => {
+  expect(matchShortcut({ key: "!", code: "Digit1", ctrlKey: true, shiftKey: true, altKey: false, metaKey: false }, false, { palette: "1" })).toBe("palette");
+  expect(shortcutConflict("palette", ["n"], {})).toBe(true);
+  expect(shortcutConflict("palette", shortcutKeys("palette", {}), { palette: "p", settings: "k" })).toBe(true);
 });
