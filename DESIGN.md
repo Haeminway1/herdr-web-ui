@@ -303,6 +303,11 @@ The Dynamic Island's own colours, the same in every theme.
   rename, and a 3-second, second-click close) take no room of their own: they show over the end
   of a hovered or focused row, and on a touch screen over the selected row only, so every title
   keeps the row's whole width. Inline server failures stay beside their row.
+  the selected row gets the amber rail and an amber-edged mark box. Row actions rename or arm a
+  3-second, second-click close. Inline server failures stay beside their row.
+- A title that is a working directory written out (`/home/me/dev/api`, `~/dev/api`, `C:\work\api`)
+  shows as its last folder, here, in the header, the palette and every alert; the full path stays
+  in the row's tooltip. Line two names the workspace and the folder once when they are the same.
 - A PC group header is caret, monitor, name, “This PC” for the local machine and a state dot
   (done = connected, working pulse = connecting/reconnecting, blocked = error). Connected says
   nothing more; every other state is written under the name, with the server's error clamped to
