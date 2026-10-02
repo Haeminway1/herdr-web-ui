@@ -323,7 +323,7 @@
 
 .usage-panel-percent {
   font-family: var(--font-mono);
-  font-size: var(--fs-xl);
+  font-size: 22px; /* fork: the large percent Haemin chose; upstream uses --fs-xl */
   font-weight: var(--fw-semibold);
   line-height: 1;
   font-variant-numeric: tabular-nums;
