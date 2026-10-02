@@ -403,6 +403,15 @@
   cursor: pointer;
 }
 
+.usage-panel-line-chips {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+}
+
 .usage-panel-chip {
   display: inline-flex;
   align-items: center;
@@ -422,6 +431,7 @@
 .usage-panel-chip.has-problem { opacity: 0.55; }
 
 .usage-panel-line-count {
+  flex-shrink: 0;
   margin-left: auto;
   font-size: var(--fs-2xs);
   color: var(--text-dim);
@@ -429,6 +439,7 @@
 
 .usage-panel-line-caret,
 .usage-panel-fold svg {
+  flex-shrink: 0;
   width: 16px;
   height: 16px;
   color: var(--text-dim);

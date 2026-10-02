@@ -173,6 +173,7 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     assert.equal(asked.length, 1, "only the panel asks for usage");
     // a phone's drawer shows one line of percents first; the rows unfold from it
     assert.equal(await panel.locator(".usage-panel-chip").count(), 7, "one chip per account on the folded line");
+    assert.equal(await panel.locator(".usage-panel-line").evaluate((line) => line.scrollWidth <= line.clientWidth), true, "the folded line fits the phone");
     await panel.getByRole("button", { name: "Show plan limits" }).click();
     const rows = panel.locator(".usage-panel-row");
     assert.equal(await rows.count(), 7);

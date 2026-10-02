@@ -47,8 +47,10 @@
     width: 28px;
     height: 28px;
   }
-  .needs-input-select .pane-meta .pane-subtitle {
-    display: none;
+  /* where the pane lives stays, ellipsized: two waiting panes may share a title and a state */
+  .needs-input-select .pane-meta {
+    flex: 0 1 auto;
+    max-width: 55%;
   }
   .needs-input-select .pane-copy {
     flex-direction: row;
