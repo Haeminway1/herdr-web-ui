@@ -36,6 +36,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   is folded: the objective, whether it is in progress, complete, blocked, paused or out of budget, and
   opened, the whole objective, why it is blocked and the time and tokens spent on it so far.
   ([#303](https://github.com/devswha/herdr-web-ui/pull/303))
+- Terminal and chat font families in Settings: a comma-separated list, such as
+  `D2Coding, "Cascadia Mono"`, tried in order before the built-in fonts, so a font this device
+  lacks falls back as before. The chat font applies to message text; code stays monospace.
+  Stored per browser, like the other appearance settings.
+  ([#308](https://github.com/devswha/herdr-web-ui/pull/308) by @Kuhave)
 
 ### Changed
 - With an access token set (`HERDR_WEB_TOKEN`), your own Tailscale devices are asked for it too:

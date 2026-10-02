@@ -133,6 +133,11 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 - `palette`: `amber`, `report` or `charcoal`; default `amber`.
 - `density`: `comfortable` or `compact`; default `comfortable`.
 - Terminal font size is independent: default `13px`, clamped to `10–22px`.
+- Terminal and chat font families are comma-separated lists, default empty. They go in front of the
+  terminal's built-in fonts (after the bundled Symbols Nerd Font Mono, which only draws icons) and of
+  `--font-ui` in the chat's prose (as `--font-chat`), never in place of them; code in the chat keeps
+  `--font-mono`. At most 200 characters, with `;`, `{`, `}`, `<`,
+  `>`, `\` and control characters stripped and names with spaces quoted.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
 - All settings share one sanitized `localStorage["herdr-web-ui:settings"]` record.
 
@@ -390,8 +395,12 @@ One set for both themes: the card is island black wherever it shows.
   `.kbd` hints where a global shortcut exists.
 
 ### Settings dialog
-- Appearance: Dark / Light / System, Comfortable / Compact, terminal font `10–22px`.
-- Composer: Enter sends. Chat: Show thinking. Shortcuts: the complete platform-resolved table.
+- Appearance: Dark / Light / System, Comfortable / Compact, terminal font `10–22px`, terminal font
+  family.
+- Composer: Enter sends. Chat: Show thinking, chat font size and family. Shortcuts: the complete
+  platform-resolved table.
+- A font family is a text field saved when it is left, on Enter or when the dialog closes, not
+  per keystroke.
 - Install reflects installed, promptable or browser-instructions state; About links the repository.
 - Subscription usage: the on switch with one description, then (when on) Used / Remaining and one
   hairline card of accounts (`.usage-accounts`, `--radius-md`): an uppercase `--bg-elevated` header

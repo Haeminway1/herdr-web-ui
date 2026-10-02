@@ -8,6 +8,7 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
 import type { AlertPrefs, DoneAlerts } from "../../shared/notify-policy.ts";
+import { chatFontStack, sanitizeFontFamily } from "./fontFamily.ts";
 
 export type ThemeSetting = "dark" | "light" | "system";
 export type ResolvedTheme = "dark" | "light";
@@ -31,8 +32,12 @@ export interface Settings {
   terminalFontSize: number;
   /** mouse reports sent to herdr per wheel event in the terminal: 1 is what xterm sends by itself */
   terminalWheelSpeed: number;
+  /** fonts tried before the built-in terminal stack, as a CSS font-family list; "" keeps the built-in one */
+  terminalFontFamily: string;
   /** chat text size in px (its body text; the rest scales with it); null follows the density */
   chatFontSize: number | null;
+  /** fonts tried before the UI font in the chat's prose (code stays mono), as a CSS font-family list; "" keeps the UI font */
+  chatFontFamily: string;
   /** true: Enter sends in the composer, Shift+Enter breaks the line; false: Ctrl/Cmd+Enter sends */
   enterSends: boolean;
   /** show the agent's folded reasoning blocks in the chat view */
@@ -72,7 +77,9 @@ export const DEFAULT_SETTINGS: Settings = {
   palette: "amber",
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
+  terminalFontFamily: "",
   chatFontSize: null,
+  chatFontFamily: "",
   enterSends: true,
   showThinking: false,
   keepScreenOn: false,
@@ -151,6 +158,8 @@ export function sanitizeSettings(raw: unknown): Settings {
     chatFontSize: typeof chatFont === "number" && Number.isFinite(chatFont)
       ? Math.min(CHAT_FONT_MAX, Math.max(CHAT_FONT_MIN, Math.round(chatFont)))
       : DEFAULT_SETTINGS.chatFontSize,
+    terminalFontFamily: sanitizeFontFamily(record["terminalFontFamily"]),
+    chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
@@ -234,6 +243,10 @@ function applyToDocument(settings: Settings, resolved: ResolvedTheme, language: 
   root.dataset["palette"] = settings.palette;
   // ChatView.css scales its type tokens by this: the chosen size over the density's
   root.style.setProperty("--chat-scale", String(chatFontSize(settings) / CHAT_BASE_FONT[settings.density]));
+  // ChatView.css sets the transcript's prose in this, and falls back to --font-ui without it
+  const chatFont = chatFontStack(settings.chatFontFamily);
+  if (chatFont === null) root.style.removeProperty("--font-chat");
+  else root.style.setProperty("--font-chat", chatFont);
   root.style.colorScheme = resolved;
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLOR[settings.palette][resolved]);
 }
