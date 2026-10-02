@@ -11,6 +11,7 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - The sidebar's rows are as they were before 0.3.42. Its new tab and split buttons took room from
   every pane's name, also while hidden, so the names were cut shorter. Both buttons are gone, and
   so are `POST /api/tab/create` and `POST /api/pane/split`.
+  ([#327](https://github.com/devswha/herdr-web-ui/pull/327))
 
 ### Fixed
 - The message box stays editable while the app reconnects. On an iPhone, a dictation keyboard such
