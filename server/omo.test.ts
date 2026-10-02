@@ -1,8 +1,11 @@
 import { expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { heldSessionIds, isOmoProcess, omoSessionFolder, omoCandidates, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
+import type { HerdrPane } from "../shared/protocol.ts";
+import { heldSessionIds, isOmoProcess, omoAgentDir, omoSessionFolder, omoCandidates, omoTranscriptsOfCwd, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
+import { processStartedAt } from "./process-start.ts";
+import { parseOmpTranscript } from "./transcript-records.ts";
 
 const runtime = (paneId: string, startedAt: number | null = 10_000, paths: string[] = [], ids: string[] = []): OmoRuntime => ({ paneId, startedAt, paths, ids });
 const files = [
@@ -129,4 +132,58 @@ it("names a cwd's session folder as omo's engine does, a Windows cwd included", 
   expect(omoSessionFolder("/home/u/dev/app")).toBe("--home-u-dev-app--");
   expect(omoSessionFolder("C:\\Users\\me\\dev\\app")).toBe("--C--Users-me-dev-app--");
   expect(omoSessionFolder("C:/Users/me/app")).toBe("--C--Users-me-app--");
+});
+
+it("finds omo's agent directory where the process's environment moved it", () => {
+  expect(omoAgentDir(null, "/home/u", "/project")).toBe("/home/u/.omo/agent");
+  expect(omoAgentDir(["PATH=/bin"], "/home/u", "/project")).toBe("/home/u/.omo/agent");
+  expect(omoAgentDir(["OMO_CODING_AGENT_DIR=/state/omo/agent"], "/home/u", "/project")).toBe("/state/omo/agent");
+  // the brand's own prefix first, then senpi's and pi's, as senpi reads them
+  expect(omoAgentDir(["PI_CODING_AGENT_DIR=/pi", "SENPI_CODING_AGENT_DIR=/senpi"], "/home/u", "/project")).toBe("/senpi");
+  expect(omoAgentDir(["SENPI_CODING_AGENT_DIR=/senpi", "OMO_CODING_AGENT_DIR=/omo"], "/home/u", "/project")).toBe("/omo");
+  expect(omoAgentDir(["OMO_CODING_AGENT_DIR=~/.local/state/omo"], "/home/u", "/project")).toBe("/home/u/.local/state/omo");
+  expect(omoAgentDir(["OMO_CODING_AGENT_DIR=rel/agent"], "/home/u", "/project")).toBe("/project/rel/agent");
+  // set but empty: senpi keeps its default and looks no further
+  expect(omoAgentDir(["OMO_CODING_AGENT_DIR=", "SENPI_CODING_AGENT_DIR=/senpi"], "/home/u", "/project")).toBe("/home/u/.omo/agent");
+});
+
+it("binds an omo pane whose launcher moved its agent directory out of ~/.omo", () => {
+  // A launcher profile (OMO_CODING_AGENT_DIR=<state>/.omo/agent) wrote the session and its
+  // holder record there, and ~/.omo/agent/sessions had no folder for the cwd: the chat lens
+  // answered { source: "scrollback", turns: [] } and showed nothing.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-omo-agent-dir-")));
+  try {
+    const home = join(root, "home");
+    const cwd = join(root, "project");
+    const agentDir = join(root, "state", "profile", ".omo", "agent");
+    mkdirSync(join(home, ".omo", "agent", "sessions"), { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    const dir = join(agentDir, "sessions", `-${cwd.replaceAll("/", "-")}--`);
+    const id = "01a0fd83-0000-7000-8000-000000000001";
+    const pid = process.pid;
+    mkdirSync(join(dir, "session-holders", id), { recursive: true });
+    writeFileSync(join(dir, "session-holders", id, `${pid}.json`), JSON.stringify({ pid, processStartedAtMs: processStartedAt(pid) ?? 0, cwd }));
+    // the record shapes of a real omo 5.1.10 session, contents replaced
+    const path = join(dir, `2026-10-02T16-47-10-905Z_${id}.jsonl`);
+    writeFileSync(path, [
+      { type: "session", version: 3, id, timestamp: "2026-10-02T16:47:10.905Z", cwd },
+      { type: "model_change", id: "m1", parentId: null, timestamp: "2026-10-02T16:47:11.562Z", provider: "anthropic-subscription", modelId: "model" },
+      { type: "thinking_level_change", id: "t1", parentId: "m1", timestamp: "2026-10-02T16:47:11.563Z", thinkingLevel: "medium" },
+      { type: "message", id: "u1", parentId: "t1", timestamp: "2026-10-02T16:47:20.000Z", message: { role: "user", content: [{ type: "text", text: "research the direction" }], timestamp: 1 } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: "2026-10-02T16:47:30.000Z", message: { role: "assistant", content: [{ type: "text", text: "here is the direction" }], stopReason: "stop", timestamp: 2 } },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+
+    const pane = { pane_id: "w1:p1", cwd } as HerdrPane;
+    const argv = ["/usr/bin/bun", "/opt/omo/node_modules/@code-yeongyu/senpi/dist/bundle/cli.js", "--extension", "/opt/omo/node_modules/omo-ai/plugin"];
+    const infos = new Map([[pane.pane_id, { process_info: { foreground_processes: [{ pid, argv }] } }]]);
+    const moved = () => ["HOME=" + home, `OMO_CODING_AGENT_DIR=${agentDir}`];
+
+    expect(omoTranscriptsOfCwd(cwd, [pane], infos, home, () => ["HOME=" + home]).get(pane.pane_id)?.path).toBeNull();
+    const bound = omoTranscriptsOfCwd(cwd, [pane], infos, home, moved).get(pane.pane_id)?.path;
+    expect(bound).toBe(path);
+    expect(parseOmpTranscript(readFileSync(bound!, "utf8")).map((turn) => turn.role)).toEqual(["user", "assistant"]);
+    // a store the environment names is the only other place a session may come from
+    expect(omoCandidates(cwd, home)).toEqual([]);
+    expect(omoCandidates(cwd, home, [], [join(home, ".omo", "agent"), agentDir]).map((file) => file.path)).toEqual([path]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

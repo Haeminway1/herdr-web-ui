@@ -11,7 +11,8 @@
  * - omo: herdr knows nothing about its store and its label for the pane flips
  *   between `pi` and `claude` as omo spawns model CLIs, so the pane's process
  *   tree routes it and process/session evidence selects a unique transcript
- *   under ~/.omo/agent/sessions/<cwd-slug>/. It writes omp's session shape, so
+ *   under <its agent dir>/sessions/<cwd-slug>/ (~/.omo/agent unless the process
+ *   moved it with OMO_CODING_AGENT_DIR). It writes omp's session shape, so
  *   parseOmpTranscript (transcript-records.ts) reads it.
  * - gjc: an open session file or fresh native terminal breadcrumb belonging to
  *   its process (gjc-runtime.ts). It writes omp's session shape too.
