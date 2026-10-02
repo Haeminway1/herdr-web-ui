@@ -1123,7 +1123,7 @@ export function PaneTerminal({
       if (document.activeElement === textarea) textarea.blur();
     } else {
       textarea.removeAttribute("inputmode");
-      if (coarse && !chatView && turnedOn && !autoSelected) termRef.current?.focus();
+      if (coarse && !chatView && turnedOn) termRef.current?.focus();
     }
   }, [inputLine, coarse, chatView, directTyping, paneId]);
 

@@ -38,6 +38,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#292](https://github.com/devswha/herdr-web-ui/pull/292))
 
 ### Fixed
+- On a phone, picking a pane (from the drawer, the palette or a notification) or switching between
+  chat and terminal no longer raises the keyboard over it: you read first, and a tap on the message
+  box or the terminal raises it. Turning direct typing on still does. A desktop is unchanged.
+  ([#315](https://github.com/devswha/herdr-web-ui/pull/315) by @Haeminway1)
 - On a phone the status line above the message box is always one row. With a background-task
   count, a model name and a reasoning level it wrapped to two rows, three with the context text
   open, and took that room from the conversation. On a narrow screen the background-task chip now
