@@ -7,6 +7,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Changed
+- The sidebar's rows are as they were before 0.3.42. Its new tab and split buttons took room from
+  every pane's name, also while hidden, so the names were cut shorter. Both buttons are gone, and
+  so are `POST /api/tab/create` and `POST /api/pane/split`.
+
 ### Fixed
 - The message box stays editable while the app reconnects. On an iPhone, a dictation keyboard such
   as Typeless or Wispr Flow opens its own app and comes back; the connection could drop meanwhile,
