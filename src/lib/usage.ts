@@ -31,6 +31,18 @@ export function tightestWindow(usage: ProviderUsage): UsageWindow | null {
   return usage.windows.reduce<UsageWindow | null>((tightest, window) => tightest === null || window.used_percent > tightest.used_percent ? window : tightest, null);
 }
 
+/**
+ * The limit a glance shows: the nearest to running out, or, when `glance` is "week", the plan-wide
+ * weekly limit where the plan has one (Claude's 5-hour session refills before it matters to some).
+ */
+export function glanceWindow(usage: ProviderUsage, glance: "nearest" | "week"): UsageWindow | null {
+  if (glance === "week") {
+    const week = usage.windows.find((window) => window.kind === "week" && window.scope === null);
+    if (week !== undefined) return week;
+  }
+  return tightestWindow(usage);
+}
+
 export function windowLabel(window: UsageWindow): string {
   const kind = t(WINDOW_LABEL[window.kind]);
   if (window.scope === null) return kind;

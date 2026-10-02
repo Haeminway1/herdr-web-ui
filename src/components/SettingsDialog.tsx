@@ -485,6 +485,18 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
             )}
             {settings.showUsage && (
               <div className="settings-row">
+                <span className="settings-label">{t("Limit shown")}</span>
+                <div className="segmented" aria-label={t("Limit shown")}>
+                  {(["nearest", "week"] as const).map((usageGlance) => (
+                    <button key={usageGlance} type="button" aria-pressed={settings.usageGlance === usageGlance} onClick={() => update({ usageGlance })}>
+                      {t(usageGlance === "week" ? "Weekly" : "Nearest to its limit")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {settings.showUsage && (
+              <div className="settings-row">
                 <span className="settings-label">{t("Where")}</span>
                 <div className="segmented" aria-label={t("Where")}>
                   {(["footer", "top"] as const).map((usagePlacement) => (

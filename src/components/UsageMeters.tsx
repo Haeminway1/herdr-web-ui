@@ -5,8 +5,8 @@ import "./UsageMeters.css";
 
 import type { ProviderUsage, UsageWindow } from "../../shared/protocol.ts";
 import { useT, type Translate } from "../lib/i18n.ts";
-import { useSettings, type UsageCount } from "../lib/settings.ts";
-import { formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, tightestWindow, usageName, useUsage, windowLabel, formatResetAt, formatResetShort, leftLevel } from "../lib/usage.ts";
+import { useSettings, type UsageCount, type UsageGlance } from "../lib/settings.ts";
+import { formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, orderProviders, PROVIDER_MARK, PROVIDER_NAME, glanceWindow, usageName, useUsage, windowLabel, formatResetAt, formatResetShort, leftLevel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 
 /** chips the strip beside Settings holds before the rest fold into "+N" */
@@ -31,8 +31,8 @@ function isError(usage: ProviderUsage): boolean {
   return usage.problem === "expired" || usage.problem === "failed";
 }
 
-function Chip({ usage, count }: { usage: ProviderUsage; count: UsageCount }) {
-  const window = tightestWindow(usage);
+function Chip({ usage, count, glance }: { usage: ProviderUsage; count: UsageCount; glance: UsageGlance }) {
+  const window = glanceWindow(usage, glance);
   return (
     <span className={`usage-chip${level(window)}${usage.problem ? " has-problem" : ""}`}>
       <AgentMark agent={PROVIDER_MARK[usage.id]} size={14} />
@@ -118,13 +118,14 @@ export function UsageMeters() {
   };
 
   const count = settings.usageCount;
+  const glance = settings.usageGlance;
   // an account hidden in Settings is left out of the strip and the popover alike
   const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
   if (!footer || shown.length === 0) return null;
   const folded = shown.length > MAX_CHIPS ? shown.length - (MAX_CHIPS - 1) : 0;
   const chips = folded > 0 ? shown.slice(0, MAX_CHIPS - 1) : shown;
   const summary = shown.map((usage) => {
-    const window = tightestWindow(usage);
+    const window = glanceWindow(usage, glance);
     return `${usageName(usage)} ${window ? meterText(window, count) : "—"}`;
   }).join(", ");
 
@@ -139,7 +140,7 @@ export function UsageMeters() {
         title={summary}
         onClick={() => setOpen(!open)}
       >
-        {chips.map((usage) => <Chip key={usage.key} usage={usage} count={count} />)}
+        {chips.map((usage) => <Chip key={usage.key} usage={usage} count={count} glance={glance} />)}
         {folded > 0 && <span className="usage-more">+{folded}</span>}
       </button>
       {open && (
@@ -179,6 +180,7 @@ export function UsagePanel() {
   }, [top]);
 
   const count = settings.usageCount;
+  const glance = settings.usageGlance;
   const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
   // a phone's drawer gives the sessions the room: one line of percents, the rows a tap away
   const narrow = useNarrow();
@@ -196,10 +198,10 @@ export function UsagePanel() {
   if (narrow && !unfolded) {
     return (
       <section className="usage-panel is-folded" aria-label={t("Subscription usage")}>
-        <button ref={lineRef} type="button" className="usage-panel-line" aria-expanded={false} aria-label={`${t("Show plan limits")}: ${shown.map((usage) => { const window = tightestWindow(usage); return `${usageName(usage)} ${window ? meterText(window, count) : "—"}`; }).join(", ")}`} title={t("Show plan limits")} onClick={() => { toggled.current = true; setUnfolded(true); }}>
+        <button ref={lineRef} type="button" className="usage-panel-line" aria-expanded={false} aria-label={`${t("Show plan limits")}: ${shown.map((usage) => { const window = glanceWindow(usage, glance); return `${usageName(usage)} ${window ? meterText(window, count) : "—"}`; }).join(", ")}`} title={t("Show plan limits")} onClick={() => { toggled.current = true; setUnfolded(true); }}>
           <span className="usage-panel-line-chips">
           {shown.map((usage) => {
-            const window = tightestWindow(usage);
+            const window = glanceWindow(usage, glance);
             return (
               <span key={usage.key} className={`usage-panel-chip${window ? ` is-left-${leftLevel(window)}` : ""}${usage.problem ? " has-problem" : ""}`}>
                 <AgentMark agent={PROVIDER_MARK[usage.id]} size={14} />
@@ -223,7 +225,7 @@ export function UsagePanel() {
       )}
       <button type="button" className="usage-panel-rows" aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={() => setOpen(!open)}>
         {shown.map((usage) => {
-          const window = tightestWindow(usage);
+          const window = glanceWindow(usage, glance);
           const value = window ? meterPercent(window, count) : 0;
           const reset = window ? formatResetShort(window.resets_at, now) : null;
           const resetAt = window && reset !== null ? formatResetAt(window.resets_at, now) : null;
