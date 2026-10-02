@@ -379,3 +379,72 @@
   border-top: var(--hairline) solid var(--border);
   padding-top: var(--space-2);
 }
+
+/* a phone's drawer: the panel folds to one line of percents (UsagePanel), the rows a tap away */
+.usage-panel.is-folded {
+  padding: var(--space-1) var(--space-3);
+}
+
+.usage-panel { position: relative; }
+
+.usage-panel-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--touch-target);
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  cursor: pointer;
+}
+
+.usage-panel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.usage-panel-chip-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-panel-chip.is-left-ok .usage-panel-chip-value { color: var(--meter-ok); }
+.usage-panel-chip.is-left-mid .usage-panel-chip-value { color: var(--meter-mid); }
+.usage-panel-chip.is-left-low .usage-panel-chip-value { color: var(--meter-low); }
+.usage-panel-chip.has-problem { opacity: 0.55; }
+
+.usage-panel-line-count {
+  margin-left: auto;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+.usage-panel-line-caret,
+.usage-panel-fold svg {
+  width: 16px;
+  height: 16px;
+  color: var(--text-dim);
+}
+
+.usage-panel-fold {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel);
+  cursor: pointer;
+}

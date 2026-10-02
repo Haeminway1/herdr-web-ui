@@ -327,6 +327,9 @@ The Dynamic Island's own colours, the same in every theme.
   footer and scrolling past the sidebar's top bar: per account its mark, name and plan pill with
   the email or login right-aligned and ellipsized, then one row per limit (label, reset time, right-aligned percent) over a 4px bar. A problem
   note is dim, red for an expired sign-in or a failed request.
+- In a phone's drawer (768px and under) the panel folds to one line, each account's mark and
+  percent in its left colour, a caret to unfold the rows (a fold button folds them back), and the
+  Needs you list above the sessions takes one short line per pane: the sessions get the room.
 - At the top of the sidebar (Settings → Where), a panel with one row per account: mark, provider
   and plan (the account only when two of one provider show), a 5px bar, the limit's window and its
   reset as `1d 3h (10/4 15:00)` (time left in short units, then the local date and time), and the

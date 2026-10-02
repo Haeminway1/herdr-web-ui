@@ -644,6 +644,7 @@ export const JA: Record<string, string> = {
   "Show {name}": "{name} を表示",
   "left": "残り",
   "used": "使用",
+  "Fold plan limits": "プランの上限を折りたたむ",
   "{percent} left": "残り {percent}",
   "Meters show": "メーターの表示",
   "Beside Settings": "設定の横",
