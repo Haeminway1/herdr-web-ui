@@ -275,6 +275,18 @@ One set for both themes: the card is island black wherever it shows.
 
 ### Sidebar roster row and footer
 - Top bar: **New session** only. Search lives in the command palette, not the roster.
+- Appearance's **Sidebar grouping** is **By workspace** by default, preserving the original
+  workspace headers, folds and merged single-pane rows. **By folder** opts into the grouping below.
+  The choice applies immediately and persists in the browser's existing Settings record. Workspace
+  and folder fold keys remain independent when switching modes; original workspace keys are retained.
+- In folder mode, within each PC, panes with the same full cwd share a folder group, including panes from
+  different workspaces. Trailing separators and Windows slash styles are normalized; case and
+  symlinks are not resolved. Unknown cwd stays with its workspace rather than merging unrelated sessions.
+- Every folder has a caret, folder glyph, basename, full-path subtitle and pane count, even for
+  one pane. Its indented contents use the existing spacing and border tokens. Folder folds are
+  remembered per PC and path; opening a pane unfolds its folder, but status updates do not.
+- Folder order follows the first workspace in server order; workspace handles still reorder
+  workspaces, not filesystem directories. Workspace names and rename actions remain inside the group.
 - A workspace header shows drag handle, number, editable label, roll-up status and rename action.
   Drag/drop reorders; `Alt+↑/↓` on the handle is the keyboard equivalent.
 - Every pane row is two lines: agent/shell mark, then the editable title alone on line one (full
@@ -365,6 +377,9 @@ One set for both themes: the card is island black wherever it shows.
   preview, uploads through `POST /api/pane/image`, and inserts a removable editable `@path` mention.
 - While a phone's keyboard is up, a tap on the transcript or a drag down it (`32px`) puts the
   keyboard away. Each only blurs the field, so the draft stays.
+- On a touch screen, picking a pane (drawer, palette, notification) or switching its lens never
+  raises the keyboard: the user reads first, and a tap on the message box or the grid raises it.
+  A desktop's picked pane takes typing at once.
 - Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. IME Enter
   is ignored. While working, Stop sends Escape and Queue stores the next message.
 

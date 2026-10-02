@@ -164,6 +164,10 @@ export function PaneTerminal({
   const secretActive = secret?.pane === paneId;
   // a touch screen writes in the terminal's input line; typing straight into the grid is chosen
   const coarse = useCoarsePointer();
+  // A touch screen reads a pane before it answers: picking a pane or a lens there never raises the
+  // keyboard by itself, only a tap on the message box or the grid does. A desktop has no keyboard
+  // to raise, and the pane it picks takes the typing at once.
+  const coarseRef = useRef(coarse); coarseRef.current = coarse;
   const [directTyping, setDirectTyping] = useState(storedDirectTyping);
   const inputLine = coarse && !directTyping && !chatView;
   const inputLineRef = useRef(inputLine);
@@ -959,7 +963,7 @@ export function PaneTerminal({
     }
     const pane = paneRef.current;
     if (pane && term) socketRef.current?.resize(pane, term.cols, term.rows, true);
-    if (!autoSelected) term?.focus();
+    if (!autoSelected && !coarseRef.current) term?.focus();
   }, [chatView]);
 
   // follow the selected pane
@@ -997,7 +1001,7 @@ export function PaneTerminal({
     socket.attach(paneId, term.cols, term.rows);
     // the chat lens covers the grid and its composer takes the keyboard: focusing the hidden
     // grid sent the keys straight to the pane, and showed a phone's IME text mid-screen
-    if (!chatViewRef.current && !autoSelected) term.focus();
+    if (!chatViewRef.current && !autoSelected && !coarseRef.current) term.focus();
     return () => {
       socket.detach(paneId);
     };
@@ -1010,7 +1014,7 @@ export function PaneTerminal({
   useEffect(() => {
     const wasAuto = autoSelectedRef.current;
     autoSelectedRef.current = autoSelected;
-    if (wasAuto && !autoSelected && !chatViewRef.current) termRef.current?.focus();
+    if (wasAuto && !autoSelected && !chatViewRef.current && !coarseRef.current) termRef.current?.focus();
   }, [autoSelected]);
 
   // key-bar taps go through xterm so the onData -> socket path above is reused
@@ -1106,8 +1110,12 @@ export function PaneTerminal({
     });
   }, []);
 
-  // the input line keeps a tapped grid from raising the keyboard; typing straight into it gives it back
+  // the input line keeps a tapped grid from raising the keyboard; typing straight into it gives it
+  // back. Only turning direct typing on raises it: a pane or lens picked with it on does not.
+  const directTypingRef = useRef(directTyping);
   useEffect(() => {
+    const turnedOn = directTyping && !directTypingRef.current;
+    directTypingRef.current = directTyping;
     const textarea = hostRef.current?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
     if (!textarea) return;
     if (inputLine) {
@@ -1115,7 +1123,7 @@ export function PaneTerminal({
       if (document.activeElement === textarea) textarea.blur();
     } else {
       textarea.removeAttribute("inputmode");
-      if (coarse && !chatView && directTyping && !autoSelected) termRef.current?.focus();
+      if (coarse && !chatView && turnedOn) termRef.current?.focus();
     }
   }, [inputLine, coarse, chatView, directTyping, paneId]);
 
@@ -1342,7 +1350,7 @@ export function PaneTerminal({
         <Composer
           key={paneId}
           paneId={paneId}
-          autoFocus={!autoSelected}
+          autoFocus={!autoSelected && !coarse}
           agent={agent}
           agentStatus={agentStatus}
           backgroundTasks={backgroundTasks}
