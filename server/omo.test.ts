@@ -2,7 +2,7 @@ import { expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { heldSessionIds, isOmoProcess, omoCandidates, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
+import { heldSessionIds, isOmoProcess, omoSessionFolder, omoCandidates, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
 
 const runtime = (paneId: string, startedAt: number | null = 10_000, paths: string[] = [], ids: string[] = []): OmoRuntime => ({ paneId, startedAt, paths, ids });
 const files = [
@@ -123,4 +123,10 @@ it("does not pin a launch session id after a new unclaimed session appears", () 
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, [], ["old-session"])], 20_000)).toBeNull();
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, ["/old.jsonl"], ["old-session"])], 20_000)).toBe("/old.jsonl");
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, [], ["old-session"]), runtime("b", 14_000, ["/new.jsonl"])], 20_000)).toBe("/old.jsonl");
+});
+
+it("names a cwd's session folder as omo's engine does, a Windows cwd included", () => {
+  expect(omoSessionFolder("/home/u/dev/app")).toBe("--home-u-dev-app--");
+  expect(omoSessionFolder("C:\\Users\\me\\dev\\app")).toBe("--C--Users-me-dev-app--");
+  expect(omoSessionFolder("C:/Users/me/app")).toBe("--C--Users-me-app--");
 });

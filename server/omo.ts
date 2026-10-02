@@ -97,7 +97,15 @@ function candidate(path: string, root: string, cwd: string): OmoCandidate | null
   finally { if (fd !== undefined) closeSync(fd); }
 }
 
-const sessionDir = (cwd: string, home: string) => join(home, ".omo", "agent", "sessions", `-${cwd.replaceAll("/", "-")}--`);
+/**
+ * omo's engine (senpi, core/session-manager.js) names a cwd's session folder exactly so: the
+ * leading slash dropped, then every slash, backslash and colon a dash. A Windows cwd
+ * (`C:\\Users\\me\\app`) is `--C--Users-me-app--`; the slash-only rule this used missed it.
+ */
+export function omoSessionFolder(cwd: string): string {
+  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+const sessionDir = (cwd: string, home: string) => join(home, ".omo", "agent", "sessions", omoSessionFolder(cwd));
 
 // A holder's start is floored to the second (as `ps -o lstart`), ours is in clock ticks.
 const HOLDER_START_TOLERANCE_MS = 3000;
