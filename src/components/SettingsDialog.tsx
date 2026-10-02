@@ -246,6 +246,10 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
                 ))}
               </div>
             </div>
+            <div className="settings-row">
+              <div><span className="settings-label">{t("In the app")}</span><span className="settings-description">{t("While the app is open, these drop in from the top of the screen at once. Tap one to open its pane.")}</span></div>
+              <Toggle label={t("In the app")} checked={settings.alertInApp} onChange={(alertInApp) => update({ alertInApp })} />
+            </div>
           </section>
 
           <section className="settings-section">
