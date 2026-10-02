@@ -29,3 +29,30 @@
     background: var(--bg-hover);
   }
 }
+
+/* a phone's drawer: the waiting panes stay on top but take one short line each, the sessions
+   below get the room */
+@media (max-width: 768px) {
+  .needs-input {
+    padding: var(--space-1) var(--space-3);
+  }
+  .needs-input-heading {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--fs-xs);
+  }
+  .needs-input-select {
+    min-height: var(--touch-target);
+  }
+  .needs-input-select .agent-mark-holder {
+    width: 28px;
+    height: 28px;
+  }
+  .needs-input-select .pane-meta .pane-subtitle {
+    display: none;
+  }
+  .needs-input-select .pane-copy {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
+  }
+}

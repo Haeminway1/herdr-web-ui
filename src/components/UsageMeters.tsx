@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent } from "react";
-import { Clock, RefreshCw, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronUp, Clock, RefreshCw, TriangleAlert } from "lucide-react";
 
 import "./UsageMeters.css";
 
@@ -180,9 +180,36 @@ export function UsagePanel() {
 
   const count = settings.usageCount;
   const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
+  // a phone's drawer gives the sessions the room: one line of percents, the rows a tap away
+  const narrow = useNarrow();
+  const [unfolded, setUnfolded] = useState(false);
   if (!top || shown.length === 0) return null;
+  if (narrow && !unfolded) {
+    return (
+      <section className="usage-panel is-folded" aria-label={t("Subscription usage")}>
+        <button type="button" className="usage-panel-line" aria-expanded={false} aria-label={`${t("Show plan limits")}: ${shown.map((usage) => { const window = tightestWindow(usage); return `${PROVIDER_NAME[usage.id]} ${window ? meterText(window, count) : "—"}`; }).join(", ")}`} title={t("Show plan limits")} onClick={() => setUnfolded(true)}>
+          {shown.map((usage) => {
+            const window = tightestWindow(usage);
+            return (
+              <span key={usage.key} className={`usage-panel-chip${window ? ` is-left-${leftLevel(window)}` : ""}${usage.problem ? " has-problem" : ""}`}>
+                <AgentMark agent={PROVIDER_MARK[usage.id]} size={14} />
+                <span className="usage-panel-chip-value">{window ? formatPercent(meterPercent(window, count)) : "—"}</span>
+              </span>
+            );
+          })}
+          <span className="usage-panel-line-count">{t(count === "left" ? "left" : "used")}</span>
+          <ChevronDown className="usage-panel-line-caret" aria-hidden="true" />
+        </button>
+      </section>
+    );
+  }
   return (
     <section className="usage-panel" aria-label={t("Subscription usage")}>
+      {narrow && (
+        <button type="button" className="usage-panel-fold" aria-expanded={true} aria-label={t("Fold plan limits")} title={t("Fold plan limits")} onClick={() => { setUnfolded(false); setOpen(false); }}>
+          <ChevronUp aria-hidden="true" />
+        </button>
+      )}
       <button type="button" className="usage-panel-rows" aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={() => setOpen(!open)}>
         {shown.map((usage) => {
           const window = tightestWindow(usage);
@@ -235,4 +262,19 @@ export function UsagePanel() {
       )}
     </section>
   );
+}
+
+/** The drawer's width (the sidebar is a drawer at 768px and under), kept as it changes. */
+function useNarrow(): boolean {
+  const query = "(max-width: 768px)";
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia?.(query).matches === true);
+  useEffect(() => {
+    const media = window.matchMedia?.(query);
+    if (!media) return;
+    const change = (): void => setNarrow(media.matches);
+    change();
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
+  }, []);
+  return narrow;
 }
