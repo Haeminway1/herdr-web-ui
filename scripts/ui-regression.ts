@@ -577,6 +577,28 @@ try {
   assert.deepEqual(errors, []);
   console.log("PASS mobile composer with unavailable storage and no horizontal overflow");
 
+  // a phone reads a pane before it answers: a pane picked from the drawer raises no keyboard,
+  // and a tap on the message box does
+  const typing = (target: typeof mobilePage) => target.evaluate(() => document.activeElement?.matches("textarea, input, [contenteditable]") ?? false);
+  await mobilePage.getByRole("textbox", { name: "Message", exact: true }).blur();
+  await mobilePage.locator('button[aria-controls="workspace-drawer"]').click();
+  await mobilePage.locator(`.pane-select[title^="${paneA} —"]`).click();
+  await mobilePage.getByRole("textbox", { name: "Message", exact: true }).waitFor();
+  await mobilePage.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await mobilePage.waitForTimeout(NO_SEND_WAIT_MS);
+  assert.equal(await typing(mobilePage), false, "a pane picked on a phone does not take the keyboard");
+  await mobilePage.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+  await mobilePage.waitForTimeout(NO_SEND_WAIT_MS);
+  assert.equal(await typing(mobilePage), false, "nor does switching its lens");
+  await mobilePage.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+  await mobilePage.getByRole("textbox", { name: "Message", exact: true }).tap();
+  await until(() => typing(mobilePage), "a tap on the message box takes the keyboard");
+  await mobilePage.getByRole("textbox", { name: "Message", exact: true }).blur();
+  await mobilePage.locator('button[aria-controls="workspace-drawer"]').click();
+  await mobilePage.locator(`.pane-select[title^="${paneB} —"]`).click();
+  await mobilePage.getByRole("textbox", { name: "Message", exact: true }).waitFor();
+  console.log("PASS a pane picked on a phone waits for a tap before raising the keyboard");
+
   // Claude's suggestion on a phone is the placeholder only, until Settings turns its chip on
   const promptRoute = `**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`;
   const suggest = { json: { prompt: null, suggestion: "run the tests" } };

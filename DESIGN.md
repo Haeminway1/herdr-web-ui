@@ -349,6 +349,9 @@ Comfortable values are `:root`; the final column is the complete compact overrid
   preview, uploads through `POST /api/pane/image`, and inserts a removable editable `@path` mention.
 - While a phone's keyboard is up, a tap on the transcript or a drag down it (`32px`) puts the
   keyboard away. Each only blurs the field, so the draft stays.
+- On a touch screen, picking a pane (drawer, palette, notification) or switching its lens never
+  raises the keyboard: the user reads first, and a tap on the message box or the grid raises it.
+  A desktop's picked pane takes typing at once.
 - Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. IME Enter
   is ignored. While working, Stop sends Escape and Queue stores the next message.
 
