@@ -17,6 +17,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   `ANTIGRAVITY_APP_DATA_DIR`). When a keychain item and the file both exist, the later-expiring
   one is used, as the Claude meter already does.
   ([#399](https://github.com/devswha/herdr-web-ui/pull/399) by @diogo7dias)
+- While an agent works, the line over the message box also says how long the turn has run
+  and what it is doing now: `· 3m 12s · Running bun test`. The time counts from the turn's
+  message and ticks each second; the latest tool is named shortly and gives way first on a
+  narrow screen. Panes without a conversation transcript are unchanged.
+  ([#340](https://github.com/devswha/herdr-web-ui/pull/340) by @Haeminway1)
 
 ### Fixed
 - On an Android phone, dragging down at the top of a chat no longer reloads the app. The drag
