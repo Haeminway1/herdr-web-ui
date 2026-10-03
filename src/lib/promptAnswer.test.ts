@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import type { InteractivePrompt } from "../../shared/protocol.ts";
-import { answerFromText, answerHint, answerRefusal, needsConfirmation } from "./promptAnswer.ts";
+import { answerFromText, answerHint, answerRefusal, needsConfirmation, sameChoices } from "./promptAnswer.ts";
 
 const prompt = (options: string[], custom: number | null, multi = false): InteractivePrompt => ({
   id: "p", agent: "claude", kind: "question", title: "Question", question: "?", body: null,
@@ -52,5 +52,22 @@ describe("answering a prompt from the chat", () => {
     expect(answerFromText(multi, "1, 3")).toEqual({ option_indices: [0, 2] });
     expect(answerFromText(multi, "1 1 2")).toEqual({ option_indices: [0, 1] });
     expect(answerFromText(multi, "1 and 3")).toBeNull();
+  });
+});
+
+describe("a card re-read after its answer was refused as stale", () => {
+  const card = { ...prompt(["Yes", "No", "Enter", "Esc"], null), body: "running · 12s" };
+
+  it("is the same card when only its id moved (a line ticking elsewhere on the screen)", () => {
+    expect(sameChoices(card, { ...card, id: "q" })).toBe(true);
+  });
+
+  it("is another card when the question or any option changed", () => {
+    expect(sameChoices(card, { ...card, id: "q", question: "Delete it?" })).toBe(false);
+    // the text above the question is what is approved (a command): another one is another card
+    expect(sameChoices(card, { ...card, id: "q", body: "rm -rf build" })).toBe(false);
+    expect(sameChoices(card, { ...card, id: "q", options: card.options.slice(0, 3) })).toBe(false);
+    expect(sameChoices(card, { ...card, id: "q", options: card.options.map((option, index) => index === 1 ? { ...option, label: "No, and tell Claude" } : option) })).toBe(false);
+    expect(sameChoices(card, { ...card, id: "q", agent: "codex" })).toBe(false);
   });
 });
