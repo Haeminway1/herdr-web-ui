@@ -2,8 +2,8 @@
  * The phone's in-app alert (components/Droplet.tsx) as the iPhone's Dynamic Island shows one:
  * the black island itself grows from its compact pill into a wide rounded banner on a lively
  * spring, its content fades in, and on the way out the content goes first and the island shrinks
- * back into the pill. The pill stays below the safe area and app header so native status UI
- * remains visible and the notification does not cover header controls.
+ * back into the pill. Only a supported standalone iPhone portrait uses the native island's
+ * position; elsewhere the pill stays below the safe area and app header.
  */
 
 /** the compact island, as an iPhone draws it in portrait */
@@ -25,11 +25,11 @@ export interface SpringConfig {
 export const GROW_SPRING: SpringConfig = { duration: 520, dampingRatio: 0.7 };
 /** its content, once it has room */
 export const REVEAL_SPRING: SpringConfig = { duration: 260, dampingRatio: 1 };
-export const REVEAL_DELAY = 90;
+export const REVEAL_DELAY = 190;
 /** the way out: the content first, then the island back into its pill */
 export const HIDE_SPRING: SpringConfig = { duration: 140, dampingRatio: 1 };
 export const SHRINK_SPRING: SpringConfig = { duration: 420, dampingRatio: 0.9 };
-export const SHRINK_DELAY = 70;
+export const SHRINK_DELAY = 180;
 export const DRAG_SPRING: SpringConfig = { duration: 420, dampingRatio: 0.75 };
 
 export interface IslandLayout {
@@ -40,20 +40,29 @@ export interface IslandLayout {
   compactHeight: number;
   expandedWidth: number;
   expandedHeight: number;
+  /** Reserve the physical camera area for the background, never for text or controls. */
+  contentTop: number;
+  islandMode: boolean;
 }
 
 /**
- * Keep the entire pill below both the native status inset and the app header.
+ * On supported portrait iPhones the 59px safe inset ends below the 37px island. Its
+ * compact top is 48px above that inset (11px on a 59px inset); content begins below
+ * the inset. Other geometries keep the entire pill below the header and safe area.
  */
-export function islandLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0, headerBottom = 0): IslandLayout {
+export function islandLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0, headerBottom = 0, islandMode = false): IslandLayout {
   const safeWidth = Math.max(width - insetLeft - insetRight, 0);
+  const top = islandMode ? insetTop - 48 : Math.max(insetTop, headerBottom) + TOP_SPACING;
+  const contentTop = islandMode ? insetTop - top + 6 : 0;
   return {
-    top: Math.max(insetTop, headerBottom) + TOP_SPACING,
+    top,
     centerX: insetLeft + safeWidth / 2,
     compactWidth: ISLAND_WIDTH,
     compactHeight: ISLAND_HEIGHT,
     expandedWidth: Math.max(Math.min(safeWidth - EXPANDED_MARGIN * 2, EXPANDED_MAX_WIDTH), ISLAND_WIDTH),
-    expandedHeight: EXPANDED_HEIGHT,
+    expandedHeight: islandMode ? contentTop + EXPANDED_HEIGHT : EXPANDED_HEIGHT,
+    contentTop,
+    islandMode,
   };
 }
 

@@ -2,8 +2,40 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Browser } from "playwright-core";
+import type { Browser, BrowserContext, Page } from "playwright-core";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+
+const iphoneUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+const evidence = (phase: string) => join(process.env.UI_EVIDENCE_DIR ?? tmpdir(), `herdr-island-${phase}.png`);
+
+async function islandFixture(context: BrowserContext, inset = 59, standalone = true): Promise<void> {
+  await context.addInitScript((enabled) => {
+    Object.defineProperty(navigator, "standalone", { configurable: true, get: () => enabled });
+  }, standalone);
+  // Chromium does not supply iOS env(safe-area-inset-top); inject the probe's measured inset.
+  await context.addInitScript((top) => {
+    const style = document.createElement("style");
+    style.textContent = `.droplet-probe { padding-top: ${top}px !important; }`;
+    const overlay = document.createElement("div");
+    overlay.id = "qa-physical-island";
+    overlay.style.cssText = "position:fixed;top:11px;left:50%;transform:translateX(-50%);width:126px;height:37px;border-radius:25px;background:#000;z-index:2147483647;pointer-events:none";
+    document.addEventListener("DOMContentLoaded", () => {
+      document.head.append(style);
+      document.body.append(overlay);
+    }, { once: true });
+  }, inset);
+}
+
+async function islandScreenshot(page: Page, phase: string): Promise<void> {
+  await page.screenshot({ path: evidence(phase), animations: "allow" });
+}
+
+async function geometry(page: Page) {
+  return page.locator(".droplet-card").evaluate((element) => {
+    const { x, y, width, height } = element.getBoundingClientRect();
+    return { x, y, width, height };
+  });
+}
 
 /**
  * In-app alerts on a phone-sized page: real herdr status changes reach the open app, which
@@ -13,8 +45,9 @@ import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/clien
 export async function checkDroplet(browser: Browser, origin: string): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-droplet-"));
   const workspaces: string[] = [];
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
+  const context = await browser.newContext({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true, locale: "en-US", userAgent: iphoneUA });
   try {
+    await islandFixture(context);
     const panes: string[] = [];
     for (const suffix of ["open", "other"]) {
       const cwd = join(root, suffix);
@@ -57,18 +90,44 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     console.log("PASS no in-app alert for the open pane");
 
     await block(otherPane);
-    await card.waitFor({ state: "visible" });
+    await card.waitFor({ state: "attached" });
+    const start = await geometry(page);
+    assert.ok(start.y >= 9 && start.y <= 14, `island starts at physical camera: ${JSON.stringify(start)}`);
+    assert.ok(start.width < 300, `entry starts compact: ${JSON.stringify(start)}`);
+    await islandScreenshot(page, "start");
+    await page.waitForTimeout(110);
+    const middle = await geometry(page);
+    assert.ok(middle.width > start.width + 5 && middle.width < 380, `island grows during entry: ${JSON.stringify({ start, middle })}`);
+    await islandScreenshot(page, "mid");
     assert.match((await card.getAttribute("aria-label")) ?? "", /Needs input/);
     assert.equal(await droplet.getAttribute("data-kind"), "blocked");
-    // The alert stays clear of the native status region and the app header.
+    // The shell grows from the real camera, but its content must stay below the camera.
     await Bun.sleep(1_800); // the springs settle: the drop's fall and the card's spread overshoot first
     const box = (await card.boundingBox())!;
     const header = (await page.locator(".app-header").boundingBox())!;
-    assert.ok(box.y >= header.y + header.height + 12, `card top ${box.y}, header bottom ${header.y + header.height}`);
-    assert.ok(Math.abs(box.x + box.width / 2 - 195) <= 1, `card centre ${box.x + box.width / 2}`);
-    assert.ok(box.width <= 390 - 24 && box.width > 300, `card width ${box.width}`);
-    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "droplet-phone.png") });
+    assert.ok(box.y >= 9 && box.y <= 14 && box.height >= 100 && box.height <= 125, `expanded island geometry ${JSON.stringify(box)}`);
+    const camera = (await page.locator("#qa-physical-island").boundingBox())!;
+    assert.equal(await page.evaluate(() => document.elementFromPoint(196, 30)?.closest(".droplet-card") !== null), true, "camera fixture must not intercept island hit testing");
+    for (const selector of [".droplet-mark", ".droplet-title", ".droplet-detail", ".droplet-dot"]) {
+      const content = (await page.locator(selector).boundingBox())!;
+      assert.ok(content.y >= camera.y + camera.height + 4, `${selector} overlaps camera: ${JSON.stringify({ camera, content })}`);
+    }
+    assert.ok(header.y + header.height < box.y + box.height, "island expands over header while content clears camera");
+    assert.ok(Math.abs(box.x + box.width / 2 - 196.5) <= 1, `card centre ${box.x + box.width / 2}`);
+    assert.ok(box.width <= 393 - 24 && box.width > 300, `card width ${box.width}`);
+    await islandScreenshot(page, "expanded");
     await card.tap();
+    await page.locator('.droplet[data-phase="out"]').waitFor({ state: "attached" });
+    await page.waitForTimeout(260);
+    const exit = await geometry(page);
+    assert.ok(exit.width < box.width - 5 && exit.width >= 126, `exit shrinks toward camera: ${JSON.stringify(exit)}`);
+    await islandScreenshot(page, "exit");
+    await page.waitForTimeout(220);
+    if (await card.count()) {
+      const compact = await geometry(page);
+      assert.ok(compact.width < exit.width && compact.y >= 9 && compact.y <= 14, `exit returns to camera: ${JSON.stringify(compact)}`);
+      await islandScreenshot(page, "compact");
+    }
     await droplet.waitFor({ state: "detached" });
     await page.locator(`.pane-select[title^="${otherPane} —"][aria-current="true"]`).waitFor({ state: "attached", timeout: 5_000 });
     assert.equal(await selected(), otherPane, "a tap opens the pane it is about");
@@ -99,8 +158,9 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     assert.ok(lasted > 5_000 && lasted < 9_000, `stayed ${lasted}ms`);
     console.log("PASS an in-app alert goes by itself");
 
-    const quiet = await browser.newContext({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true, locale: "en-US", reducedMotion: "reduce" });
+    const quiet = await browser.newContext({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true, locale: "en-US", userAgent: iphoneUA, reducedMotion: "reduce" });
     try {
+      await islandFixture(quiet);
       const quietPage = await quiet.newPage();
       quietPage.on("pageerror", (error) => errors.push(error.message));
       await quietPage.goto(`${origin}/?pane=${encodeURIComponent(openPane)}`);
@@ -118,6 +178,8 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
         return { x, y, width, height };
       });
       const start = await geometry();
+      assert.ok(start.y >= 9 && start.y <= 14 && start.height >= 100, `reduced-motion island geometry ${JSON.stringify(start)}`);
+      await islandScreenshot(quietPage, "reduced");
       await quietPage.waitForTimeout(65);
       const middle = await geometry();
       await quietPage.waitForTimeout(250);
@@ -138,6 +200,55 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
       console.log("PASS reduced-motion entry and exit keep geometry fixed at intermediate frames");
     } finally {
       await quiet.close();
+    }
+
+    // Resizing for the virtual keyboard keeps the island at the camera; rotation falls back
+    // below the header even though the UA and simulated inset have not changed.
+    await page.setViewportSize({ width: 393, height: 520 });
+    await report(openPane, "idle");
+    await block(openPane);
+    await card.waitFor({ state: "visible" });
+    await page.waitForTimeout(850);
+    assert.ok((await geometry(page)).y <= 14, "keyboard-height resize keeps portrait island at camera");
+    await card.tap();
+    await droplet.waitFor({ state: "detached" });
+    await page.setViewportSize({ width: 852, height: 393 });
+    await report(otherPane, "idle");
+    await block(otherPane);
+    await card.waitFor({ state: "visible" });
+    await page.waitForTimeout(850);
+    const landscape = await geometry(page);
+    const landscapeHeader = (await page.locator(".app-header").boundingBox())!;
+    assert.ok(landscape.y >= Math.max(59, landscapeHeader.y + landscapeHeader.height) + 12 - 1, `landscape falls below header: ${JSON.stringify(landscape)}`);
+    assert.ok(landscape.height >= 67 && landscape.height <= 70, `landscape fallback height ${landscape.height}`);
+    await islandScreenshot(page, "landscape");
+    await card.tap();
+    await droplet.waitFor({ state: "detached" });
+
+    const tabs = await browser.newContext({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true, locale: "en-US", userAgent: iphoneUA });
+    try {
+      await islandFixture(tabs, 59, false);
+      await tabs.addInitScript(() => {
+        if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertDone: "off" }));
+      });
+      const tab = await tabs.newPage();
+      tab.on("pageerror", (error) => errors.push(error.message));
+      await tab.goto(`${origin}/?pane=${encodeURIComponent(openPane)}`);
+      await tab.locator(".conn-live").waitFor();
+      await report(otherPane, "idle");
+      await tab.bringToFront();
+      await report(otherPane, "working");
+      await tab.locator(`.pane-item:has(.pane-select[title^="${otherPane} —"]) [data-status="working"]`).first().waitFor({ state: "attached" });
+      await report(otherPane, "blocked");
+      await tab.locator(".droplet-card").waitFor({ state: "visible" });
+      await tab.waitForTimeout(850);
+      const browserCard = await geometry(tab);
+      const browserHeader = (await tab.locator(".app-header").boundingBox())!;
+      assert.ok(browserCard.y >= Math.max(59, browserHeader.y + browserHeader.height) + 12 - 1, `browser tab falls below header: ${JSON.stringify(browserCard)}`);
+      assert.ok(browserCard.height >= 67 && browserCard.height <= 70, `browser fallback height ${browserCard.height}`);
+      await islandScreenshot(tab, "browser");
+    } finally {
+      await tabs.close();
     }
 
     // turned off in Settings: none

@@ -12,7 +12,7 @@ import "./Droplet.css";
  * The phone's in-app alert (lib/droplet.ts), as the iPhone's Dynamic Island shows one
  * (lib/dropletMotion.ts): the black island grows into a wide rounded banner with the pane's name
  * and what it wants, and shrinks back when it is done. On an iPhone with an island it grows out
- * of a pill below the native status area and app header.
+ * of the physical island's position, with its contents below the camera clearance.
  * One shows at a time; a newer one has the current one shrink away first. A tap opens the pane,
  * a flick up puts it away, and it leaves by itself after a while.
  */
@@ -38,7 +38,15 @@ function measureLayout(probe: HTMLElement | null): IslandLayout {
   const px = (value: string | undefined): number => Number.parseFloat(value ?? "") || 0;
   const top = px(style?.paddingTop);
   const headerBottom = document.querySelector(".app-header")?.getBoundingClientRect().bottom ?? 0;
-  return islandLayout(window.innerWidth, top, px(style?.paddingLeft), px(style?.paddingRight), headerBottom);
+  // CSS safe-area alone cannot identify a camera island (or distinguish a browser tab).
+  // Only known portrait standalone iPhone safe-inset geometry joins the physical capsule.
+  const islandMode = /iPhone/.test(navigator.userAgent)
+    && (navigator as Navigator & { standalone?: boolean }).standalone === true
+    && window.innerHeight > window.innerWidth
+    && window.innerWidth >= 375 && window.innerWidth <= 440
+    && top >= 55 && top <= 65
+    && px(style?.paddingLeft) === 0 && px(style?.paddingRight) === 0;
+  return islandLayout(window.innerWidth, top, px(style?.paddingLeft), px(style?.paddingRight), headerBottom, islandMode);
 }
 
 function reducedMotion(): boolean {
@@ -244,7 +252,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
   const what = t(current.kind === "blocked" ? "Needs input" : current.kind === "done" ? "Finished" : "terminal ended");
   const detail = current.machine ? `${current.machine} · ${what}` : what;
   return (
-    <div className="droplet" role="status" aria-live="polite" data-phase={phase} data-kind={current.kind} key={current.id}>
+    <div className="droplet" role="status" aria-live="polite" data-phase={phase} data-kind={current.kind} data-island={layout?.islandMode ? "true" : undefined} key={current.id}>
       <div ref={probe} className="droplet-probe" aria-hidden="true" />
       {layout && (
         <button
@@ -266,7 +274,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
           onPointerUp={(event) => endPress(event, false)}
           onPointerCancel={(event) => endPress(event, true)}
         >
-          <span ref={bodyEl} className="droplet-body" style={{ width: `${layout.expandedWidth}px`, marginLeft: `${-layout.expandedWidth / 2}px` }}>
+          <span ref={bodyEl} className="droplet-body" style={{ top: `${layout.contentTop}px`, width: `${layout.expandedWidth}px`, marginLeft: `${-layout.expandedWidth / 2}px` }}>
             <span className="droplet-mark">{current.agent ? <AgentMark agent={current.agent} size={18} /> : null}</span>
             <span className="droplet-text">
               <span className="droplet-title">{current.title}</span>

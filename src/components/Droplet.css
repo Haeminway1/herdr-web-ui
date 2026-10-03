@@ -13,6 +13,9 @@
   pointer-events: none;
 }
 
+/* The island covers header controls while expanded; do not leave their top edges peeking out. */
+body:has(.droplet[data-island="true"]) .app-header { visibility: hidden; }
+
 /* the safe area, read through layout (env() has no other way out of CSS) */
 .droplet-probe {
   position: fixed;
