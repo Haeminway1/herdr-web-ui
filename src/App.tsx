@@ -349,12 +349,20 @@ export function App() {
   // One SSE subscription watches every PC, even when no terminal is selected.
   useEffect(() => {
     if (locked !== false) return;
+    // A roster read from herdr can be ahead of the status events still on their way: taken as
+    // each pane's previous status, it swallowed the alert of the event that followed. Statuses
+    // come from the events; a roster only tells the panes not seen yet, and all of them again
+    // once the stream (re)connects, when events may have been missed.
+    let resync = true;
     const seed = (list: Machine[]) => {
       for (const machine of list) for (const pane of machine.snapshot?.panes ?? []) {
-        statusRef.current.set(paneStorageId(machine.id, pane.pane_id), pane.agent_status);
+        const key = paneStorageId(machine.id, pane.pane_id);
+        if (resync || !statusRef.current.has(key)) statusRef.current.set(key, pane.agent_status);
       }
+      resync = false;
     };
     const events = new EventSource("/api/machines/events");
+    events.onopen = () => { resync = true; };
     events.onmessage = (event) => {
       let payload: MachineEvent;
       try { payload = JSON.parse(event.data); } catch { return; }

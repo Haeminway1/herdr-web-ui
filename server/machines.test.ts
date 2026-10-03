@@ -253,3 +253,32 @@ describe("host detection", () => {
     expect(() => psQuote("a\nb")).toThrow();
   });
 });
+
+describe("a pane's read state on the local PC", () => {
+  it("is patched in without reading herdr again, and a load begun before it does not undo it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-web-attention-"));
+    let reads = 0;
+    let release: (() => void) | null = null;
+    const pane = { pane_id: "w1:p1", agent_status: "done" } as never;
+    const manager = new MachineManager(dir, {} as PushService, {} as CompletionTracker, async () => {
+      reads += 1;
+      // the load in flight was asked before the read below and answers without it
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { panes: [pane], workspaces: [], tabs: [] } as never;
+    });
+    try {
+      // the manager's own first load is under way (the constructor starts it)
+      for (let i = 0; i < 100 && release === null; i += 1) await Bun.sleep(5);
+      const attention = { finished_at: "2026-10-03T00:00:00.000Z", seen_at: "2026-10-03T00:01:00.000Z", preview: null };
+      manager.localMessage({ type: "pane-attention", pane_id: "w1:p1", attention });
+      release!();
+      const local = () => manager.list().find((machine) => machine.id === "local")!;
+      for (let i = 0; i < 100 && local().snapshot === null; i += 1) await Bun.sleep(5);
+      expect(reads).toBe(1);
+      expect((local().snapshot!.panes[0] as { attention?: unknown }).attention).toEqual(attention);
+    } finally {
+      manager.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
