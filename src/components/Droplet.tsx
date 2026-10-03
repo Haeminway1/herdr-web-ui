@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Pointer
 import { flickVelocity, onDroplet, type PressSample, type QueuedDroplet } from "../lib/droplet.ts";
 import {
   DRAG_SPRING, GROW_SPRING, HIDE_SPRING, REVEAL_DELAY, REVEAL_SPRING, SHRINK_DELAY, SHRINK_SPRING,
-  Spring, contentStyle, islandLayout, islandShape, type IslandLayout,
+  Spring, contentStyle, islandLayout, islandShape, reducedMotionShape, type IslandLayout,
 } from "../lib/dropletMotion.ts";
 import { useT } from "../lib/i18n.ts";
 import { AgentMark } from "./AgentMark.tsx";
@@ -11,15 +11,15 @@ import "./Droplet.css";
 /**
  * The phone's in-app alert (lib/droplet.ts), as the iPhone's Dynamic Island shows one
  * (lib/dropletMotion.ts): the black island grows into a wide rounded banner with the pane's name
- * and what it wants, and shrinks back when it is done. On an iPhone with an island it grows out
- * of the island; elsewhere a pill appears under the top of the screen and grows the same way.
+ * and what it wants, and shrinks back when it is done. The in-app capsule stays below the
+ * physical island and the app header on every screen.
  * One shows at a time; a newer one has the current one shrink away first. A tap opens the pane,
  * a flick up puts it away, and it leaves by itself after a while.
  */
 
 /** how long it stays once its text shows: long enough to read a pane's name and what it wants */
 export const DROPLET_HOLD_MS = 5000;
-/** the longest the island takes to shrink back (SHRINK_DELAY and SHRINK_SPRING, with room) */
+/** the longest the island takes to leave (SHRINK_DELAY and SHRINK_SPRING, with room) */
 const EXIT_DEADLINE_MS = 1200;
 /** a drag up this far, or a flick up this fast, puts it away */
 const DISMISS_DRAG_PX = -18;
@@ -32,20 +32,13 @@ export function prefersDroplet(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
 }
 
-/**
- * An iPhone in portrait whose safe area is as tall as a Dynamic Island's (59px and up; a notch is
- * 44 to 50): the alert grows out of the island itself. Anything else grows from a pill.
- */
-function hasDynamicIsland(insetTop: number): boolean {
-  return /iPhone/.test(navigator.userAgent) && insetTop >= 54 && window.innerHeight > window.innerWidth;
-}
-
 /** the safe area as CSS reports it: env() is readable only through a laid-out element */
 function measureLayout(probe: HTMLElement | null): IslandLayout {
   const style = probe ? getComputedStyle(probe) : null;
   const px = (value: string | undefined): number => Number.parseFloat(value ?? "") || 0;
   const top = px(style?.paddingTop);
-  return islandLayout(window.innerWidth, top, px(style?.paddingLeft), px(style?.paddingRight), hasDynamicIsland(top));
+  const headerBottom = document.querySelector(".app-header")?.getBoundingClientRect().bottom ?? 0;
+  return islandLayout(window.innerWidth, top, px(style?.paddingLeft), px(style?.paddingRight), headerBottom);
 }
 
 function reducedMotion(): boolean {
@@ -81,7 +74,8 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     const el = islandEl.current;
     if (!box || !el) return;
     const s = springs.current;
-    const shape = islandShape(s.grow.value, box);
+    const reduce = reducedMotion();
+    const shape = reduce ? reducedMotionShape(s.reveal.value, box) : islandShape(s.grow.value, box);
     el.style.left = `${shape.left}px`;
     el.style.top = `${shape.top}px`;
     el.style.width = `${shape.width}px`;
@@ -91,9 +85,9 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     el.style.transform = `translateY(${s.drag.value}px)`;
     const look = contentStyle(s.reveal.value);
     if (bodyEl.current) {
-      bodyEl.current.style.opacity = String(look.opacity);
-      bodyEl.current.style.transform = `scale(${look.scale})`;
-      bodyEl.current.style.filter = look.blur > 0.05 ? `blur(${look.blur}px)` : "";
+      bodyEl.current.style.opacity = reduce ? "1" : String(look.opacity);
+      bodyEl.current.style.transform = reduce ? "" : `scale(${look.scale})`;
+      bodyEl.current.style.filter = !reduce && look.blur > 0.05 ? `blur(${look.blur}px)` : "";
     }
   }, []);
 
@@ -128,9 +122,14 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     setPhase("out");
     const s = springs.current;
     const now = performance.now();
+    if (reducedMotion()) {
+      s.grow.set(1);
+      s.drag.set(0);
+    } else {
+      s.grow.to(0, SHRINK_SPRING, now, SHRINK_DELAY);
+      s.drag.to(0, DRAG_SPRING, now);
+    }
     s.reveal.to(0, HIDE_SPRING, now);
-    s.grow.to(0, reducedMotion() ? HIDE_SPRING : SHRINK_SPRING, now, SHRINK_DELAY);
-    s.drag.to(0, DRAG_SPRING, now);
     run();
     if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
     exitTimer.current = window.setTimeout(() => {
@@ -178,7 +177,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
       setCurrent(notice);
       return;
     }
-    // one at a time: the newest waits for the current one to shrink away
+    // one at a time: the newest waits for the current one to leave
     pending.current = notice;
     leave();
   }), [leave]);
@@ -267,7 +266,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
           onPointerUp={(event) => endPress(event, false)}
           onPointerCancel={(event) => endPress(event, true)}
         >
-          <span ref={bodyEl} className="droplet-body" style={{ top: `${layout.contentTop}px` }}>
+          <span ref={bodyEl} className="droplet-body">
             <span className="droplet-mark">{current.agent ? <AgentMark agent={current.agent} size={18} /> : null}</span>
             <span className="droplet-text">
               <span className="droplet-title">{current.title}</span>

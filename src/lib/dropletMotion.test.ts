@@ -1,21 +1,18 @@
 import { describe, expect, it } from "bun:test";
-import { DYNAMIC_ISLAND_TOP, GROW_SPRING, ISLAND_HEIGHT, ISLAND_WIDTH, Spring, islandLayout, islandShape } from "./dropletMotion.ts";
+import { GROW_SPRING, ISLAND_HEIGHT, ISLAND_WIDTH, Spring, islandLayout, islandShape, reducedMotionShape } from "./dropletMotion.ts";
 
 describe("island layout", () => {
-  it("grows out of a Dynamic Island, or from a pill under the safe area elsewhere", () => {
-    const island = islandLayout(393, 59, 0, 0, true);
-    expect(island.top).toBe(DYNAMIC_ISLAND_TOP);
-    expect(island.overIsland).toBe(true);
-    expect(island.expandedWidth).toBe(369);
-    const notch = islandLayout(390, 47);
-    expect(notch.top).toBe(59);
-    expect(notch.overIsland).toBe(false);
+  it("stays below both the camera safe area and the app header", () => {
+    expect(islandLayout(393, 59, 0, 0, 105).top).toBe(117);
+    expect(islandLayout(393, 59, 0, 0, 46).top).toBe(71);
+    expect(islandLayout(852, 0, 59, 59, 46).top).toBe(58);
+    expect(islandLayout(393, 59).expandedWidth).toBe(369);
     expect(islandLayout(1280, 0).expandedWidth).toBe(400);
   });
 });
 
 describe("island shape", () => {
-  const layout = islandLayout(393, 59, 0, 0, true);
+  const layout = islandLayout(393, 59, 0, 0, 105);
   it("is the compact island at rest and the banner when grown, from the same top", () => {
     const rest = islandShape(0, layout);
     expect(rest.width).toBe(ISLAND_WIDTH);
@@ -27,11 +24,19 @@ describe("island shape", () => {
     expect(grown.top).toBe(rest.top);
     expect(grown.left + grown.width / 2).toBeCloseTo(rest.left + rest.width / 2);
   });
-  it("fades a pill in and out where there is no island under it", () => {
+  it("fades the capsule in and out without leaving an idle pill", () => {
     const pill = islandLayout(390, 47);
     expect(islandShape(0, pill).opacity).toBe(0);
     expect(islandShape(0.5, pill).opacity).toBe(1);
-    expect(islandShape(0, layout).opacity).toBe(1);
+    expect(islandShape(0, layout).opacity).toBe(0);
+  });
+  it("keeps expanded geometry while the whole reduced-motion card fades on either layout", () => {
+    for (const box of [layout, islandLayout(390, 47)]) {
+      const expanded = islandShape(1, box);
+      for (const opacity of [0, 0.25, 0.75, 1]) {
+        expect(reducedMotionShape(opacity, box)).toEqual({ ...expanded, opacity });
+      }
+    }
   });
 });
 
@@ -53,14 +58,5 @@ describe("spring", () => {
     let t = 250;
     while (spring.step(t, t + 16)) t += 16;
     expect(spring.value).toBe(1);
-  });
-});
-
-describe("the camera under a phone's own island", () => {
-  it("keeps the content below the camera and the banner tall enough for it", () => {
-    const island = islandLayout(393, 59, 0, 0, true);
-    expect(island.contentTop).toBeGreaterThanOrEqual(ISLAND_HEIGHT - 4);
-    expect(island.expandedHeight - island.contentTop).toBeGreaterThanOrEqual(60);
-    expect(islandLayout(390, 47).contentTop).toBe(0);
   });
 });

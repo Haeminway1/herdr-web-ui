@@ -145,6 +145,9 @@ The [CI workflow](../.github/workflows/ci.yml) runs on every PR and `main` push:
   and `bun run test:unit`. This suite does not start herdr.
 - **Integration and browser**: checksum-pinned herdr 0.9.3, Node 22, isolated state/session,
   `bun run test:integration`, and `scripts/ui-regression.ts` with the lockfile's Chromium.
+  The two run at the same time (`scripts/ci-lanes.ts`). The integration files can run a few
+  at a time, each worker on a herdr session of its own (`scripts/ci-tests.ts`); CI runs them
+  one by one (`HERDR_TEST_SHARDS: 1`) until the timing-bound contract tests hold under load.
   Missing herdr fails the integration suite. The owned session is stopped even on failure.
   Integration tests have a 15-second default timeout so their bounded process-startup
   probes can finish; individual tests can still specify a longer timeout.
@@ -173,6 +176,9 @@ and media are excluded. Enable the [CodeRabbit GitHub App](https://github.com/ap
 for this repository to activate it; the YAML alone does not install the app. Reassess
 useful findings versus false positives after two weeks. Keep final merge decisions with
 the maintainer.
+
+See [Terminal input](terminal-input.md) for input readiness, draft ownership and the mobile
+input regression matrix.
 
 ## Layout
 

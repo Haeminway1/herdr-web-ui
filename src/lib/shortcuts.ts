@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { useSettings } from "./settings.ts";
+import type { ShortcutOverrides } from "./shortcutBindings.ts";
 
 import type { AppActions } from "./actions.ts";
 
@@ -8,7 +10,7 @@ export const SHORTCUTS = [
   { id: "toggle-sidebar", label: "Toggle sidebar", keys: ["Mod", "Shift", "B"] },
   // Mod+Shift+N keeps working where the browser lets it through (the installed app), but Chrome
   // keeps Ctrl+Shift+N for a new incognito window in a tab: O is the one shown, and works in both
-  { id: "new-session", label: "New session", keys: ["Mod", "Shift", "O"] },
+  { id: "new-session", label: "New workspace", keys: ["Mod", "Shift", "O"] },
   { id: "previous-pane", label: "Previous pane", keys: ["Mod", "Shift", "ArrowUp"] },
   { id: "next-pane", label: "Next pane", keys: ["Mod", "Shift", "ArrowDown"] },
   { id: "settings", label: "Settings", keys: ["Mod", "Shift", ","] },
@@ -25,6 +27,8 @@ export interface ShortcutEventLike {
   metaKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
+  isComposing?: boolean;
+  keyCode?: number;
 }
 
 const KEY_TO_ID: Readonly<Record<string, ShortcutId>> = {
@@ -38,12 +42,26 @@ const KEY_TO_ID: Readonly<Record<string, ShortcutId>> = {
   ",": "settings",
 };
 
-export function matchShortcut(event: ShortcutEventLike, platformIsMac: boolean): ShortcutId | null {
+export function shortcutKeys(id: ShortcutId, overrides: ShortcutOverrides): string[] {
+  if (Object.hasOwn(overrides, id)) return overrides[id] ? [overrides[id]!] : [];
+  return Object.entries(KEY_TO_ID).filter(([, action]) => action === id).map(([key]) => key);
+}
+export function shortcutConflict(id: ShortcutId, keys: string[], overrides: ShortcutOverrides): boolean {
+  return SHORTCUTS.some((other) => other.id !== id && shortcutKeys(other.id, overrides).some((key) => keys.includes(key)));
+}
+
+export function matchShortcut(event: ShortcutEventLike, platformIsMac: boolean, overrides: ShortcutOverrides = {}): ShortcutId | null {
+  if (event.isComposing || event.keyCode === 229) return null;
   const hasMod = platformIsMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
   if (!hasMod || !event.shiftKey || event.altKey) return null;
   // Shift+Comma produces "<" on common keyboard layouts.
-  if (event.code === "Comma") return "settings";
-  return KEY_TO_ID[event.key.length === 1 ? event.key.toLowerCase() : event.key] ?? null;
+  const key = event.code === "Comma" ? "," : /^Digit[0-9]$/.test(event.code ?? "") ? event.code!.slice(-1) : event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  for (const shortcut of SHORTCUTS) {
+    if (shortcut.id === "voice") continue;
+    if (Object.hasOwn(overrides, shortcut.id) && overrides[shortcut.id] === key) return shortcut.id;
+  }
+  const id = KEY_TO_ID[key];
+  return id && !Object.hasOwn(overrides, id) ? id : null;
 }
 
 /** Mod+Shift+Space, held to dictate. matchShortcut never returns "voice": it has no action. */
@@ -80,8 +98,8 @@ export function keepsArrowsForText(target: KeyTargetLike | EventTarget | null): 
  * The capture listener below only prevents the browser's default, so xterm would still encode an
  * app shortcut for the pane: its key handler asks this first.
  */
-export function isAppShortcut(event: ShortcutEventLike): boolean {
-  return matchShortcut(event, isMacPlatform()) !== null;
+export function isAppShortcut(event: ShortcutEventLike, overrides: ShortcutOverrides = {}): boolean {
+  return matchShortcut(event, isMacPlatform(), overrides) !== null;
 }
 
 export function isMacPlatform(): boolean {
@@ -99,13 +117,15 @@ export function formatKeys(keys: readonly string[]): string[] {
 }
 
 export function useShortcuts(actions: AppActions, enabled: boolean): void {
+  const { settings } = useSettings();
   useEffect(() => {
     if (!enabled) return;
     const platformIsMac = isMacPlatform();
     const onKeyDown = (event: KeyboardEvent): void => {
-      const shortcut = matchShortcut(event, platformIsMac);
+      if ((event.target as HTMLElement | null)?.closest?.("[data-shortcut-recorder]")) return;
+      const shortcut = matchShortcut(event, platformIsMac, settings.shortcutOverrides);
       if (shortcut === null) return;
-      if ((shortcut === "previous-pane" || shortcut === "next-pane") && keepsArrowsForText(event.target)) return;
+      if (event.key.startsWith("Arrow") && keepsArrowsForText(event.target)) return;
       event.preventDefault();
       switch (shortcut) {
         case "palette":
@@ -133,5 +153,5 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [actions, enabled]);
+  }, [actions, enabled, settings.shortcutOverrides]);
 }

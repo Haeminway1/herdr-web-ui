@@ -11,7 +11,8 @@
  * - omo: herdr knows nothing about its store and its label for the pane flips
  *   between `pi` and `claude` as omo spawns model CLIs, so the pane's process
  *   tree routes it and process/session evidence selects a unique transcript
- *   under ~/.omo/agent/sessions/<cwd-slug>/. It writes omp's session shape, so
+ *   under <its agent dir>/sessions/<cwd-slug>/ (~/.omo/agent unless the process
+ *   moved it with OMO_CODING_AGENT_DIR). It writes omp's session shape, so
  *   parseOmpTranscript (transcript-records.ts) reads it.
  * - gjc: an open session file or fresh native terminal breadcrumb belonging to
  *   its process (gjc-runtime.ts). It writes omp's session shape too.
@@ -35,9 +36,9 @@ import type { ConversationMetadata, ConversationPart, ConversationTurn, HerdrPan
 import { herdrRpc, sessionSnapshot } from "./herdr/client.ts";
 import { codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, codexTranscriptImage } from "./codex-images.ts";
-import { claudeTranscriptFile, forgetClaudeSessions } from "./claude-store.ts";
+import { claudeProcessSession, claudeTranscriptFile, forgetClaudeSessions } from "./claude-store.ts";
 import { forgetGjcState, gjcTranscriptForPane, storeRelative } from "./gjc-runtime.ts";
-import { isOmoProcess, omoTranscriptForPane } from "./omo.ts";
+import { isOmoProcess, omoSessionForPane } from "./omo.ts";
 import { piTranscriptPath } from "./pi.ts";
 import { piAbandonedTurns, piBranchSegments } from "./pi-tree.ts";
 import { trimOutput } from "./tool-output.ts";
@@ -230,6 +231,14 @@ export class ConversationUnavailable extends Error {
   constructor(reason: string) {
     super(reason);
     this.name = "ConversationUnavailable";
+  }
+}
+
+/** The pane's agent holds a session it has not written yet: a conversation with no turns, not a missing one. */
+export class ConversationNotStarted extends ConversationUnavailable {
+  constructor(readonly sessionId: string) {
+    super("session_not_written");
+    this.name = "ConversationNotStarted";
   }
 }
 
@@ -700,12 +709,22 @@ export async function labelOmoPanes(snapshot: SessionSnapshot): Promise<SessionS
   };
 }
 
-/** Claude's transcript for a pane: herdr names the session id, claude-store.ts finds its project. */
+/** Claude's transcript: Herdr's hook, or a unique live Claude's native PID record. */
 async function claudeTranscriptPath(paneId: string, cwds: readonly (string | null | undefined)[]): Promise<string> {
   const info = await herdrRpc<{ agent: { agent_session?: { value?: unknown } } }>("agent.get", { target: paneId });
-  const session = info.agent.agent_session?.value;
+  let session = info.agent.agent_session?.value;
+  const home = process.env["HOME"] ?? "";
+  if ((typeof session !== "string" || !SESSION_ID.test(session)) && process.platform === "linux") {
+    const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; name?: string; argv?: string[] }[] } }>(
+      "pane.process_info", { pane_id: paneId },
+    );
+    const processes = info.process_info?.foreground_processes?.filter((entry) =>
+      entry.name === "claude" || /(?:^|\/)claude$/.test(entry.argv?.[0] ?? ""),
+    ) ?? [];
+    if (processes.length === 1 && processes[0]) session = await claudeProcessSession(home, processes[0].pid);
+  }
   if (typeof session !== "string" || !SESSION_ID.test(session)) throw new ConversationUnavailable("no_session_id");
-  const path = await claudeTranscriptFile(process.env["HOME"] ?? "", session, cwds);
+  const path = await claudeTranscriptFile(home, session, cwds);
   if (!path) throw new ConversationUnavailable("transcript_missing");
   return path;
 }
@@ -741,9 +760,7 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
   const paneId = pane.pane_id;
   const agent = pane.agent ?? pane.agent_session?.agent ?? "";
   if ((agent === "omo" || agent === "pi" || agent === "claude") && await paneRunsOmo(paneId)) {
-    const path = await omoTranscriptForPane(paneId, cwd, panes ?? (await sessionSnapshot()).panes);
-    if (!path) throw new ConversationUnavailable("no_session_path");
-    return { source: "omo-transcript", path };
+    return { source: "omo-transcript", path: await omoTranscriptPath(paneId, cwd, panes) };
   }
   try {
     if (agent === "codex") {
@@ -754,7 +771,11 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
     // Claude's project is the directory it started in, the process's own cwd more often than the pane's
     if (agent === "claude") return { source: "claude-transcript", path: await claudeTranscriptPath(paneId, [cwd, pane.foreground_cwd]) };
     if (agent === "omp") return { source: "omp-transcript", path: await ompTranscriptPath(paneId) };
-    if (agent === "gjc") return { source: "gjc-transcript", path: await gjcTranscriptPath(paneId, cwd) };
+    if (agent === "gjc") {
+      // GJC can change its own cwd without changing the pane's shell directory.
+      const sessionCwd = typeof pane.foreground_cwd === "string" && pane.foreground_cwd.length > 0 ? pane.foreground_cwd : cwd;
+      return { source: "gjc-transcript", path: await gjcTranscriptPath(paneId, sessionCwd) };
+    }
     // pi's own label only routes pi: an omo pane was taken above, by its process tree.
     if (agent === "pi") {
       const path = await piTranscriptPath(paneId);
@@ -764,10 +785,15 @@ async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: strin
     throw new ConversationUnavailable("no_recognized_transcript");
   } catch (error) {
     if (!(error instanceof ConversationUnavailable) || !(await paneRunsOmo(paneId))) throw error;
-    const path = await omoTranscriptForPane(paneId, cwd, panes ?? (await sessionSnapshot()).panes);
-    if (!path) throw new ConversationUnavailable("no_session_path");
-    return { source: "omo-transcript", path };
+    return { source: "omo-transcript", path: await omoTranscriptPath(paneId, cwd, panes) };
   }
+}
+
+async function omoTranscriptPath(paneId: string, cwd: string, panes?: HerdrPane[]): Promise<string> {
+  const session = await omoSessionForPane(paneId, cwd, panes ?? (await sessionSnapshot()).panes);
+  if (session.pending !== null) throw new ConversationNotStarted(session.pending);
+  if (!session.path) throw new ConversationUnavailable("no_session_path");
+  return session.path;
 }
 
 /**
@@ -789,8 +815,19 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
   if (pane === undefined) throw new ConversationUnavailable("pane_not_found");
   if (typeof pane.cwd !== "string" || pane.cwd.length === 0) throw new ConversationUnavailable("no_recognized_transcript");
 
-  const { source, path } = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes);
-  return transcriptPage(source, path, page, codexHome);
+  let resolved: { source: RecognizedConversation["source"]; path: string };
+  try {
+    resolved = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes);
+  } catch (error) {
+    if (!(error instanceof ConversationNotStarted)) throw error;
+    // nothing comes before a conversation not begun: a cursor for older pages is another one's
+    if (page.before !== undefined || page.since !== undefined) throw new HistoryChanged();
+    // the chat says there is nothing yet; the session's first prompt writes the file and
+    // the next poll's history_id differs, so the chat takes it whole
+    const id = `unwritten:${error.sessionId}`;
+    return { source: "omo-transcript", turns: [], metadata: { model: null, reasoning_effort: null }, cursor: null, history_id: id, version: answerVersion(id, "") };
+  }
+  return transcriptPage(resolved.source, resolved.path, page, codexHome);
 }
 
 /** One page of a resolved transcript (paneConversation's `page`). */

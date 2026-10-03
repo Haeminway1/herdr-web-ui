@@ -45,6 +45,11 @@
 
 .droplet[data-phase="out"] .droplet-card { pointer-events: none; }
 
+@media (prefers-reduced-motion: reduce) {
+  .droplet-card { will-change: opacity; }
+  .droplet-body { will-change: auto; }
+}
+
 .droplet-card:focus-visible {
   outline: var(--ring);
   outline-offset: var(--ring-offset);

@@ -1,44 +1,34 @@
 /**
  * The phone's in-app alert (components/Droplet.tsx) as the iPhone's Dynamic Island shows one:
- * the black island itself grows from its compact pill into a wide rounded banner on a lively
- * spring, its content fades in, and on the way out the content goes first and the island shrinks
- * back into the pill. On an iPhone with an island it grows out of the island; elsewhere a pill of
- * the same size appears under the top of the screen and grows the same way.
+ * a compact capsule grows into a rounded banner inside the app, below the phone's safe area and
+ * app header. It never draws over the phone's physical camera.
  */
 
 /** the compact island, as an iPhone draws it in portrait */
 export const ISLAND_WIDTH = 126;
 export const ISLAND_HEIGHT = 37.33;
-/** where an iPhone's Dynamic Island sits in portrait, measured from the top of the screen */
-export const DYNAMIC_ISLAND_TOP = 11;
 /** the expanded island: a screen's width less a margin each side, one name and one line under it */
 export const EXPANDED_MARGIN = 12;
 export const EXPANDED_MAX_WIDTH = 400;
 export const EXPANDED_HEIGHT = 68;
 export const EXPANDED_RADIUS = 30;
-/**
- * Grown out of a phone's own island, the camera stays where it was: the banner keeps the island's
- * height clear at its top and puts its content under it, as the system's expanded island does.
- */
-export const CAMERA_CLEARANCE = Math.ceil(ISLAND_HEIGHT);
-export const EXPANDED_ISLAND_RADIUS = 38;
-/** without an island, the pill's gap under the top of what can be seen */
+/** gap below the safe area and app header */
 export const TOP_SPACING = 12;
 
 export interface SpringConfig {
   duration: number;
   dampingRatio: number;
 }
-/** the island's growth: quick and a little bouncy, as the system's */
-export const GROW_SPRING: SpringConfig = { duration: 520, dampingRatio: 0.7 };
+/** a short, restrained expansion with a slight overshoot */
+export const GROW_SPRING: SpringConfig = { duration: 400, dampingRatio: 0.8 };
 /** its content, once it has room */
 export const REVEAL_SPRING: SpringConfig = { duration: 260, dampingRatio: 1 };
 export const REVEAL_DELAY = 90;
 /** the way out: the content first, then the island back into its pill */
 export const HIDE_SPRING: SpringConfig = { duration: 140, dampingRatio: 1 };
-export const SHRINK_SPRING: SpringConfig = { duration: 420, dampingRatio: 0.9 };
+export const SHRINK_SPRING: SpringConfig = { duration: 320, dampingRatio: 0.95 };
 export const SHRINK_DELAY = 70;
-export const DRAG_SPRING: SpringConfig = { duration: 420, dampingRatio: 0.75 };
+export const DRAG_SPRING: SpringConfig = { duration: 320, dampingRatio: 0.9 };
 
 export interface IslandLayout {
   /** the island's top edge: it grows down and out from here */
@@ -48,27 +38,18 @@ export interface IslandLayout {
   compactHeight: number;
   expandedWidth: number;
   expandedHeight: number;
-  /** the content's top inside the grown island: below the camera when it is the phone's own */
-  contentTop: number;
-  /** the island is the phone's own: at rest it is simply not drawn over it */
-  overIsland: boolean;
 }
 
-/**
- * Where the island grows. `dynamicIsland`: an iPhone in portrait with one (Droplet.tsx tells by
- * its safe area); anything else gets a pill TOP_SPACING under the safe area's top.
- */
-export function islandLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0, dynamicIsland = false): IslandLayout {
+/** Place the in-app capsule below both the hardware safe area and the app header. */
+export function islandLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0, headerBottom = 0): IslandLayout {
   const safeWidth = Math.max(width - insetLeft - insetRight, 0);
   return {
-    top: dynamicIsland ? DYNAMIC_ISLAND_TOP : insetTop + TOP_SPACING,
+    top: Math.max(insetTop, headerBottom) + TOP_SPACING,
     centerX: insetLeft + safeWidth / 2,
     compactWidth: ISLAND_WIDTH,
     compactHeight: ISLAND_HEIGHT,
     expandedWidth: Math.max(Math.min(safeWidth - EXPANDED_MARGIN * 2, EXPANDED_MAX_WIDTH), ISLAND_WIDTH),
-    expandedHeight: dynamicIsland ? CAMERA_CLEARANCE + EXPANDED_HEIGHT - 8 : EXPANDED_HEIGHT,
-    contentTop: dynamicIsland ? CAMERA_CLEARANCE - 4 : 0,
-    overIsland: dynamicIsland,
+    expandedHeight: EXPANDED_HEIGHT,
   };
 }
 
@@ -81,7 +62,7 @@ export interface IslandShape {
   width: number;
   height: number;
   radius: number;
-  /** without a phone's own island under it, the pill fades in as it starts and out as it ends */
+  /** the compact capsule fades in and out instead of lingering at rest */
   opacity: number;
 }
 
@@ -89,15 +70,20 @@ export interface IslandShape {
 export function islandShape(grow: number, layout: IslandLayout): IslandShape {
   const width = mix(grow, layout.compactWidth, layout.expandedWidth);
   const height = mix(clamp(grow, 0, 1.08), layout.compactHeight, layout.expandedHeight);
-  const radius = Math.min(mix(clamp(grow, 0, 1), layout.compactHeight / 2, layout.overIsland ? EXPANDED_ISLAND_RADIUS : EXPANDED_RADIUS), height / 2);
+  const radius = Math.min(mix(clamp(grow, 0, 1), layout.compactHeight / 2, EXPANDED_RADIUS), height / 2);
   return {
     left: layout.centerX - width / 2,
     top: layout.top,
     width,
     height,
     radius,
-    opacity: layout.overIsland ? 1 : clamp(grow * 4, 0, 1),
+    opacity: clamp(grow * 4, 0, 1),
   };
+}
+
+/** Reduced motion keeps the expanded card in place and fades the entire shape. */
+export function reducedMotionShape(reveal: number, layout: IslandLayout): IslandShape {
+  return { ...islandShape(1, layout), opacity: clamp(reveal, 0, 1) };
 }
 
 /** The content at a reveal: it fades and settles in from a little smaller and softer. */

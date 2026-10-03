@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Eye, EyeOff, Minus, Plus, Star, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Eye, EyeOff, Minus, Monitor, Plus, Star, X } from "lucide-react";
 
 import "./SettingsDialog.css";
 
 import type { AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
-import { SHORTCUTS, formatKeys } from "../lib/shortcuts.ts";
-import { CHAT_FONT_MAX, CHAT_FONT_MIN, chatFontSize, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, useSettings } from "../lib/settings.ts";
+import { SHORTCUTS, formatKeys, shortcutKeys, shortcutConflict } from "../lib/shortcuts.ts";
+import { CHAT_FONT_MAX, CHAT_FONT_MIN, chatFontSize, DEFAULT_SETTINGS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, useSettings, forgetPaneViews } from "../lib/settings.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useT } from "../lib/i18n.ts";
 import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
@@ -21,7 +21,7 @@ import { AgentMark } from "./AgentMark.tsx";
 import { DevicesPanel } from "./DevicesPanel.tsx";
 import { PhonePanel } from "./PhonePanel.tsx";
 import { PushTestControls } from "./PushTestControls.tsx";
-import { UpdateControls } from "./UpdateControls.tsx";
+import { HerdrUpdateControls, UpdateControls } from "./UpdateControls.tsx";
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -39,6 +39,10 @@ function Toggle({ checked, label, onChange }: { checked: boolean; label: string;
       <span className="settings-toggle-thumb" />
     </button>
   );
+}
+
+function compactKeys(keys: readonly string[]): string {
+  return formatKeys(keys).map((key) => ({ Shift: "⇧", ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→" }[key] ?? (key.length === 1 ? key.toUpperCase() : key))).join("+");
 }
 
 const FONT_FAMILY_PLACEHOLDER = 'D2Coding, "Cascadia Mono"';
@@ -132,7 +136,7 @@ function UsageAccounts({ providers }: { providers: readonly ProviderUsage[] }) {
   );
 }
 
-export function SettingsDialog({ open, onClose, updates, auth, onEnableNotifications }: SettingsDialogProps) {
+export function SettingsDialog({ open, onClose, actions, updates, auth, onEnableNotifications }: SettingsDialogProps) {
   const { settings, update } = useSettings();
   // the accounts to order and hide: the same report the meters show, from the server's cache
   const usage = useUsage(open && settings.showUsage);
@@ -286,6 +290,11 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
                 <button type="button" className="icon-button" aria-label={t("Faster wheel scrolling")} disabled={settings.terminalWheelSpeed >= TERMINAL_WHEEL_SPEED_MAX} onClick={() => update({ terminalWheelSpeed: settings.terminalWheelSpeed + 1 })}><Plus /></button>
               </div>
             </div>
+            <div className="settings-row"><label htmlFor="terminal-input-mode">{t("Terminal input mode")}</label>
+              <select id="terminal-input-mode" className="input" value={settings.terminalInputMode} onChange={(event) => update({ terminalInputMode: event.target.value as "auto" | "line" | "direct" })}>
+                <option value="auto">{t("Automatic")}</option><option value="line">{t("Input line")}</option><option value="direct">{t("Direct typing")}</option>
+              </select>
+            </div>
           </section>
 
           <section className="settings-section">
@@ -368,6 +377,21 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
 
           <section className="settings-section">
             <h3>{t("Chat")}</h3>
+            <div className="settings-row">
+              <div><span className="settings-label">{t("Panes open in")}</span><span className="settings-description">{t("Every pane on this device. Switching a pane's lens keeps it there until this changes. Auto: chat for an agent on a touch screen, else the terminal.")}</span></div>
+              <div className="segmented" aria-label={t("Panes open in")}>
+                {(["auto", "chat", "terminal"] as const).map((defaultView) => (
+                  <button key={defaultView} type="button" aria-pressed={settings.defaultView === defaultView} onClick={() => {
+                    if (settings.defaultView === defaultView) return;
+                    // one choice for every pane: what each one remembered gives way to it
+                    forgetPaneViews();
+                    update({ defaultView });
+                  }}>
+                    {t(defaultView === "auto" ? "Auto" : defaultView === "chat" ? "Chat" : "Terminal")}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="settings-row">
               <div><span className="settings-label">{t("Show thinking")}</span><span className="settings-description">{t("Include the agent's reasoning blocks")}</span></div>
               <Toggle label={t("Show thinking")} checked={settings.showThinking} onChange={(showThinking) => update({ showThinking })} />
@@ -476,9 +500,23 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
 
           <section className="settings-section">
             <h3>{t("Shortcuts")}</h3>
+            <p className="settings-description">{t("Some keys are reserved by the browser. Changes apply to this device.")}</p>
+            <button className="btn" onClick={() => update({ shortcutOverrides: {} })}>{t("Reset shortcuts")}</button>
             <table className="settings-shortcuts">
               <tbody>{SHORTCUTS.map((shortcut) => (
-                <tr key={shortcut.id}><th scope="row">{t(shortcut.label)}</th><td>{formatKeys(shortcut.keys).map((key) => <kbd className="kbd" key={key}>{key}</kbd>)}</td></tr>
+                <tr key={shortcut.id}><th scope="row">{t(shortcut.label)}</th><td>{shortcut.id === "voice" ? formatKeys(shortcut.keys).map((key) => <kbd className="kbd" key={key}>{key}</kbd>) : <select className="input" aria-label={t(shortcut.label)} value={Object.hasOwn(settings.shortcutOverrides, shortcut.id) ? settings.shortcutOverrides[shortcut.id] ?? "off" : "default"} onChange={(event) => {
+                  const next = { ...settings.shortcutOverrides };
+                  if (event.target.value === "default") delete next[shortcut.id];
+                  else next[shortcut.id] = event.target.value === "off" ? null : event.target.value;
+                  update({ shortcutOverrides: next });
+                }}>
+                  <option value="default" title={t("Default")} disabled={shortcutConflict(shortcut.id, shortcutKeys(shortcut.id, {}), settings.shortcutOverrides)}>{compactKeys(shortcut.keys)}</option>
+                  <option value="off" title={t("Send keys to terminal")}>{t("Off")}</option>
+                  {[..."abcdefghijklmnopqrstuvwxyz0123456789,", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].map((key) => {
+                    const conflict = shortcutConflict(shortcut.id, [key], settings.shortcutOverrides);
+                    return <option key={key} value={key} disabled={conflict}>{compactKeys(["Mod", "Shift", key])}{conflict ? " — " + t("Already assigned") : ""}</option>;
+                  })}
+                </select>}</td></tr>
               ))}</tbody>
             </table>
           </section>
@@ -498,6 +536,20 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
           </section>
 
           <section className="settings-section">
+            <h3>{t("Remote PCs")}</h3>
+            <div className="settings-row">
+              <div><span className="settings-label">{t("Add PC")}</span><span className="settings-description">{t("Connect another PC over an SSH alias or user@host. Its workspaces join the sidebar.")}</span></div>
+              <button type="button" className="btn" onClick={actions.openAddPc}><Monitor aria-hidden="true" />{t("Add PC")}</button>
+            </div>
+            {/* the switch is the server's and waits for its answer; Add PC never does */}
+            {pcSettings && <div className="settings-row">
+              <div><span className="settings-label">{t("Update PC bridges automatically")}</span><span className="settings-description">{t("When an app update needs a newer bridge, PCs that connect with their saved key are updated in the background. PCs that need a password ask first.")}</span></div>
+              <Toggle label={t("Update PC bridges automatically")} checked={pcSettings.auto_update_bridges} onChange={(auto_update_bridges) => void updatePcSettings({ auto_update_bridges })} />
+            </div>}
+            {pcSettingsError && <p className="settings-hint" role="alert">{pcSettingsError}</p>}
+          </section>
+
+          <section className="settings-section">
             <h3>{t("Install")}</h3>
             {installPrompt.installed ? <p className="settings-hint">{t("Installed")}</p> : installPrompt.canInstall ? (
               <button type="button" className="btn btn-primary" onClick={() => void installPrompt.install()}>{t("Install app")}</button>
@@ -510,16 +562,8 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
             <a className="btn" href="https://github.com/devswha/herdr-web-ui" target="_blank" rel="noreferrer"><Star aria-hidden="true" />{t("Star on GitHub")}</a>
             <a href="https://devswha.github.io/herdr-web-ui/" target="_blank" rel="noreferrer">devswha.github.io/herdr-web-ui</a>
           </section>
-          {pcSettings && <section className="settings-section">
-            <h3>{t("Remote PCs")}</h3>
-            <div className="settings-row">
-              <div><span className="settings-label">{t("Update PC bridges automatically")}</span><span className="settings-description">{t("When an app update needs a newer bridge, PCs that connect with their saved key are updated in the background. PCs that need a password ask first.")}</span></div>
-              <Toggle label={t("Update PC bridges automatically")} checked={pcSettings.auto_update_bridges} onChange={(auto_update_bridges) => void updatePcSettings({ auto_update_bridges })} />
-            </div>
-            {pcSettingsError && <p className="settings-hint" role="alert">{pcSettingsError}</p>}
-          </section>}
-
           <UpdateControls updates={updates} bridgesFollow={pcSettings?.auto_update_bridges === true} />
+          <HerdrUpdateControls enabled={open} />
         </div>
       </section>
     </div>

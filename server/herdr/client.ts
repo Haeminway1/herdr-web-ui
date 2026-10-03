@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import type {
   PaneReadResult,
   ReadFormat,
@@ -158,8 +159,8 @@ export async function ping(socketPath?: string): Promise<HerdrIdentity> {
   return { version: result.version, protocol: result.protocol, terminal_attach: attach, ...(attach ? {} : { terminal_mirror: true }) };
 }
 
-export async function sessionSnapshot(socketPath?: string): Promise<SessionSnapshot> {
-  const result = await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {}, socketPath);
+export async function sessionSnapshot(socketPath?: string, timeoutMs?: number): Promise<SessionSnapshot> {
+  const result = await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {}, socketPath, timeoutMs);
   return result.snapshot;
 }
 
@@ -183,6 +184,34 @@ export async function workspaceCreate(
     { ...(options.cwd === undefined ? {} : { cwd: options.cwd }), ...(options.label === undefined ? {} : { label: options.label }), focus: false },
     socketPath,
   );
+}
+
+export interface TabCreateResult {
+  type: "tab_created";
+  tab: TabInfo;
+  root_pane: PaneInfo;
+}
+
+/** Another tab in an existing workspace. Without `cwd` herdr uses the workspace's folder. */
+export async function tabCreate(
+  options: { workspaceId: string; cwd?: string; label?: string },
+  socketPath?: string,
+): Promise<TabCreateResult> {
+  return herdrRpc(
+    "tab.create",
+    { workspace_id: options.workspaceId, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), ...(options.label === undefined ? {} : { label: options.label }), focus: false },
+    socketPath,
+  );
+}
+
+/** herdr keeps the label as given: an empty one leaves the tab without a name, so callers refuse it. */
+export async function tabRename(tabId: string, label: string, socketPath?: string): Promise<void> {
+  await herdrRpc("tab.rename", { tab_id: tabId, label }, socketPath);
+}
+
+/** Closes the tab and every pane in it; a workspace's last tab takes the workspace with it. */
+export async function tabClose(tabId: string, socketPath?: string): Promise<void> {
+  await herdrRpc("tab.close", { tab_id: tabId }, socketPath);
 }
 
 export async function agentStart(
@@ -215,52 +244,79 @@ export async function workspaceMove(workspaceId: string, insertIndex: number, so
   await herdrRpc("workspace.move", { workspace_id: workspaceId, insert_index: insertIndex }, socketPath);
 }
 
-export async function workspaceClose(workspaceId: string, socketPath?: string): Promise<void> {
-  await herdrRpc("workspace.close", { workspace_id: workspaceId }, socketPath);
+/** closeGroup takes a repository workspace's open worktree workspaces with it; herdr refuses otherwise. */
+export async function workspaceClose(workspaceId: string, socketPath?: string, closeGroup = false): Promise<void> {
+  await herdrRpc("workspace.close", { workspace_id: workspaceId, ...(closeGroup ? { close_group: true } : {}) }, socketPath);
 }
 
-export interface TabCreateResult {
-  type: "tab_created";
+/** `git worktree add` or `remove` on a large checkout can take well over the default 10 s. */
+const WORKTREE_GIT_TIMEOUT_MS = 60_000;
+
+/** `git worktree remove` of the workspace's checkout; herdr closes the workspace with it and keeps the branch. */
+export async function worktreeRemove(workspaceId: string, force: boolean, socketPath?: string): Promise<{ type: "worktree_removed"; workspace_id: string; path: string; forced: boolean }> {
+  return herdrRpc("worktree.remove", { workspace_id: workspaceId, force }, socketPath, WORKTREE_GIT_TIMEOUT_MS);
+}
+
+/** herdr's view of one git checkout: `worktree.list` entries, and what create/open hand back. */
+export interface WorktreeInfo {
+  path: string;
+  branch: string | null;
+  label: string;
+  is_linked_worktree: boolean;
+  is_bare: boolean;
+  is_detached: boolean;
+  is_prunable: boolean;
+  open_workspace_id: string | null;
+}
+
+export interface WorktreeSourceInfo {
+  repo_key: string;
+  repo_name: string;
+  repo_root: string;
+  source_checkout_path: string;
+  source_workspace_id: string | null;
+}
+
+export interface WorktreeOpenResult {
+  type: "worktree_created" | "worktree_opened";
+  workspace: WorkspaceInfo;
   tab: TabInfo;
   root_pane: PaneInfo;
+  worktree: WorktreeInfo;
+  /** worktree_opened only: the checkout was a workspace before the call */
+  already_open?: boolean;
 }
 
-export async function tabCreate(
-  options: { workspaceId?: string; cwd?: string; label?: string },
+/** A git worktree of the workspace's repository, opened as a new workspace grouped with it. */
+export async function worktreeCreate(
+  options: { workspaceId: string; branch: string; base?: string; label?: string; path?: string },
   socketPath?: string,
-): Promise<TabCreateResult> {
-  return herdrRpc(
-    "tab.create",
-    {
-      ...(options.workspaceId === undefined ? {} : { workspace_id: options.workspaceId }),
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      ...(options.label === undefined ? {} : { label: options.label }),
-      focus: false,
-    },
-    socketPath,
-  );
+): Promise<WorktreeOpenResult> {
+  return herdrRpc("worktree.create", {
+    workspace_id: options.workspaceId,
+    branch: options.branch,
+    ...(options.base === undefined ? {} : { base: options.base }),
+    ...(options.label === undefined ? {} : { label: options.label }),
+    ...(options.path === undefined ? {} : { path: options.path }),
+    focus: false,
+  }, socketPath, WORKTREE_GIT_TIMEOUT_MS);
 }
 
-export interface PaneSplitResult {
-  type: "pane_info";
-  pane: PaneInfo;
+export async function worktreeList(workspaceId: string, socketPath?: string): Promise<{ source: WorktreeSourceInfo; worktrees: WorktreeInfo[] }> {
+  return herdrRpc("worktree.list", { workspace_id: workspaceId }, socketPath);
 }
 
-/** Split a pane; answers the new pane. herdr requires `direction`, so an omitted one is `right`. */
-export async function paneSplit(
-  options: { paneId?: string; direction?: "right" | "down"; cwd?: string },
+export async function worktreeOpen(
+  options: { workspaceId: string; path?: string; branch?: string; label?: string },
   socketPath?: string,
-): Promise<PaneSplitResult> {
-  return herdrRpc(
-    "pane.split",
-    {
-      ...(options.paneId === undefined ? {} : { target_pane_id: options.paneId }),
-      direction: options.direction ?? "right",
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      focus: false,
-    },
-    socketPath,
-  );
+): Promise<WorktreeOpenResult> {
+  return herdrRpc("worktree.open", {
+    workspace_id: options.workspaceId,
+    ...(options.path === undefined ? {} : { path: options.path }),
+    ...(options.branch === undefined ? {} : { branch: options.branch }),
+    ...(options.label === undefined ? {} : { label: options.label }),
+    focus: false,
+  }, socketPath);
 }
 
 export interface PaneReadOptions {
@@ -277,10 +333,13 @@ export async function paneRead(options: PaneReadOptions, socketPath?: string): P
   const { paneId, source = "visible", format = "text", lines, stripAnsi, timeoutMs } = options;
   // Escape sequences must survive for xterm.js, so an ansi read defaults to strip_ansi:false.
   const strip = stripAnsi ?? format !== "ansi";
-  const params: Record<string, unknown> = { pane_id: paneId, source, format, strip_ansi: strip };
+  // Recent text reads can scroll an idle agent's TUI to harvest history. ANSI reads
+  // only snapshot stored rows, so automatic polling must convert those to text locally.
+  const passiveText = format === "text" && (source === "recent" || source === "recent_unwrapped");
+  const params: Record<string, unknown> = { pane_id: paneId, source, format: passiveText ? "ansi" : format, strip_ansi: strip };
   if (lines !== undefined) params["lines"] = lines;
   const result = await herdrRpc<{ read: PaneReadResult }>("pane.read", params, socketPath, timeoutMs);
-  return result.read;
+  return passiveText ? { ...result.read, format, text: strip ? stripVTControlCharacters(result.read.text) : result.read.text } : result.read;
 }
 
 /** A cell in a pane's whole history: rows count from the top of the scrollback. */

@@ -14,20 +14,18 @@ export const EMPTY_DRAFT: InputDraft = { text: "", droppedSpecial: 0 };
 
 const MAX_DRAFT_CHARS = 1024;
 
-/** A single printable character: the same definition the one-shot Control uses. */
+/** An IME commit can contain several code points. Never preserve terminal control sequences. */
 function isPrintableChar(data: string): boolean {
-  if (data.length !== 1) return false;
-  const code = data.charCodeAt(0);
-  return code >= 0x20 && code !== 0x7f;
+  return data.length > 0 && !/[\x00-\x1f\x7f-\x9f]/u.test(data);
 }
 
 /** Folds one onData chunk into the draft: printable text accumulates, special keys count. */
 export function applyToDraft(draft: InputDraft, data: string): InputDraft {
   if (!isPrintableChar(data)) {
-    // Enter, arrows, escape sequences, pastes - a draft is plain text only
+    // Enter, arrows and bracketed paste frames contain controls; keep only plain text.
     return { ...draft, droppedSpecial: draft.droppedSpecial + 1 };
   }
-  if (draft.text.length >= MAX_DRAFT_CHARS) {
+  if (draft.text.length + data.length > MAX_DRAFT_CHARS) {
     return { ...draft, droppedSpecial: draft.droppedSpecial + 1 };
   }
   return { ...draft, text: draft.text + data };

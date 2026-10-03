@@ -1,7 +1,7 @@
 {
   "name": "herdr-web-ui",
   "private": true,
-  "version": "0.3.41",
+  "version": "0.3.47",
   "type": "module",
   "description": "Browser version of the herdr terminal - live herdr workspaces, panes and agents in a web UI",
   "license": "MIT",
@@ -29,7 +29,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-unicode-graphemes": "0.4.0",
     "@xterm/addon-web-links": "0.11.0",
-    "@xterm/xterm": "^5.5.0",
+    "@xterm/xterm": "5.5.0",
     "katex": "^0.18.9",
     "lucide-react": "^1.47.0",
     "qrcode-generator": "^2.0.4",
@@ -47,5 +47,8 @@
     "playwright-core": "^1.49.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
+  },
+  "patchedDependencies": {
+    "@xterm/xterm@5.5.0": "patches/@xterm%2Fxterm@5.5.0.patch"
   }
 }

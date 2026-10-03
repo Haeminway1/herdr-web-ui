@@ -55,3 +55,58 @@ it("answers unsupported, sending nothing, when the snapshot lists no masked inpu
   expect(secrets(socket)).toEqual([]);
   client.close();
 });
+
+it("requires attachment readiness and never replays held input after a detach", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(["submit", "input-ready"]));
+  client.attach("w1:p1", 80, 24);
+  expect(client.sendInput("w1:p1", "lost?")).toBe(false);
+  socket.receive({ type: "pty-data", pane_id: "w1:p1", data: "screen" });
+  expect(client.canInput("w1:p1")).toBe(false);
+  socket.receive({ type: "input-ready", pane_id: "w1:p1" });
+  expect(client.sendInput("w1:p1", "한글")).toBe(true);
+  client.detach("w1:p1");
+  socket.receive({ type: "input-ready", pane_id: "w1:p1" });
+  expect(client.sendInput("w1:p1", "wrong pane")).toBe(false);
+  expect(socket.sent.filter((m) => m.type === "input")).toEqual([{ type: "input", pane_id: "w1:p1", text: "한글" }]);
+  client.close();
+});
+
+it("attaches a grid the chat lens covers without resizing the shared pty, on a reconnect too, until it drives the size again", () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  const lastAttach = () => socket.sent.filter((m) => m.type === "attach").at(-1);
+  // attached before the socket opened: the open replays it, as a reconnect does
+  client.attach("w1:p1", 40, 20, true);
+  socket.open();
+  expect(lastAttach()).toEqual({ type: "attach", pane_id: "w1:p1", cols: 40, rows: 20, flow_control: "ack", keep_size: true });
+  // the terminal lens is shown and resizes: from then on it drives the size
+  client.resize("w1:p1", 100, 30, true);
+  socket.open();
+  expect(lastAttach()).toEqual({ type: "attach", pane_id: "w1:p1", cols: 100, rows: 30, flow_control: "ack" });
+  // the chat lens covers it again
+  client.keepSize("w1:p1");
+  socket.open();
+  expect(lastAttach()).toEqual({ type: "attach", pane_id: "w1:p1", cols: 100, rows: 30, flow_control: "ack", keep_size: true });
+  client.close();
+});
+
+it("waits for capabilities when output precedes snapshot, and supports old bridges", () => {
+  for (const features of [["input-ready"], []]) {
+    const client = new HerdrSocket("ws://test/ws"); client.connect();
+    const socket = FakeSocket.last; socket.open(); client.attach("w1:p1", 80, 24);
+    socket.receive({ type: "pty-data", pane_id: "w1:p1", data: "screen" });
+    expect(client.canInput("w1:p1")).toBe(false);
+    socket.receive(snapshot(features));
+    expect(client.canInput("w1:p1")).toBe(features.length === 0);
+    socket.receive({ type: "input-ready", pane_id: "w1:p1" });
+    expect(client.canInput("w1:p1")).toBe(true);
+    socket.receive({ type: "input-ready", pane_id: "w1:p1", ready: false });
+    expect(client.sendInput("w1:p1", "no replay")).toBe(false);
+    client.close();
+  }
+});
