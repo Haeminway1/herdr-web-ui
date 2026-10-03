@@ -475,7 +475,7 @@ One set for both themes: the card is island black wherever it shows.
   the image strip is its own row above that line.
 - While the agent works, the status line adds how long the running turn has worked (mono, ticking
   each second, from the turn's user message in the transcript) and what it does now, from its latest
-  tool: `· 3m 12s · Running bun test`, dim, the part that gives way first on a narrow screen.
+  tool: `· 3m 12s · Running bun test`, dim. A phone (480px and under) shows the time alone.
 - The status line ends, on fine pointers, with `/` commands and `@` files keycaps (plus `Mod+Enter`
   sends when **Enter sends** is off); the placeholder is just `Message <agent>…`.
 - `/` completions come from `GET /api/pane/commands` and group built-in, user and project commands;

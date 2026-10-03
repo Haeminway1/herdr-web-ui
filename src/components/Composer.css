@@ -491,7 +491,8 @@
 
   .composer-agent-label,
   .composer-status-separator,
-  .composer-status-hint {
+  .composer-status-hint,
+  .composer-work-doing {
     display: none;
   }
 
@@ -728,8 +729,8 @@
   font-size: var(--fs-xs);
 }
 
-/* how long the running turn has worked, and what it does now (WorkLine): quiet, and the part that
-   gives way first on a narrow screen */
+/* how long the running turn has worked, and what it does now (WorkLine): quiet. A phone keeps
+   the time alone; the tool is hidden with the agent label above. */
 .composer-work {
   display: inline-flex;
   align-items: baseline;

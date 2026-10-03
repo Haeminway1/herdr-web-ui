@@ -914,7 +914,7 @@ function WorkLine({ work }: { work: WorkNow }) {
   return (
     <span className="composer-work">
       {elapsed && <><span aria-hidden="true">·</span> <span className="composer-work-time">{elapsed}</span></>}
-      {work.doing && <> <span aria-hidden="true">·</span> <span className="composer-work-doing" title={work.doing}>{work.doing}</span></>}
+      {work.doing && <span className="composer-work-doing" title={work.doing}><span aria-hidden="true">·</span> {work.doing}</span>}
     </span>
   );
 }
