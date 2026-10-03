@@ -72,6 +72,21 @@ describe("AttentionStore", () => {
     expect(attention.unread("busy")).toBe(true);
   });
 
+  it("takes a finish no status event told from a snapshot asked for after the last one heard", () => {
+    const { attention, clock } = store();
+    attention.observe("p", "working");
+    const heard = clock.now;
+    // a snapshot asked for before that event is older: its idle is no finish
+    expect(attention.baseline(panes(["p", "idle"]), heard - 1)).toEqual([]);
+    expect(attention.get("p")).toBeNull();
+    clock.now += 5_000;
+    // herdr's stream never told the idle; the next snapshot does
+    expect(attention.baseline(panes(["p", "idle"]), clock.now)).toEqual(["p"]);
+    expect(attention.unread("p")).toBe(true);
+    // the same snapshot again is nothing new
+    expect(attention.baseline(panes(["p", "idle"]), clock.now + 1)).toEqual([]);
+  });
+
   it("drops records of panes gone before the snapshot was asked for", () => {
     const { attention, clock } = store();
     attention.observe("gone", "working");

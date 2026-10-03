@@ -24,6 +24,8 @@ export class AttentionStore {
   private readonly records = new Map<string, PaneAttention & { touched: number }>();
   /** each pane's status as last observed: a finish is measured against it */
   private readonly last = new Map<string, AgentStatus>();
+  /** when each status in `last` was learned: a snapshot asked for before it is older */
+  private readonly lastAt = new Map<string, number>();
   private saved = "";
 
   constructor(
@@ -53,6 +55,7 @@ export class AttentionStore {
   observe(paneId: string, status: AgentStatus): boolean {
     const before = this.last.get(paneId);
     this.last.set(paneId, status);
+    this.lastAt.set(paneId, this.now());
     const finished = (before === "working" && (status === "done" || status === "idle"))
       || (status === "done" && before !== undefined && before !== "done");
     if (finished) this.finish(paneId);
@@ -69,9 +72,22 @@ export class AttentionStore {
     const live = new Set(panes.map((pane) => pane.pane_id));
     const finished: string[] = [];
     for (const pane of panes) {
-      // only a first sight: a snapshot can be older than an event already observed
-      if (this.last.has(pane.pane_id)) continue;
+      if (this.last.has(pane.pane_id)) {
+        // a status event may never come (herdr's stream can miss a pane it learned of late):
+        // a snapshot asked for after the last status heard is as good, an older one is not
+        if (pane.agent_status !== this.last.get(pane.pane_id) && askedAt > (this.lastAt.get(pane.pane_id) ?? 0)) {
+          const before = this.last.get(pane.pane_id);
+          this.last.set(pane.pane_id, pane.agent_status);
+          this.lastAt.set(pane.pane_id, askedAt);
+          if ((before === "working" && (pane.agent_status === "done" || pane.agent_status === "idle")) || (pane.agent_status === "done" && before !== "done")) {
+            this.finish(pane.pane_id);
+            finished.push(pane.pane_id);
+          }
+        }
+        continue;
+      }
       this.last.set(pane.pane_id, pane.agent_status);
+      this.lastAt.set(pane.pane_id, askedAt);
       if (pane.agent_status === "done" && !this.records.has(pane.pane_id)) {
         this.finish(pane.pane_id);
         finished.push(pane.pane_id);
@@ -81,7 +97,7 @@ export class AttentionStore {
       // one touched since the snapshot was asked for may be a pane too new for it
       if (!live.has(paneId) && record.touched < askedAt) this.records.delete(paneId);
     }
-    for (const paneId of this.last.keys()) if (!live.has(paneId) && !this.records.has(paneId)) this.last.delete(paneId);
+    for (const paneId of this.last.keys()) if (!live.has(paneId) && !this.records.has(paneId)) { this.last.delete(paneId); this.lastAt.delete(paneId); }
     this.save();
     return finished;
   }
