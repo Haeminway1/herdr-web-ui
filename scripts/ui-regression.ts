@@ -341,11 +341,13 @@ try {
   // A send leaves the box at once and shows in the chat as sending, while its acknowledgement
   // is still on its way and its composer unmounts.
   for (const returnBeforeAck of [false, true]) {
-    await composer.fill("# confirmed draft");
+    // a text of its own each round: the first round's bubble may still stand, marked sent
+    const draft = `# confirmed draft ${returnBeforeAck ? "back" : "away"}`;
+    await composer.fill(draft);
     holdSubmitResult = true;
     await page.getByRole("button", { name: "Send message", exact: true }).click();
     assert.equal(await composer.inputValue(), "", "the box empties as the message goes");
-    await page.locator(".chat-turn-user.is-outgoing", { hasText: "confirmed draft" }).waitFor();
+    await page.locator(".chat-turn-user.is-outgoing", { hasText: draft.slice(2) }).waitFor();
     await until(() => releaseSubmitResult !== null, "held submit acknowledgement");
     await selectPane(paneB);
     assert.equal(await composer.inputValue(), "draft for B");
