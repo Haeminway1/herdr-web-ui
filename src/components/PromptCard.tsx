@@ -6,7 +6,7 @@ import "./PromptCard.css";
 import { ApiError } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import type { InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
-import type { TypedAnswer } from "../lib/promptAnswer.ts";
+import { sameChoices, type TypedAnswer } from "../lib/promptAnswer.ts";
 import { useT } from "../lib/i18n.ts";
 
 export interface PromptCardProps {
@@ -21,7 +21,7 @@ export interface PromptCardProps {
 
 export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedAnswer = null, onTypedAnswerDone }: PromptCardProps) {
   const t = useT();
-  const { answerPanePrompt } = useMachineApi();
+  const { answerPanePrompt, fetchPanePromptState } = useMachineApi();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [custom, setCustom] = useState("");
   const [pending, setPending] = useState(false);
@@ -44,7 +44,20 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
     setPending(true);
     setError(null);
     try {
-      await answerPanePrompt({ pane_id: paneId, prompt_id: prompt.id, ...choice });
+      let id = prompt.id;
+      // the card moved on only around its question (a ticking line on the screen): the same pick
+      // goes to the card the pane shows now, at most twice, rather than asking for another tap
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await answerPanePrompt({ pane_id: paneId, prompt_id: id, ...choice });
+          break;
+        } catch (cause) {
+          if (attempt >= 2 || !(cause instanceof ApiError && cause.status === 409 && cause.code === "prompt_changed")) throw cause;
+          const { prompt: now } = await fetchPanePromptState(paneId);
+          if (now === null || !sameChoices(prompt, now)) throw cause;
+          id = now.id;
+        }
+      }
       onAnswered();
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 409 && cause.code === "prompt_changed") {

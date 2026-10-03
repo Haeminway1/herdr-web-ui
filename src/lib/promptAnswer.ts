@@ -79,3 +79,17 @@ export function answerRefusal(prompt: InteractivePrompt): string {
 export function needsConfirmation(prompt: InteractivePrompt, answer: TypedAnswer): boolean {
   return (prompt.kind === "approval" || prompt.kind === "plan" || prompt.kind === "menu") && answer.option_index !== undefined;
 }
+
+/**
+ * Whether a re-read prompt shows exactly what the card showed (question, the text above it such
+ * as the command to approve, and the same options in the same places): then an answer to the old
+ * card means the same pick on the new one. A fallback card's id hashes the whole screen, a status
+ * line ticking under the menu included, and an answer refused for that alone was lost.
+ */
+export function sameChoices(before: InteractivePrompt, after: InteractivePrompt): boolean {
+  return before.agent === after.agent && before.kind === after.kind && before.question === after.question
+    && (before.body ?? null) === (after.body ?? null)
+    && before.multi_select === after.multi_select && before.custom_option_index === after.custom_option_index
+    && before.options.length === after.options.length
+    && before.options.every((option, index) => option.label === after.options[index]!.label);
+}
