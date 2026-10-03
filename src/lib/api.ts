@@ -6,6 +6,7 @@ import type {
   ConversationResponse,
   HealthAuth,
   InteractivePrompt,
+  ManagerStatus,
   OmoActivity,
   PairedDevice,
   PairingCode,
@@ -280,6 +281,18 @@ export async function renamePane(paneId: string, label: string, machineId = "loc
 /** GET /api/agents: the agent kinds herdr can start, for the new-session dialog. */
 export async function fetchAgentKinds(machineId = "local"): Promise<AgentKind[]> {
   return (await getJson<{ agents: AgentKind[] }>(machinePath(machineId, "agents"))).agents;
+}
+
+export function fetchManager(): Promise<ManagerStatus> {
+  return getJson<ManagerStatus>("/api/manager");
+}
+
+export async function startManager(request: { agent: string; model?: string; effort?: string }): Promise<ManagerStatus> {
+  return (await sendJson("/api/manager/start", "POST", request)).json();
+}
+
+export async function stopManager(workspaceId: string, paneId: string): Promise<ManagerStatus> {
+  return (await sendJson("/api/manager/stop", "POST", { workspace_id: workspaceId, pane_id: paneId })).json();
 }
 
 /** GET /api/workspace/directories: the folders in `path` (empty: home), for the folder browser. */

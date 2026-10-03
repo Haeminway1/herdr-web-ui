@@ -138,6 +138,12 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 | **pi** | Native session file, resolved through herdr; after `/tree`, the branch in play | ✓ its dialogs: a question, a confirmation, an answer typed in |
 | **Anything else** | The terminal's text | — use Terminal |
 
+### Optional session manager (local PC)
+
+Open **Manager** to start or reopen one resident agent in its own Herdr workspace and pane. Choose a supported agent offered by the local Herdr agent list; its presence there does not verify the CLI installation or sign-in, so a launch can still fail. A model and reasoning effort are optional where that agent supports them. It does not start until you press **Start**. Reopening checks the live pane rather than launching another copy. You can use its normal chat or terminal to ask it to organize Herdr sessions; **Stop** explicitly closes only its verified single-pane workspace. Other sessions are not closed by stopping it. If launch fails or identity is unclear, inspect the remaining workspace in the normal session list; the manager control does not silently remove it or guess a replacement. Remote PCs are not supported by this control.
+
+The manager is an ordinary agent using your existing installation and subscription, not a separate background AI service or paid API integration. Starting it may incur model usage charges under your provider's terms. Opening the pane does not send periodic model requests, update your agent installation, or change global agent instructions. Its generated management guidance lives in the web app's state directory, separate from project instructions. It manages Herdr sessions, not unrelated project implementation. Give exact project paths, worktrees and session IDs when asking it to act: a visible name, an idle status or a pane's text is not proof of identity or completion. It must not guess which conversation to resume or silently close work outside your explicit scope. The agent still has its normal native permissions and can access Herdr as you can; guidance is **not a sandbox or authorization boundary**. The web control retains the existing authentication, read-only and same-origin restrictions.
+
 When the last visible line is a familiar password, SSH passphrase or PIN request, both
 views show a **Password or PIN** field. It hides what you type and sends it directly
 to the terminal with Enter. The value is cleared on send, cancel, disconnect, pane

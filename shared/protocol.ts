@@ -59,6 +59,15 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  GET    /api/agents                    -> { agents: AgentKind[] } (herdr's agent manifests: the
  *         kinds `agent.start` accepts, plus omo and gjc when they are on this server's PATH,
  *         for the new-session dialog)
+ *  GET    /api/manager                   -> ManagerStatus (local-only optional resident manager;
+ *         fresh Herdr snapshot and saved identity, no automatic launch), no-store
+ *  POST   /api/manager/start { agent: "codex" | "claude", model?, effort? } -> ManagerStatus
+ *         (local native agent in a dedicated workspace, with its normal permissions and usage;
+ *         only supported agents exposed by Herdr manifests; a slow start may take over 60s)
+ *  POST   /api/manager/stop { workspace_id, pane_id } -> ManagerStatus
+ *         (closes only a freshly verified single-pane manager workspace; refuses uncertain identity)
+ *         Manager routes require the usual token gate; mutations also require same-origin and
+ *         full device access. They do not target remote machines.
  *  GET    /api/pane/read?pane_id=&source=&format=&lines=  -> { read: PaneReadResult }
  *  GET    /api/pane/scroll?pane_id=      -> { scroll: PaneScrollInfo | null } (where the
  *         viewport sits: its top row in the history is max_offset_from_bottom - offset_from_bottom)
@@ -350,6 +359,14 @@ export interface ConversationResponse {
    * agent that keeps no entry tree.
    */
   abandoned?: { count: number; branches: number; summary: string | null };
+}
+
+/** GET /api/manager and lifecycle POSTs: identity is verified against a fresh local snapshot. */
+export interface ManagerStatus {
+  state: "absent" | "running" | "unavailable" | "ambiguous" | "starting" | "stopped";
+  workspace_id?: string;
+  pane_id?: string;
+  message?: string;
 }
 
 /** GET /api/agents: one agent kind herdr can start (`agent.start` kind), with a display label. */

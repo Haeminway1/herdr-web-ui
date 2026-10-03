@@ -64,6 +64,7 @@ import { BRIDGE_PROTOCOL } from "../shared/machines.ts";
 import { bridgeIdentity, registerBridge } from "./bridge.ts";
 import { MachineManager } from "./machines.ts";
 import { handleMachineRequest } from "./machine-api.ts";
+import { createManager, handleManagerRequest } from "./manager.ts";
 import { MachineRelay } from "./machine-relay.ts";
 import { sameOrigin } from "./machine-security.ts";
 
@@ -264,9 +265,12 @@ export function createServer(
     terminalAttach?: boolean | (() => Promise<boolean>);
     /** whether this runtime can run the PTY sidecar; unset, server/pty/sidecar.ts says. Tests give a runtime without Node or node-pty, while herdr keeps its own answer. */
     sidecar?: boolean;
+    /** Native Herdr API override for isolated manager endpoint tests. */
+    manager?: ReturnType<typeof createManager>;
   } = {},
 ): { port: number; hostname: string; stop: () => void } {
   const attachments = new Map<string, PaneAttachment>();
+  const manager = options.manager ?? createManager(options.stateDir ?? defaultStateDir());
   /** whether this bridge can `terminal attach`: herdr is asked once, and the PTY sidecar has to be runnable here (server/pty/sidecar.ts) */
   /** whether the sidecar can run, settled as the server starts so that attach, /api/health and /api/bridge tell one answer; a forced answer (tests) stands in for it */
   const sidecar = options.sidecar ?? (options.terminalAttach === undefined ? sidecarAvailable() : options.terminalAttach !== false);
@@ -961,6 +965,13 @@ export function createServer(
       }
 
       if (pathname === "/api/usage") return handleUsageRequest(request, url, usage);
+      if (pathname === "/api/manager" || pathname === "/api/manager/start" || pathname === "/api/manager/stop") {
+        // Native RPCs each have a deadline: start can use two snapshots, manifests,
+        // create, metadata, agent.start (60s), then verification (up to 120s total).
+        // Leave room for local I/O and HTTP overhead without relaxing other routes.
+        bunServer.timeout(request, pathname === "/api/manager/start" ? 150 : pathname === "/api/manager/stop" ? 45 : 30);
+        return handleManagerRequest(request, pathname, manager);
+      }
       // a long clip can keep the provider silent past Bun's 10 s idle limit before the first line
       if (pathname === "/api/voice" || pathname.startsWith("/api/voice/")) { bunServer.timeout(request, 120); return handleVoiceRequest(request, pathname, voice); }
 

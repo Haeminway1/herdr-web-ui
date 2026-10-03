@@ -53,6 +53,7 @@ const chats = new Map<string, { turns: ConversationTurn[]; metadata: { model: st
 let promptOpen = true;
 let promptId = PROMPT.id;
 let nextWorkspace = 100;
+let managerPaneId: string | null = null;
 
 /** The OmO pane's background tasks (the composer's "2 background tasks"), timed from now. */
 const OMO_TASKS_PANE = "docs";
@@ -226,6 +227,30 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/machines") return json({ machines });
   if (path === "/api/session") return json({ snapshot: snapshot() });
   if (path === "/api/agents") return json(agentsFixture);
+  if (path === "/api/manager" || path === "/api/manager/start" || path === "/api/manager/stop") {
+    const pane = managerPaneId === null ? undefined : paneOf(managerPaneId);
+    const current = pane ? { state: "running", workspace_id: pane.workspace_id, pane_id: pane.pane_id } : { state: "absent" };
+    if (path === "/api/manager") return json(current);
+    const body = await bodyOf(init, input);
+    if (path === "/api/manager/stop") {
+      if (!pane || body["pane_id"] !== pane.pane_id || body["workspace_id"] !== pane.workspace_id) return json({ state: "ambiguous", message: "Manager identity changed; stop refused" });
+      const snap = snapshot();
+      snap.panes = snap.panes.filter((item) => item.pane_id !== pane.pane_id);
+      snap.tabs = snap.tabs.filter((item) => item.workspace_id !== pane.workspace_id);
+      snap.workspaces = snap.workspaces.filter((item) => item.workspace_id !== pane.workspace_id);
+      snap.layouts = snap.layouts.filter((item) => item.workspace_id !== pane.workspace_id);
+      managerPaneId = null;
+      structureChanged();
+      return json({ state: "stopped" });
+    }
+    if (pane) return json(current);
+    const agent = body["agent"];
+    if (agent !== "codex" && agent !== "claude") return json({ state: "unavailable", message: "Select a supported agent" });
+    const created = await route(new URL("/api/workspace/create", url), "POST", { method: "POST", body: JSON.stringify({ cwd: "/home/demo/manager", label: "Herdr Manager", agent: { kind: agent } }) }, input);
+    const result = await created.json() as WorkspaceCreated;
+    managerPaneId = result.pane_id;
+    return json({ state: "running", workspace_id: result.workspace_id, pane_id: result.pane_id });
+  }
   if (path === "/api/updates") return json({ managed: false, auto_update: false, phase: "idle", current_revision: null, latest_revision: null, current_version: __APP_VERSION__, latest_version: null, available: false, checked_at: null, blocked_reason: null, error: null }, 200, { "cache-control": "no-store" });
   if (path === "/api/access") return json({ port: 7317, tailscale: { state: "running", dns_name: "workstation.example.ts.net", serving_url: "https://workstation.example.ts.net", serve_command: null, serve_url: null } });
   if (path === "/api/usage") return json(usageReport(), 200, { "cache-control": "no-store" });
