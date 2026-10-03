@@ -24,7 +24,7 @@ const root = document.documentElement;
 
 /**
  * Focus is necessary, not sufficient: dismissal and hardware keyboards leave the
- * field focused. Prefer keyboard geometry where available; otherwise detect a
+ * field focused. Accept keyboard geometry where available, or detect a
  * substantial viewport occlusion relative to the large CSS viewport or a remembered
  * unobstructed height. Comparing visualViewport with innerHeight alone misses browsers
  * that resize both. The relative cutoff excludes ordinary browser/status-bar insets;
@@ -51,9 +51,8 @@ const syncKeyboard = (): void => {
   const height = viewport?.height ?? window.innerHeight;
   const reference = Math.max(largeViewport.getBoundingClientRect().height, unobstructedHeights.get(width) ?? 0, window.innerHeight);
   const focused = touch.matches && typing(document.activeElement);
-  const visible = focused && (keyboard
-    ? keyboard.boundingRect.height > 0
-    : !!viewport && viewport.scale === 1 && reference - height > reference * 0.2);
+  const visible = focused && ((keyboard?.boundingRect.height ?? 0) > 0
+    || !!viewport && viewport.scale === 1 && reference - height > reference * 0.2);
   if (!visible) unobstructedHeights.set(width, Math.max(reference, height, window.innerHeight));
   root.toggleAttribute("data-keyboard", visible);
   if (visible && viewport) root.style.setProperty("--app-height", `${Math.round(height)}px`);
