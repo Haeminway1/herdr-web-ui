@@ -5,15 +5,16 @@ security problems never do: see [SECURITY.md](SECURITY.md). For a larger change,
 the approach can be agreed before you build it. Small fixes can go straight to a PR.
 
 Everything a PR is checked against is in this repository: this file, the
-[review rules](.github/REVIEW.md), the [development guide](docs/development.md) and
-[DESIGN.md](DESIGN.md). An `AGENTS.md` a maintainer keeps locally never adds rules a PR is held to.
+[review rules](.github/REVIEW.md), the [development guide](docs/development.md),
+[DESIGN.md](DESIGN.md) and the `AGENTS.md` files ([root](AGENTS.md), [server](server/AGENTS.md),
+[src](src/AGENTS.md)), which hold the invariants that people and coding agents both follow.
 Contributions are licensed under the repository's [MIT license](LICENSE). Say in the PR when code is
 adapted from another project, with its license.
 
 ## Set up
 
-- Linux (x64, arm64) or macOS. Windows, Alpine and 32-bit ARM have no terminal addon build.
-- Bun 1.4 or newer, Node 18 or newer (it runs the terminal-attach sidecar), herdr 0.9.0 or newer for
+- Linux (x64, arm64), macOS or Windows x64. Windows uses the screen mirror and needs no terminal addon; Alpine and 32-bit ARM have no addon build.
+- Bun 1.4 or newer, Node 18 or newer on Linux/macOS (it runs the terminal-attach sidecar), herdr 0.9.0 or newer for
   the integration tests. CI runs Bun 1.4.2, Node 22 and herdr 0.9.3.
 
 ```bash
@@ -49,9 +50,10 @@ bun run test:unit
 (`CHROME_PATH`, default `/opt/google/chrome/chrome`):
 
 ```bash
-bun run test:integration   # starts its own `herdr-web-ui-test` session; stop it with
+bun run test:integration   # runs the files 4 at a time on `herdr-web-ui-test-1` to `-4`, which it
+                           # stops itself; HERDR_TEST_SHARDS=1 runs them one by one on `-1`
+bun run test:ui            # builds, then browser regression on `herdr-web-ui-test`; stop it with
                            # herdr --session herdr-web-ui-test server stop
-bun run test:ui            # builds, then browser regression
 ```
 
 `bun test` runs the unit and integration suites together. Remote-PC changes also have

@@ -1,13 +1,13 @@
 /** Real-browser regressions against owned herdr panes. Run after `bun run build`. */
 import "./test-herdr.ts"; // a herdr session of its own: nothing shows in the user's
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
-import { herdrRpc, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
-import type { WorkspaceCreated } from "../shared/protocol.ts";
+import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
+import type { WorkspaceCreated, WorktreeOpened } from "../shared/protocol.ts";
 import { checkPushSettings } from "./push-settings-regression.ts";
 import { checkWakeLock } from "./wake-lock-regression.ts";
 import { checkNeedsInput } from "./needs-input-regression.ts";
@@ -16,13 +16,22 @@ import { checkTerminalCopy } from "./terminal-copy-regression.ts";
 import { checkUsageMeters } from "./usage-regression.ts";
 import { checkNotificationStartup } from "./notification-startup-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
+import { checkMobileTabs } from "./mobile-tabs-regression.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
+import { checkTerminalInput } from "./terminal-input-regression.ts";
+import { checkDefaultView } from "./default-view-regression.ts";
 import { checkComposerReconnect } from "./composer-reconnect-regression.ts";
 import { checkDroplet } from "./droplet-regression.ts";
+import { checkChatKeepsTerminalSize, checkPaneSwitchKeepsTerminalSize } from "./chat-size-regression.ts";
+import { checkCommandBackspace } from "./terminal-command-backspace-regression.ts";
+import { checkUpdateNotice } from "./update-notice-regression.ts";
 import { UsageService } from "../server/usage.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-browser-")));
 const workspaces: string[] = [];
+const worktreeWorkspaces: string[] = [];
+// the repository the worktree step makes, for the cleanup to find what the step made
+let repo: string | null = null;
 const releases: Array<() => void> = [];
 const errors: string[] = [];
 let server: ReturnType<typeof createServer> | undefined;
@@ -164,10 +173,68 @@ try {
     await until(() => inputs.length > beforeCancel, "terminal Ctrl+C");
     assert.equal(inputs.at(-1)?.text, "\x03", "other terminal control keys must still work");
   }
+  // xterm collapses Shift+Enter into CR unless the terminal supplies a newline chord.
+  // Check actual browser key events and the frames sent to an owned pane, including keyup.
+  for (const [shortcut, expected] of [
+    ["Enter", "\r"],
+    ["Shift+Enter", "\x1b\r"],
+    ["Alt+Enter", "\x1b\r"],
+  ]) {
+    await terminalInput.focus();
+    const beforeEnter = inputs.length;
+    await page.keyboard.press(shortcut!);
+    await until(() => inputs.length > beforeEnter, `terminal ${shortcut}`);
+    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    assert.deepEqual(inputs.slice(beforeEnter).map(({ pane_id, text }) => ({ pane_id, text })),
+      [{ pane_id: paneA, text: expected }], `${shortcut} must send its sequence exactly once`);
+  }
+  // A composition commit belongs to xterm/IME; the custom binding must not replace it.
+  for (const composition of [{ isComposing: true, keyCode: 13 }, { isComposing: false, keyCode: 229 }]) {
+    const beforeIme = inputs.length;
+    await terminalInput.dispatchEvent("keydown", {
+      key: "Enter", code: "Enter", shiftKey: true, ...composition, bubbles: true, cancelable: true,
+    });
+    await page.waitForTimeout(NO_SEND_WAIT_MS);
+    assert.equal(inputs.slice(beforeIme).some(({ text }) => text === "\x1b\r"), false,
+      "IME commits must not receive the custom Shift+Enter sequence");
+  }
+  // compositionend queues its send for the next timer. A following non-composing
+  // Shift+Enter must let xterm flush that commit before sending the newline.
+  await terminalInput.focus();
+  const beforeCommittedIme = inputs.length;
+  await terminalInput.evaluate(async (element) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.value = "";
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "한";
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { data: "한", bubbles: true }));
+    // An earlier composition update has established the committed span.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { data: "한", bubbles: true }));
+    const enter = { key: "Enter", code: "Enter", keyCode: 13, which: 13,
+      shiftKey: true, isComposing: false, bubbles: true, cancelable: true };
+    textarea.dispatchEvent(new KeyboardEvent("keydown", enter));
+    textarea.dispatchEvent(new KeyboardEvent("keyup", enter));
+  });
+  await until(() => inputs.length >= beforeCommittedIme + 2, "IME commit followed by Shift+Enter");
+  await page.waitForTimeout(NO_SEND_WAIT_MS);
+  assert.deepEqual(inputs.slice(beforeCommittedIme).map(({ pane_id, text }) => ({ pane_id, text })),
+    [{ pane_id: paneA, text: "한" }, { pane_id: paneA, text: "\x1b\r" }],
+    "a pending IME commit must precede Shift+Enter without a delayed duplicate");
+  console.log("PASS terminal Shift+Enter sends a newline chord once and preserves Enter, Alt+Enter and IME");
+  console.log("PASS pending IME commit precedes Shift+Enter without duplicate text");
+  await checkCommandBackspace(browser, origin, paneA);
   // a pane shortcut switches panes and types nothing: xterm used to send ESC[1;6B / ESC[1;6A too
   const selectedTitle = () => page.locator(".pane-item.is-selected .pane-select").getAttribute("title");
-  for (const key of ["Control+Shift+ArrowDown", "Control+Shift+ArrowUp"]) {
+  // A pane just picked shows the lens of the pane before it for a moment, and the message box
+  // of that lens can take the focus back: the key waits until the terminal still has it two frames on.
+  const focusTerminal = () => until(async () => {
     await terminalInput.focus();
+    return page.evaluate(() => new Promise<boolean>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() =>
+      resolve(document.activeElement?.classList.contains("xterm-helper-textarea") ?? false)))));
+  }, "the terminal holds the focus");
+  for (const key of ["Control+Shift+ArrowDown", "Control+Shift+ArrowUp"]) {
+    await focusTerminal();
     const beforeSwitch = inputs.length;
     await page.keyboard.press(key);
     await until(async () => !(await selectedTitle())?.startsWith(`${paneA} —`), `${key} leaves the pane`);
@@ -186,6 +253,48 @@ try {
   assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   console.log("PASS settings shortcut and theme");
+
+  // Add PC lives in Settings → Remote PCs, not in the sidebar; opening it closes Settings behind it
+  assert.equal(await page.locator(".sidebar").getByRole("button", { name: "Add PC", exact: true }).count(), 0, "the sidebar has no Add PC button");
+  await page.keyboard.press("Control+Shift+Comma");
+  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Add PC", exact: true }).click();
+  await page.getByRole("dialog", { name: "Add PC", exact: true }).waitFor();
+  assert.equal(await page.getByRole("dialog", { name: "Settings" }).count(), 0, "Add PC closes Settings");
+  await page.getByRole("button", { name: "Close PC setup", exact: true }).click();
+  await page.getByRole("dialog", { name: "Add PC", exact: true }).waitFor({ state: "hidden" });
+  // its trigger went with Settings: focus lands on the header's workspace-list toggle instead of nowhere
+  await until(async () => await page.evaluate(() => document.activeElement?.matches(".sidebar-toggle, .drawer-toggle") ?? false), "focus returns to the workspace-list toggle after Add PC closes");
+  console.log("PASS Add PC opens from Settings, and the sidebar has no top bar");
+
+  // An update request answered while the page is hidden (a phone app sent to the background) must
+  // still release the buttons: the status poll stops with the page, the request does not.
+  let releaseCheck!: () => void;
+  const checkGate = new Promise<void>((resolve) => { releaseCheck = resolve; });
+  const idleStatus = { managed: true, auto_update: false, phase: "idle", current_revision: null, latest_revision: null, current_version: "0.0.0", latest_version: "0.0.0", available: false, checked_at: new Date().toISOString(), blocked_reason: null, error: null };
+  await page.route("**/api/updates", (route) => route.fulfill({ json: idleStatus }));
+  await page.route("**/api/updates/check", async (route) => { await checkGate; await route.fulfill({ json: { ok: true } }); });
+  const setPageHidden = (hidden: boolean) => page.evaluate((hidden) => {
+    if (hidden) Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    else delete (document as unknown as Record<string, unknown>).visibilityState;
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+  // the idle status poll runs every 30 s: a hide and a show restart it at once, onto the fake
+  await setPageHidden(true);
+  await setPageHidden(false);
+  await page.keyboard.press("Control+Shift+Comma");
+  const checkUpdates = page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Check for updates", exact: true });
+  await checkUpdates.waitFor();
+  await checkUpdates.click();
+  await until(() => checkUpdates.isDisabled(), "the check is pending");
+  await setPageHidden(true);
+  releaseCheck();
+  await page.waitForTimeout(300);
+  await setPageHidden(false);
+  await until(async () => !(await checkUpdates.isDisabled()), "an answer that came while hidden releases the update buttons");
+  await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  await page.unroute("**/api/updates/check");
+  await page.unroute("**/api/updates");
+  console.log("PASS an update answer that arrives while the page is hidden releases the buttons");
 
   // the bell turns this device's alerts on, and off again (it stayed disabled once on)
   await context.grantPermissions(["notifications"], { origin });
@@ -209,8 +318,13 @@ try {
   await checkUsageMeters(browser, origin);
   await checkNotificationStartup(browser, origin, paneA, paneB);
   await checkMobileViewport(browser, origin, paneB);
+  await checkMobileTabs(browser, origin);
+  await checkDefaultView(browser, origin);
   await checkComposerReconnect(browser, origin, paneB);
   await checkDroplet(browser, origin);
+  await checkChatKeepsTerminalSize(browser, origin);
+  await checkPaneSwitchKeepsTerminalSize(browser, origin);
+  await checkUpdateNotice(browser, origin);
 
   const report = (state: string) => herdrRpc("pane.report_agent", {
     pane_id: paneA, source: "manual", agent: "claude", state,
@@ -374,7 +488,7 @@ try {
   await page.locator(`.pane-item:has(.pane-select[title^="${paneA} —"]) .badge[data-status="blocked"]`).waitFor();
   await herdrRpc("pane.report_agent", { pane_id: paneA, source: "manual", agent: "claude", state: "idle" });
   await page.locator(`.pane-item:has(.pane-select[title^="${paneA} —"]) .badge:not([data-status="blocked"])`).waitFor();
-  assert.equal(await sectionB.locator(".pane-list").count(), 0, "a snapshot update keeps the selected pane's workspace folded");
+  assert.equal(await sectionB.locator(".workspace-list").count(), 0, "a snapshot update keeps the selected pane's workspace folded");
   assert.equal(await toggleB.getAttribute("aria-expanded"), "false");
   await toggleB.click();
   await sectionB.locator(".directory-contents").waitFor();
@@ -417,15 +531,15 @@ try {
     await createGate;
     await route.continue();
   });
-  await page.getByRole("button", { name: "New session", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: /^New session/ });
+  await page.getByRole("button", { name: /^New workspace on / }).click();
+  const dialog = page.getByRole("dialog", { name: /^New workspace/ });
   await dialog.getByLabel(/^Directory/).fill(root);
   await dialog.getByLabel(/^Name/).fill("herdr-web-ui-test-browser-created");
-  await dialog.getByRole("button", { name: "Start session", exact: true }).click();
+  await dialog.getByRole("button", { name: "Start", exact: true }).click();
   await until(() => createRequests === 1, "creation started");
   await page.keyboard.press("Escape");
   assert.equal(await dialog.isVisible(), true, "in-flight creation cannot be dismissed");
-  assert.equal(await dialog.getByRole("button", { name: "Close new session dialog" }).isDisabled(), true);
+  assert.equal(await dialog.getByRole("button", { name: "Close dialog" }).isDisabled(), true);
   const createdResponse = page.waitForResponse((response) => response.url().endsWith("/api/workspace/create"));
   releaseCreate();
   const created = await (await createdResponse).json() as WorkspaceCreated;
@@ -434,6 +548,226 @@ try {
   await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "created pane selected");
   assert.equal(createRequests, 1);
   console.log("PASS session creation stays pending and opens one owned workspace");
+
+  // A git worktree from a workspace row's ⋯ menu, as herdr's prefix+shift+g makes one: a new
+  // workspace next to the repository's, selected; Open worktree… then lists it as already open.
+  repo = join(root, `herdr-web-ui-test-repo-${process.pid.toString(36)}`);
+  mkdirSync(repo);
+  const git = (...args: string[]) => Bun.spawnSync(["git", "-c", "user.name=herdr-web-ui test", "-c", "user.email=test@example.invalid", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  assert.equal(git("init", "-q", "-b", "main").exitCode, 0, "git init");
+  writeFileSync(join(repo, "README.md"), "worktree fixture\n");
+  assert.equal(git("add", "README.md").exitCode, 0);
+  assert.equal(git("commit", "-q", "-m", "fixture").exitCode, 0, "git commit");
+  const repoWorkspace = await workspaceCreate({ cwd: repo, label: "herdr-web-ui-test-repo" });
+  workspaces.push(repoWorkspace.workspace.workspace_id);
+  const repoRow = page.locator(`.pane-item:has(.pane-select[title^="${repoWorkspace.root_pane.pane_id} —"])`);
+  await repoRow.waitFor();
+  await repoRow.hover();
+  await repoRow.locator(".row-menu-toggle").click();
+  await page.getByRole("menuitem", { name: "New worktree", exact: true }).click();
+  const newWorktree = page.getByRole("dialog", { name: /^New worktree/ });
+  await newWorktree.waitFor();
+  // the branch and the name arrive filled in, as herdr's own form fills them, and the name follows the branch
+  const suggested = await newWorktree.getByLabel(/^Branch/).inputValue();
+  assert.match(suggested, /^worktree\/[a-z]+-[a-z]+-[0-9a-f]{4}$/);
+  assert.equal(await newWorktree.getByLabel(/^Name/).inputValue(), suggested.replace("/", "-"));
+  await newWorktree.getByLabel(/^Branch/).fill("herdr-web-ui-test-feature");
+  // the agent to start in the checkout is chosen here; the run takes a shell so nothing is launched
+  const worktreeAgent = newWorktree.getByRole("combobox", { name: "Agent" });
+  await worktreeAgent.click();
+  await page.getByRole("option", { name: "Shell", exact: true }).click();
+  assert.equal((await worktreeAgent.textContent())?.trim(), "Shell");
+  assert.equal(await newWorktree.getByLabel(/^Name/).inputValue(), "herdr-web-ui-test-feature");
+  const worktreeResponse = page.waitForResponse((response) => response.url().endsWith("/api/worktree/create"));
+  await newWorktree.getByRole("button", { name: "Create worktree", exact: true }).click();
+  const worktree = await (await worktreeResponse).json() as WorktreeOpened;
+  worktreeWorkspaces.push(worktree.workspace_id);
+  assert.equal(worktree.branch, "herdr-web-ui-test-feature");
+  await newWorktree.waitFor({ state: "detached" });
+  await until(async () => (await page.locator(`.pane-select[title^="${worktree.pane_id} —"]`).getAttribute("aria-current")) === "true", "the worktree's pane is selected");
+  await repoRow.hover();
+  await repoRow.locator(".row-menu-toggle").click();
+  await page.getByRole("menuitem", { name: "Open worktree…", exact: true }).click();
+  const openWorktree = page.getByRole("dialog", { name: /^Open worktree/ });
+  await openWorktree.waitFor();
+  const entry = openWorktree.locator(".worktree-row", { hasText: "herdr-web-ui-test-feature" });
+  await entry.waitFor();
+  assert.equal(await entry.locator(".pill").count(), 1, "the open checkout is marked as open");
+  await page.keyboard.press("Escape");
+  await openWorktree.waitFor({ state: "detached" });
+  console.log("PASS a worktree opens from the row menu as a grouped workspace, and Open worktree… knows it");
+
+  // In the By workspace view the worktree's row sits under its repository's, as herdr packs them.
+  // Its menu deletes the checkout: a dirty one is refused in git's words first, then deleted anyway.
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator('.segmented[aria-label="Sidebar grouping"]').getByRole("button", { name: "By workspace", exact: true }).click();
+  await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  const childRow = page.locator(`.worktree-children .pane-item:has(.pane-select[title^="${worktree.pane_id} —"])`);
+  await childRow.waitFor();
+  assert.equal(await page.locator(".worktree-children").count(), 1, "one group of worktrees, under the repository's row");
+  // reorder is group-aware: the repository's row moves up past the group before it, as one, and
+  // its lone worktree has no sibling to move among, so nothing is sent for it
+  const moves: number[] = [];
+  await page.route("**/api/workspace/move", async (route) => { moves.push(route.request().postDataJSON().insert_index as number); await route.continue(); });
+  const orderBefore = (await herdrRpc<{ snapshot: { workspaces: { workspace_id: string }[] } }>("session.snapshot", {})).snapshot.workspaces.map((workspace) => workspace.workspace_id);
+  await repoRow.locator(".sidebar-drag-handle").focus();
+  await page.keyboard.press("Alt+ArrowUp");
+  await until(() => moves.length === 1, "the repository's row moved up as a group");
+  assert.equal(moves[0], orderBefore.indexOf(repoWorkspace.workspace.workspace_id) - 1, "it lands before the group above it");
+  await childRow.locator(".sidebar-drag-handle").focus();
+  await page.keyboard.press("Alt+ArrowDown");
+  await page.waitForTimeout(400);
+  assert.equal(moves.length, 1, "a lone worktree has nowhere to move");
+  await page.unroute("**/api/workspace/move");
+  writeFileSync(join(worktree.path, "unsaved.txt"), "dirty\n");
+  await childRow.hover();
+  await childRow.locator(".row-menu-toggle").click();
+  const childMenu = page.getByRole("menu");
+  await childMenu.waitFor();
+  assert.deepEqual(await childMenu.getByRole("menuitem").allTextContents(), ["Rename workspace", "Rename pane", "New tab", "Close", "Delete worktree checkout…"], "a worktree row's menu");
+  await childMenu.getByRole("menuitem", { name: "Delete worktree checkout…", exact: true }).click();
+  const deleteConfirm = page.getByRole("alertdialog");
+  await deleteConfirm.waitFor();
+  await deleteConfirm.getByRole("button", { name: "Delete", exact: true }).click();
+  await deleteConfirm.getByRole("button", { name: "Delete anyway", exact: true }).waitFor();
+  assert.equal(await deleteConfirm.locator(".confirm-error").count(), 1, "git's refusal shows in the confirm");
+  await deleteConfirm.getByRole("button", { name: "Delete anyway", exact: true }).click();
+  await deleteConfirm.waitFor({ state: "detached" });
+  await childRow.waitFor({ state: "detached" });
+  assert.equal(existsSync(worktree.path), false, "the checkout is gone");
+  worktreeWorkspaces.splice(worktreeWorkspaces.indexOf(worktree.workspace_id), 1);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator('.segmented[aria-label="Sidebar grouping"]').getByRole("button", { name: "By folder", exact: true }).click();
+  await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  console.log("PASS a worktree row sits under its repository's row, and its menu deletes the checkout, asking twice for a dirty one");
+
+  // A second tab from the row's ⋯ menu: the dialog is New tab, with the workspace's folder shown
+  // and not asked for; the new pane opens, the workspace stays one row, and a strip over the pane
+  // lists both tabs from then on. The header's New tab opens the same dialog on a desktop.
+  // The new pane's terminal takes the focus once it paints, which would close a menu opened before.
+  await until(() => painted.has(created.pane_id), "created pane paint");
+  await page.locator(`.pane-select[title^="${created.pane_id} —"]`).click();
+  await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the created workspace is selected again");
+  await page.locator(".pane-item.is-selected .row-menu-toggle").click();
+  await page.getByRole("menuitem", { name: "New tab", exact: true }).click();
+  const tabDialog = page.getByRole("dialog", { name: /^New tab · herdr-web-ui-test-browser-created/ });
+  await tabDialog.waitFor();
+  assert.equal(await tabDialog.locator(".new-session-folder").textContent(), root, "the folder is the workspace's, shown");
+  assert.equal(await tabDialog.getByRole("button", { name: "Browse", exact: true }).count(), 0, "the folder is not asked for");
+  await tabDialog.getByLabel(/^Name/).fill("second");
+  const tabResponse = page.waitForResponse((response) => response.url().endsWith("/api/tab/create"));
+  await tabDialog.getByRole("button", { name: "Start", exact: true }).click();
+  const createdTab = await (await tabResponse).json() as WorkspaceCreated;
+  assert.equal(createdTab.workspace_id, created.workspace_id, "the tab joins the workspace");
+  await tabDialog.waitFor({ state: "hidden" });
+  await until(async () => (await page.locator(`.pane-select[title^="${createdTab.pane_id} —"]`).getAttribute("aria-current")) === "true", "the new tab's pane is selected, and the row shows it");
+  assert.equal(await page.locator(`.pane-select[title^="${created.pane_id} —"]`).count(), 0, "the workspace stays one row");
+  const strip = page.locator(".tab-strip");
+  await strip.waitFor();
+  assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["Tab 1", "second"]);
+  assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "second");
+  await strip.getByRole("tab", { name: "Tab 1", exact: true }).click();
+  await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the first tab opens its pane again");
+  assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "Tab 1");
+  // reopened right after a creation: its fields are live and Escape puts it away at once
+  await page.locator(".new-tab-button").click();
+  await tabDialog.waitFor();
+  assert.equal(await tabDialog.getByRole("button", { name: "Start", exact: true }).isDisabled(), false, "a reopened dialog is not left pending");
+  await page.keyboard.press("Escape");
+  await tabDialog.waitFor({ state: "hidden" });
+  // the PC's + is New workspace again, not a tab in the workspace the last dialog was for
+  await page.getByRole("button", { name: /^New workspace on / }).click();
+  await page.getByRole("dialog", { name: /^New workspace/ }).waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog", { name: /^New workspace/ }).waitFor({ state: "hidden" });
+  console.log("PASS a second tab is made from the row's menu, listed in a strip over the pane, and opened from it");
+
+  // A tab is renamed and closed from the strip, as herdr's prefix+shift+t and prefix+shift+x.
+  const tabsInHerdr = async () => (await sessionSnapshot()).tabs.filter((tab) => tab.workspace_id === created.workspace_id).map((tab) => tab.label);
+  await strip.getByRole("tab", { name: "Tab 1", exact: true }).dblclick();
+  const tabName = strip.getByLabel("Tab name", { exact: true });
+  await tabName.waitFor();
+  await tabName.fill("  first  ");
+  await page.keyboard.press("Enter");
+  await until(async () => (await tabsInHerdr()).join() === "first,second", "herdr has the tab's new name, trimmed");
+  assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["first", "second"]);
+  await until(async () => await strip.getByRole("tab", { name: "first", exact: true }).evaluate((tab) => tab === document.activeElement), "the renamed tab has the focus back");
+  // F2 opens the field on the focused tab; Escape leaves the name alone, and so does an empty one
+  await page.keyboard.press("F2");
+  await tabName.fill("discarded");
+  // an IME's committing Enter is the composition's: the field stays, and nothing is sent
+  await tabName.dispatchEvent("keydown", { key: "Enter", isComposing: true, bubbles: true });
+  assert.equal(await tabName.count(), 1, "an IME's Enter does not save the name");
+  await page.keyboard.press("Escape");
+  await tabName.waitFor({ state: "detached" });
+  await page.keyboard.press("F2");
+  await tabName.fill("   ");
+  await page.keyboard.press("Enter");
+  await tabName.waitFor({ state: "detached" });
+  assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["first", "second"]);
+  assert.equal((await tabsInHerdr()).join(), "first,second");
+  // a right-click opens the tab's menu
+  await strip.getByRole("tab", { name: "second", exact: true }).click({ button: "right" });
+  const tabMenu = page.getByRole("menu", { name: "second", exact: true });
+  await tabMenu.waitFor();
+  assert.deepEqual(await tabMenu.getByRole("menuitem").allTextContents(), ["Rename tab", "Close tab"]);
+  await tabMenu.getByRole("menuitem", { name: "Rename tab", exact: true }).click();
+  await tabName.fill("build");
+  await page.keyboard.press("Enter");
+  await until(async () => (await tabsInHerdr()).join() === "first,build", "the menu's rename reaches herdr");
+  // on a touch screen the open tab carries a chevron in place of the x: the same menu, as a sheet
+  const tabPhone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const tabPhonePage = await tabPhone.newPage();
+  tabPhonePage.on("pageerror", (error) => errors.push(error.message));
+  await tabPhonePage.goto(`${origin}/?pane=${encodeURIComponent(createdTab.pane_id)}`);
+  const phoneStrip = tabPhonePage.locator(".tab-strip");
+  await phoneStrip.getByRole("tab", { name: "build", exact: true, selected: true }).waitFor();
+  assert.equal(await phoneStrip.locator(".tab-strip-close:visible").count(), 0, "no x under a finger");
+  assert.equal(await phoneStrip.locator(".tab-strip-panes:visible").count(), 1, "only the open tab has the chevron");
+  await phoneStrip.getByRole("button", { name: "Actions for build", exact: true }).tap();
+  const tabSheet = tabPhonePage.getByRole("dialog", { name: "build", exact: true });
+  await tabSheet.waitFor();
+  assert.deepEqual(await tabSheet.locator(".row-sheet-item").allTextContents(), ["Rename tab", "Close tab"]);
+  await tabSheet.getByRole("button", { name: "Cancel", exact: true }).tap();
+  await tabSheet.waitFor({ state: "detached" });
+  await tabPhone.close();
+  // a tab whose agent is at work asks before it closes; a no leaves it
+  await herdrRpc("pane.report_agent", { pane_id: createdTab.pane_id, source: "manual", agent: "codex", state: "working" });
+  await strip.locator('.tab-strip-dot[data-status="working"]').waitFor();
+  await strip.getByRole("tab", { name: "build", exact: true }).hover();
+  await strip.getByRole("button", { name: "Close tab build", exact: true }).click();
+  const closeTabDialog = page.getByRole("alertdialog", { name: "Close tab build?", exact: true });
+  await closeTabDialog.waitFor();
+  await closeTabDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await closeTabDialog.waitFor({ state: "detached" });
+  assert.equal((await tabsInHerdr()).join(), "first,build");
+  // a tab whose agent has finished closes at once from its x, and the tab beside it opens
+  await herdrRpc("pane.report_agent", { pane_id: createdTab.pane_id, source: "manual", agent: "codex", state: "idle" });
+  await strip.locator('.tab-strip-dot[data-status="working"]').waitFor({ state: "detached" });
+  await herdrRpc("tab.create", { workspace_id: created.workspace_id, label: "third", focus: false });
+  const third = strip.getByRole("tab", { name: "third", exact: true });
+  await third.click();
+  await until(async () => (await third.getAttribute("aria-selected")) === "true", "the third tab is open");
+  // a held Delete is one press: its repeats close nothing
+  await third.dispatchEvent("keydown", { key: "Delete", repeat: true, bubbles: true });
+  await page.waitForTimeout(300);
+  assert.equal((await tabsInHerdr()).join(), "first,build,third");
+  await strip.getByRole("button", { name: "Close tab third", exact: true }).click();
+  await until(async () => (await tabsInHerdr()).join() === "first,build", "the x closed the tab");
+  await until(async () => (await page.locator(`.pane-select[title^="${createdTab.pane_id} —"]`).getAttribute("aria-current")) === "true", "the tab beside the closed one is open");
+  // Delete on a focused tab that is not the open one closes it; the strip goes with it (one
+  // pane left), the open pane stays, and the focus goes where a closed row's goes
+  await strip.getByRole("tab", { name: "first", exact: true }).click();
+  await until(async () => (await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current")) === "true", "the first tab is open");
+  await strip.getByRole("tab", { name: "first", exact: true }).focus();
+  await page.keyboard.press("ArrowRight");
+  await until(async () => await strip.getByRole("tab", { name: "build", exact: true }).evaluate((tab) => tab === document.activeElement), "the arrow moved the focus to the other tab");
+  await page.keyboard.press("Delete");
+  await strip.waitFor({ state: "detached" });
+  assert.equal((await tabsInHerdr()).join(), "first", "herdr closed the tab and kept the other");
+  assert.equal(await page.locator(`.pane-select[title^="${created.pane_id} —"]`).getAttribute("aria-current"), "true", "the open pane stays");
+  await until(async () => await page.evaluate(() => document.activeElement?.matches(".app-header .drawer-toggle, .app-header .sidebar-toggle") === true), "the focus is not left on the page");
+  console.log("PASS a tab is renamed by a double-click, F2 and its menu, and closed from its x and Delete, asking first while its agent works");
 
   // herdr 0.9.0 reports Codex's first directory-trust menu as idle. Exercise a
   // live, owned PTY menu so the chat controls cannot depend on a blocked badge.
@@ -627,6 +961,8 @@ try {
   assert.deepEqual(errors, []);
   console.log("PASS a phone offers Claude's suggestion as a chip only once Settings turns it on");
 
+  await checkTerminalInput(browser, origin, paneA, paneB);
+
   // the terminal lens on a touch screen: an input line sends whole lines; the grid raises no keyboard
   const touch = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const touchPage = await touch.newPage();
@@ -657,19 +993,35 @@ try {
   await touchPage.waitForTimeout(NO_SEND_WAIT_MS);
   assert.equal(touchSent.length, imeSent);
   assert.equal(await line.inputValue(), "echo 한글");
+  await line.dispatchEvent("compositionstart", { data: "" });
+  const beforeComposeSend = touchSent.length;
+  await touchPage.getByRole("button", { name: "Send to the terminal", exact: true }).click();
+  await touchPage.waitForTimeout(NO_SEND_WAIT_MS);
+  assert.equal(touchSent.length, beforeComposeSend, "button cannot submit an unfinished composition");
+  await line.dispatchEvent("compositionend", { data: "한글" });
   await line.fill("");
   // an empty line's button is Enter alone
   const enters = touchSent.length;
   await touchPage.getByRole("button", { name: "Press Enter in the terminal", exact: true }).click();
   await until(() => touchSent.length > enters && touchSent.at(-1)?.type === "input" && touchSent.at(-1)?.text === "\r", "enter from the empty line");
+  await line.fill("unsent 한글 😀");
   // typing straight into the grid is one tap away, and gives the keyboard back to it
   await touchPage.getByRole("button", { name: "Type straight into the terminal", exact: true }).click();
   assert.equal(await touchPage.locator(".terminal-input").count(), 0);
   assert.equal(await touchPage.locator(".xterm-helper-textarea").getAttribute("inputmode"), null);
   await touchPage.getByRole("button", { name: "Type straight into the terminal", exact: true }).click();
   await line.waitFor();
+  assert.equal(await line.inputValue(), "unsent 한글 😀", "mode switches preserve the unsent line");
+  await touchPage.reload();
+  await line.waitFor();
+  assert.equal(await line.inputValue(), "unsent 한글 😀", "reload preserves the unsent line");
+  await line.fill("");
   assert.equal(await touchPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.deepEqual(errors, []);
+  if (process.env.UI_EVIDENCE_DIR) {
+    mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
+    await touchPage.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "terminal-input-mobile.png") });
+  }
   await touch.close();
   console.log("PASS touch terminal input line sends whole lines, Enter alone, and yields to direct typing");
 
@@ -677,9 +1029,29 @@ try {
   // is automatic, so it must not offer a sign-out action that cannot lock the app.
   assert.equal(await page.getByRole("button", { name: "Sign out", exact: true }).count(), 0);
   await page.locator(`.pane-select[title^="${created.pane_id} —"]`).click();
-  // closed from the sidebar's X (arm, then confirm); its last pane takes the workspace with it
-  await page.locator(".pane-item.is-selected .pane-close").click();
-  await page.locator(".pane-item.is-selected .pane-close.is-armed").click();
+  // closed from the row's ⋯ menu; its last pane takes the workspace with it, so a confirm asks first
+  await page.locator(".pane-item.is-selected .row-menu-toggle").click();
+  const rowMenu = page.getByRole("menu");
+  await rowMenu.waitFor();
+  // Escape puts the menu away and the focus back on its button; Enter there opens it again
+  await page.keyboard.press("Escape");
+  await rowMenu.waitFor({ state: "detached" });
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("row-menu-toggle") ?? false), true, "Escape returns focus to the row's ⋯");
+  await page.keyboard.press("Enter");
+  await rowMenu.getByRole("menuitem", { name: "Close", exact: true }).click();
+  const confirmClose = page.getByRole("alertdialog");
+  await confirmClose.waitFor();
+  await until(async () => await page.evaluate(() => document.activeElement?.textContent === "Cancel"), "the confirm starts on Cancel");
+  // a no gives the focus back to the row's ⋯; Tab stays inside the confirm
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Close", "Tab moves to the confirm's action");
+  await page.keyboard.press("Escape");
+  await confirmClose.waitFor({ state: "detached" });
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("row-menu-toggle") ?? false), true, "cancelling the confirm returns focus to the row's ⋯");
+  await page.keyboard.press("Enter");
+  await rowMenu.getByRole("menuitem", { name: "Close", exact: true }).click();
+  await confirmClose.waitFor();
+  await confirmClose.getByRole("button", { name: "Close", exact: true }).click();
   workspaces.splice(workspaces.indexOf(created.workspace_id), 1);
   await until(async () => {
     const selected = JSON.parse(await page.evaluate(() => sessionStorage.getItem("herdr-web-ui:selection") ?? "null"));
@@ -736,6 +1108,21 @@ try {
   for (const release of releases) release();
   await browser?.close();
   server?.stop();
+  // a worktree checkout the run made goes with it: herdr removes the checkout, then its workspace.
+  // The roster says what was made, so a create whose answer never arrived is removed too.
+  if (repo) {
+    const repoRoot = realpathSync(repo);
+    const snapshot = await sessionSnapshot().catch(() => null);
+    for (const workspace of snapshot?.workspaces ?? []) {
+      if (workspace.worktree?.is_linked_worktree && workspace.worktree.repo_root === repoRoot && !worktreeWorkspaces.includes(workspace.workspace_id)) worktreeWorkspaces.push(workspace.workspace_id);
+    }
+  }
+  for (const id of worktreeWorkspaces) {
+    await herdrRpc("worktree.remove", { workspace_id: id, force: true }).catch(() => undefined);
+    await workspaceClose(id).catch(() => undefined);
+  }
+  // herdr keeps the repository's folder under its worktree directory once the checkout is gone: only an empty one is ours to drop
+  if (repo) try { rmdirSync(join(homedir(), ".herdr", "worktrees", basename(repo))); } catch { /* not there, or not empty: not ours */ }
   for (const id of workspaces) await workspaceClose(id);
   rmSync(root, { recursive: true, force: true });
 }

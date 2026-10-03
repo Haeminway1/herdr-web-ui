@@ -1,13 +1,16 @@
-import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { CornerDownLeft, SendHorizontal } from "lucide-react";
 
 import "./TerminalInput.css";
+import { readTerminalDraft, writeTerminalDraft, TERMINAL_LINE_LIMIT, subscribeTerminalDraft, terminalDraftSending, setTerminalDraftSending, acknowledgeTerminalDraft } from "../lib/terminalDraft.ts";
 
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 
 export interface TerminalInputProps {
+  owner: string;
+  onComposing?: (active: boolean) => void;
   connected: boolean;
   /** true: sent, clear the line; a string: keep the text and say why; false: not sent (offline) */
   onSend: (text: string) => false | Promise<true | string>;
@@ -24,11 +27,23 @@ const MAX_ROWS = 4;
  * cannot take back keys it already sent: every revision arrived as more text. Here the line
  * is written with the keyboard's own editing and goes to the pane whole, then Enter.
  */
-export function TerminalInput({ connected, onSend, onEnter }: TerminalInputProps) {
+export function TerminalInput({ owner, connected, onSend, onEnter, onComposing }: TerminalInputProps) {
   const t = useT();
-  const [text, setText] = useState("");
+  const text = useSyncExternalStore(subscribeTerminalDraft, () => readTerminalDraft(owner));
+  const setText = useCallback((value: string | ((previous: string) => string)) => {
+    // Read the owner record even after unmount: a late acknowledgement must not erase
+    // edits made in a newly mounted input for the same pane.
+    const next = typeof value === "function" ? value(readTerminalDraft(owner)) : value;
+    writeTerminalDraft(owner, next);
+
+  }, [owner]);
+  const composing = useRef(false);
+  const composingCallback = useRef(onComposing);
+  composingCallback.current = onComposing;
+  useEffect(() => () => { composingCallback.current?.(false); }, []);
+
   const [note, setNote] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
+  const sending = useSyncExternalStore(subscribeTerminalDraft, () => terminalDraftSending(owner));
   const box = useRef<HTMLTextAreaElement>(null);
   const textRef = useRef(text);
   textRef.current = text;
@@ -54,7 +69,7 @@ export function TerminalInput({ connected, onSend, onEnter }: TerminalInputProps
   });
 
   const send = useCallback(() => {
-    if (!connected || sending) return;
+    if (!connected || terminalDraftSending(owner) || composing.current) return;
     setNote(null);
     if (text.length === 0) {
       if (!onEnter()) setNote(t("Not sent: the terminal is disconnected."));
@@ -62,18 +77,17 @@ export function TerminalInput({ connected, onSend, onEnter }: TerminalInputProps
     }
     const sent = onSend(text);
     if (sent === false) { setNote(t("Not sent: the terminal is disconnected.")); return; }
-    const written = text;
     // a polish that lands before the acknowledgement would read as text typed meanwhile, and
     // leave the sent command in the line
     dictation.forget();
-    setSending(true);
+    setTerminalDraftSending(owner, true);
     void sent.then((result) => {
       if (result === true) {
         // text typed while it was on its way stays
-        setText((current) => (current === written ? "" : current.startsWith(written) ? current.slice(written.length) : current));
+        acknowledgeTerminalDraft(owner);
       } else setNote(result);
-    }).finally(() => setSending(false));
-  }, [connected, dictation.forget, onEnter, onSend, sending, t, text]);
+    }).catch(() => setNote(t("Not confirmed. Check the terminal before sending again."))).finally(() => { setTerminalDraftSending(owner, false); });
+  }, [connected, dictation.forget, onEnter, onSend, owner, setText, t, text]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     // Enter sends; Shift+Enter breaks the line; an IME keeps its Enter, including the committing
@@ -105,11 +119,13 @@ export function TerminalInput({ connected, onSend, onEnter }: TerminalInputProps
         className="terminal-input-text"
         rows={rows}
         value={text}
+        maxLength={TERMINAL_LINE_LIMIT}
+        onCompositionStart={() => { composing.current = true; onComposing?.(true); }}
+        onCompositionEnd={() => { composing.current = false; onComposing?.(false); }}
         placeholder={t("Type for the terminal…")}
         aria-label={t("Terminal input line")}
         enterKeyHint="send"
         autoCapitalize="off"
-        disabled={!connected}
         onChange={(event) => { setText(event.target.value); setNote(null); }}
         onKeyDown={onKeyDown}
       />

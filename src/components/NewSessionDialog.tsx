@@ -5,27 +5,27 @@ import "./NewSessionDialog.css";
 
 import type { AgentKind } from "../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
-import { AgentPicker } from "./AgentPicker.tsx";
+import { AgentPicker, rememberAgent, rememberedAgent } from "./AgentPicker.tsx";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useT } from "../lib/i18n.ts";
 
-const LAST_AGENT_KEY = "herdr-web-ui:new-session-agent";
+/** The dialog as New tab: the workspace the tab joins, whose folder it uses, and the number herdr will give it. */
+export interface NewTabTarget {
+  workspaceId: string;
+  workspaceLabel: string;
+  cwd: string | null;
+  number: number;
+}
 
 export interface NewSessionDialogProps {
   open: boolean;
   machineName?: string;
   defaultCwd: string | null;
+  /** set, the dialog makes a tab in that workspace instead of a workspace */
+  tab?: NewTabTarget | null;
   onClose: () => void;
   onCreated: (paneId: string) => void;
-}
-
-function rememberedAgent(): string {
-  try {
-    return window.localStorage.getItem(LAST_AGENT_KEY) ?? "";
-  } catch {
-    return "";
-  }
 }
 
 function directoryBasename(value: string): string {
@@ -33,10 +33,10 @@ function directoryBasename(value: string): string {
   return trimmed.split("/").pop() ?? "";
 }
 
-export function NewSessionDialog({ open, defaultCwd, onClose, onCreated, machineName }: NewSessionDialogProps) {
+export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCreated, machineName }: NewSessionDialogProps) {
   const t = useT();
   const machineId = useMachineId();
-  const { createWorkspace, fetchAgentKinds } = useMachineApi();
+  const { createTab, createWorkspace, fetchAgentKinds } = useMachineApi();
   const [agents, setAgents] = useState<AgentKind[]>([]);
   const [agentKind, setAgentKind] = useState(rememberedAgent);
   const [cwd, setCwd] = useState(defaultCwd ?? "");
@@ -99,22 +99,21 @@ export function NewSessionDialog({ open, defaultCwd, onClose, onCreated, machine
     setPending(true);
     setError(null);
     try {
-      try {
-        window.localStorage.setItem(LAST_AGENT_KEY, agentKind);
-      } catch {
-        /* private mode: the choice simply is not remembered */
-      }
-      const result = await createWorkspace({
-        cwd: cwd.trim() || null,
-        label: name.trim() || null,
-        agent: agentKind ? { kind: agentKind } : null,
-      });
+      rememberAgent(agentKind);
+      const agent = agentKind ? { kind: agentKind } : null;
+      // a tab keeps the workspace's folder, which the dialog shows and does not ask for
+      const result = tab
+        ? await createTab({ workspace_id: tab.workspaceId, cwd: tab.cwd, label: name.trim() || null, agent })
+        : await createWorkspace({ cwd: cwd.trim() || null, label: name.trim() || null, agent });
       if (agentKind && !result.agent_started && result.error?.message) {
         setPending(false);
         setError(result.error.message);
         setCreatedPaneId(result.pane_id);
         return;
       }
+      // the dialog closes on this: left pending, its next opening would start a frame with the
+      // fields disabled and Escape ignored, until the open effect's reset has rendered
+      setPending(false);
       onCreated(result.pane_id);
     } catch (reason: unknown) {
       setPending(false);
@@ -131,8 +130,8 @@ export function NewSessionDialog({ open, defaultCwd, onClose, onCreated, machine
     <div className="modal-scrim new-session-scrim" onMouseDown={closeFromScrim}>
       <form className="modal new-session-modal" role="dialog" aria-modal="true" aria-labelledby="new-session-title" onSubmit={(event) => void submit(event)}>
         <header className="modal-header">
-          <h2 className="modal-title" id="new-session-title">{t("New session")} · {machineName ?? machineId}</h2>
-          <button type="button" className="icon-button" aria-label={t("Close new session dialog")} disabled={pending} onClick={onClose}>
+          <h2 className="modal-title" id="new-session-title">{tab ? `${t("New tab")} · ${tab.workspaceLabel}` : `${t("New workspace")} · ${machineName ?? machineId}`}</h2>
+          <button type="button" className="icon-button" aria-label={t("Close dialog")} disabled={pending} onClick={onClose}>
             <X aria-hidden="true" />
           </button>
         </header>
@@ -141,18 +140,29 @@ export function NewSessionDialog({ open, defaultCwd, onClose, onCreated, machine
             <span className="field-label" id="new-session-agent">{t("Agent")}</span>
             <AgentPicker ref={firstFieldRef} agents={agents} value={agentKind} disabled={fieldsDisabled} labelledBy="new-session-agent" onChange={setAgentKind} />
           </div>
-          <div className="field">
-            <label className="field-label" htmlFor="new-session-cwd">{t("Directory")}</label>
-            <div className="new-session-cwd">
-              <input id="new-session-cwd" className="input" value={cwd} disabled={fieldsDisabled} autoComplete="off" onChange={(event) => setCwd(event.target.value)} />
-              <button type="button" className="btn" aria-expanded={browsing} disabled={fieldsDisabled} onClick={() => setBrowsing((open) => !open)}>
+          {tab ? (
+            <div className="field">
+              <span className="field-label">{t("Directory")}</span>
+              <div className="new-session-folder">
                 <FolderOpen aria-hidden="true" />
-                {t("Browse")}
-              </button>
+                <span>{tab.cwd ?? tab.workspaceLabel}</span>
+              </div>
+              <span className="field-hint">{t("Uses the workspace's folder")}</span>
             </div>
-            {browsing && <DirectoryBrowser start={cwd} onPick={(picked) => { setCwd(picked); setBrowsing(false); }} />}
-            <span className="field-hint">{t("absolute path or ~/…")}</span>
-          </div>
+          ) : (
+            <div className="field">
+              <label className="field-label" htmlFor="new-session-cwd">{t("Directory")}</label>
+              <div className="new-session-cwd">
+                <input id="new-session-cwd" className="input" value={cwd} disabled={fieldsDisabled} autoComplete="off" onChange={(event) => setCwd(event.target.value)} />
+                <button type="button" className="btn" aria-expanded={browsing} disabled={fieldsDisabled} onClick={() => setBrowsing((open) => !open)}>
+                  <FolderOpen aria-hidden="true" />
+                  {t("Browse")}
+                </button>
+              </div>
+              {browsing && <DirectoryBrowser start={cwd} onPick={(picked) => { setCwd(picked); setBrowsing(false); }} />}
+              <span className="field-hint">{t("absolute path or ~/…")}</span>
+            </div>
+          )}
           <label className="field">
             <span className="field-label">{t("Name")}</span>
             <input
@@ -160,17 +170,17 @@ export function NewSessionDialog({ open, defaultCwd, onClose, onCreated, machine
               value={name}
               disabled={fieldsDisabled}
               autoComplete="off"
-              placeholder={directoryBasename(cwd)}
+              placeholder={tab ? String(tab.number) : directoryBasename(cwd)}
               onChange={(event) => setName(event.target.value)}
             />
-            <span className="field-hint">{t("Optional workspace label")}</span>
+            <span className="field-hint">{t(tab ? "Tab name (optional)" : "Optional workspace label")}</span>
           </label>
           {pending && <p className="new-session-note" role="status">{pendingLabel}</p>}
           {error && <p className="field-hint new-session-error" role="alert">{error}</p>}
         </div>
         <footer className="modal-footer">
           <button type="button" className="btn btn-ghost" disabled={pending} onClick={onClose}>{t("Cancel")}</button>
-          <button type="submit" className="btn btn-primary" disabled={pending}>{t(pending ? "Starting…" : createdPaneId !== null ? "Open session" : "Start session")}</button>
+          <button type="submit" className="btn btn-primary" disabled={pending}>{t(pending ? "Starting…" : createdPaneId !== null ? "Open" : "Start")}</button>
         </footer>
       </form>
     </div>

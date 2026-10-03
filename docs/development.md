@@ -36,6 +36,17 @@ Tests run against a herdr session of their own, `herdr-web-ui-test`. The first r
 
 Browser checks look for Chrome at `/opt/google/chrome/chrome`; set `CHROME_PATH` otherwise. After a herdr upgrade, refresh the generated wire types with `bun run generate:types --refresh` (and `--check` to verify).
 
+For isolated phone viewer and keyboard layout regressions (no herdr session; the demo runner builds the real client locally):
+
+```bash
+bun scripts/file-viewer-mobile-regression.ts  # 8 viewport cases × tall/wide images
+bun scripts/keyboard-viewport-regression.ts   # keyboard, rotation and measured standalone status inset
+bun scripts/keyboard-viewport-demo-regression.ts # original real-app viewport suite on disposable demo fixtures
+bun scripts/droplet-demo-regression.ts        # real-app alerts below the header, keyboard and landscape
+```
+
+`FILE_VIEWER_CASE=landscape-notch` selects a viewer case; `FILE_VIEWER_CSS=/path/to/before.css` compares another stylesheet. These checks use Chromium mobile emulation and synthetic safe-area/keyboard geometry; they cannot verify actual iOS Safari keyboard dismissal or notch insets. The existing `bun scripts/file-viewer-regression.ts` separately checks history with an owned herdr pane. The original `scripts/mobile-viewport-regression.ts` exports `checkMobileViewport` for the real-app `bun run test:ui` suite; it also checks the command palette and xterm focus transitions. The demo runners build the real client into a temporary directory, inject the committed fictional-session transport and serve it only on loopback; they do not use a live herdr session or download website media. They exercise real-app viewport and alert geometry, but not live herdr connectivity.
+
 ## README media
 
 `bun run build && bun scripts/readme-media/capture.ts` regenerates the stills and demos in `docs/screenshots/` from a staged, fictional session in its own herdr session (`herdr-web-ui-demo`). Pass `shots` or `video` to redo only one of them. It needs ffmpeg.
@@ -145,6 +156,9 @@ The [CI workflow](../.github/workflows/ci.yml) runs on every PR and `main` push:
   and `bun run test:unit`. This suite does not start herdr.
 - **Integration and browser**: checksum-pinned herdr 0.9.3, Node 22, isolated state/session,
   `bun run test:integration`, and `scripts/ui-regression.ts` with the lockfile's Chromium.
+  The two run at the same time (`scripts/ci-lanes.ts`). The integration files can run a few
+  at a time, each worker on a herdr session of its own (`scripts/ci-tests.ts`); CI runs them
+  one by one (`HERDR_TEST_SHARDS: 1`) until the timing-bound contract tests hold under load.
   Missing herdr fails the integration suite. The owned session is stopped even on failure.
   Integration tests have a 15-second default timeout so their bounded process-startup
   probes can finish; individual tests can still specify a longer timeout.
@@ -167,12 +181,15 @@ Release tags must not be moved or deleted. These GitHub settings are separate fr
 in the checkout.
 
 The [CodeRabbit configuration](../.coderabbit.yaml) reviews non-draft PRs, reads the committed
-[review guidelines](../.github/REVIEW.md) and any available AGENTS.md,
+[review guidelines](../.github/REVIEW.md) and the AGENTS.md files,
 and focuses on protocol, permissions and terminal lifecycle regressions. Generated output
 and media are excluded. Enable the [CodeRabbit GitHub App](https://github.com/apps/coderabbitai)
 for this repository to activate it; the YAML alone does not install the app. Reassess
 useful findings versus false positives after two weeks. Keep final merge decisions with
 the maintainer.
+
+See [Terminal input](terminal-input.md) for input readiness, draft ownership and the mobile
+input regression matrix.
 
 ## Layout
 

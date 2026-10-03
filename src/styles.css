@@ -430,6 +430,15 @@ button {
   display: none;
 }
 
+/* the pane and, over it, its workspace's tab strip when there is more than one pane to pick */
+.pane-column {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .terminal-host {
   position: relative;
   flex: 1 1 auto;
@@ -525,6 +534,19 @@ button {
 /* the switch keeps its size; the pane title (.context) is the header's one flexible item */
 .view-switch {
   flex: 0 0 auto;
+}
+
+/* New tab beside the switch, on a desktop: a phone has it in the row's menu */
+.new-tab-button {
+  flex: 0 0 auto;
+}
+
+/* under the header, so .btn's own display (further down) does not bring it back on a phone,
+   where it took the pane title's room */
+@media (max-width: 768px) {
+  .app-header .new-tab-button {
+    display: none;
+  }
 }
 
 .header-meta {
@@ -927,6 +949,21 @@ button {
     max-height: 92%;
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+/* A phone's keyboard is up (lib/viewport.ts): the scrim ends where the keyboard begins, as the
+   shell does. An iPhone home screen app keeps the layout viewport at full height under the
+   keyboard, so a sheet on the screen's bottom edge sat behind it, its text field included. */
+[data-keyboard] .modal-scrim {
+  bottom: auto;
+  height: var(--app-height, 100%);
+}
+
+/* the keyboard covers the home indicator: the sheet drops the room it kept for it */
+@media (max-width: 640px) {
+  [data-keyboard] .modal {
+    padding-bottom: 0;
   }
 }
 

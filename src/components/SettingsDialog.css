@@ -279,19 +279,6 @@
   text-transform: uppercase;
 }
 
-.usage-accounts-reset {
-  padding: 2px var(--space-1);
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--accent);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: normal;
-  text-transform: none;
-  cursor: pointer;
-}
-
 .usage-accounts ol {
   margin: 0;
   padding: 0;
@@ -351,12 +338,6 @@
   opacity: 0.45;
 }
 
-@media (hover: hover) {
-  .usage-accounts-reset:hover {
-    background: var(--bg-hover);
-  }
-}
-
 @media (pointer: fine) {
   .usage-accounts-actions .icon-button {
     width: 28px;
@@ -368,3 +349,6 @@
     height: 16px;
   }
 }
+
+.settings-shortcuts { table-layout: fixed; }
+.settings-shortcuts td .input { width: 100%; min-width: 0; }

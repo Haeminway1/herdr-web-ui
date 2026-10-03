@@ -30,9 +30,9 @@ https://github.com/user-attachments/assets/6162cf5a-b29b-4f14-b2a2-7a01564791d6
 
 <p align="center"><sub>ターミナルのペインで動く Claude Code。同じセッションをチャットで、さらにスマートフォンで操作 · 実際の動作を収録 · <a href="https://devswha.github.io/herdr-web-ui/media/herdr-web-ui-film.mp4">▶ 56 秒の紹介動画</a></sub></p>
 
-**エージェントとのやり取りを、読みやすいチャットで。パソコンでもスマートフォンでも。**
+**Claude Code と Codex を、スマートフォンから。**
 
-[herdr](https://github.com/herdrdev/herdr) のブラウザ・スマートフォン向けクライアントです。すでに実行中のセッションを開き、エージェントの作業を確認して、どこからでも返答できます。
+[herdr](https://github.com/herdrdev/herdr) のブラウザ・スマートフォン向けクライアントです。自分のコンピューターで実行中の同じエージェントセッションを、パソコンでもスマートフォンでもチャットで読んで返答できます。必要なときはターミナルも使えます。
 
 <table>
   <tr>
@@ -56,7 +56,7 @@ https://github.com/user-attachments/assets/6162cf5a-b29b-4f14-b2a2-7a01564791d6
     <td width="50%" valign="top">
       <a href="https://github.com/user-attachments/assets/3a8e40f3-7988-4a28-8729-9f8b9ad64610"><img src="docs/media/readme/ssh.webp" width="100%" alt="「PC を追加」で SSH 経由で Linux PC に接続してブリッジをインストールすると、そのセッションがサイドバーに加わり、ターミナルがその PC で動きます。"></a>
       <br><b>すべての PC を、ひとつのサイドバーに</b>
-      <br><sub>SSH で Linux や macOS のマシンを追加。<a href="docs/remote-pcs.md">リモート PC →</a></sub>
+      <br><sub>SSH で Linux、macOS、Windows のマシンを追加。<a href="docs/remote-pcs.md">リモート PC →</a></sub>
     </td>
   </tr>
 </table>
@@ -92,7 +92,7 @@ Linux（x64、arm64）または macOS に対応しています。必要な herdr
 herdr plugin install devswha/herdr-web-ui
 ```
 
-herdr が起動した状態で **[localhost:7317](http://localhost:7317)** を開きます。ペインを選ぶか、**New session（新規セッション）** からエージェントを起動してください。スマートフォンで使う場合は、インストーラーの QR コードを読み取り、アプリをホーム画面に追加します。[クイックスタート →](docs/guide.md#quick-start)
+herdr が起動した状態で **[localhost:7317](http://localhost:7317)** を開きます。ペインを選ぶか、**New workspace（新規ワークスペース）** からエージェントを起動してください。スマートフォンで使う場合は、インストーラーの QR コードを読み取り、アプリをホーム画面に追加します。[クイックスタート →](docs/guide.md#quick-start)
 
 サーバーのデフォルトの待ち受けアドレスは `127.0.0.1` です。別のデバイスからアクセスする場合は、[スマートフォンの設定](docs/guide.md#on-your-phone)と[アクセスと安全性](docs/guide.md#access-and-safety)を参照してください。
 
@@ -116,7 +116,7 @@ herdr が起動した状態で **[localhost:7317](http://localhost:7317)** を�
 
 ## エージェント向けの手順
 
-アプリのインストールを支援する場合は、[INSTALL.md](INSTALL.md) に従ってください。リポジトリを変更する場合は、[CONTRIBUTING.md](CONTRIBUTING.md) とリポジトリ内の[レビュールール](.github/REVIEW.md)に従い、ローカルの `AGENTS.md` があればその指示にも従ってください。
+アプリのインストールを支援する場合は、[INSTALL.md](INSTALL.md) に従ってください。リポジトリを変更する場合は、[CONTRIBUTING.md](CONTRIBUTING.md)、[レビュールール](.github/REVIEW.md)、[AGENTS.md](AGENTS.md) に従ってください。
 
 <a id="development"></a>
 

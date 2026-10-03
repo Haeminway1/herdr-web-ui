@@ -4,7 +4,7 @@ import { canSendSecret, sameOrigin } from "./machine-security.ts";
 import { isJsonObject, jsonResponse } from "./http.ts";
 
 const fail = (code: string, message: string, status: number) => jsonResponse({ error: { code, message } }, status);
-export const MACHINE_PROXY_PATH = /^(?:session|agents|pane\/(?:read|scroll|selection|conversation(?:\/image|\/tool-output)?|commands|files|omo-tasks|prompt|prompt\/answer|input|keys|close|rename|image)|workspace\/(?:create|rename|move|close|directories)|fs\/(?:stat|file))$/;
+export const MACHINE_PROXY_PATH = /^(?:session|agents|pane\/(?:read|scroll|selection|conversation(?:\/image|\/tool-output)?|commands|files|omo-tasks|prompt|prompt\/answer|input|keys|close|rename|image)|workspace\/(?:create|rename|move|close|directories)|worktree\/(?:create|list|open|remove)|tab\/(?:create|rename|close)|fs\/(?:stat|file))$/;
 
 export async function handleMachineRequest(request: Request, manager: MachineManager, onRevoke?: (close: () => void) => () => void): Promise<Response> {
   const url = new URL(request.url);
@@ -102,7 +102,7 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       }
       const untrack = manager.trackTerminal(id, () => abort.abort());
       try {
-        const response = await fetch(`${endpoint.url}/api/${path}${url.search}`, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body, redirect: "error", signal: AbortSignal.any([request.signal, abort.signal, AbortSignal.timeout(75_000)]) });
+        const response = await fetch(`${endpoint.url}/api/${path}${url.search}`, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body, redirect: "error", signal: AbortSignal.any([request.signal, abort.signal, AbortSignal.timeout(path === "worktree/create" ? 165_000 : 75_000)]) });
         const etag = response.headers.get("etag");
         return new Response(response.status === 304 ? null : await response.arrayBuffer(), { status: response.status, headers: {
           "content-type": response.headers.get("content-type") ?? "application/json", "cache-control": "no-store", ...(etag ? { etag } : {}),

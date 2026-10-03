@@ -42,7 +42,7 @@ function connect(port: number, paneId: string) {
   sockets.push(ws);
   const state = {
     frames: 0, tail: "", errors: [] as string[], errorPanes: [] as (string | undefined)[], exits: 0, exitCodes: [] as (number | null)[],
-    resumed: 0, submits: [] as { ok: boolean; code?: string }[],
+    ready: 0, resumed: 0, submits: [] as { ok: boolean; code?: string }[],
   };
   ws.addEventListener("message", (event) => {
     const frame = JSON.parse(String(event.data)) as ServerMessage;
@@ -52,6 +52,7 @@ function connect(port: number, paneId: string) {
     }
     if (frame.type === "pty-exit" && frame.pane_id === paneId) state.exitCodes.push(frame.code);
     if (frame.type === "pty-exit" && frame.pane_id === paneId) state.exits++;
+    if (frame.type === "input-ready" && frame.pane_id === paneId) state.ready++;
     if (frame.type === "attach-resumed" && frame.pane_id === paneId) state.resumed++;
     if (frame.type === "pty-data" && frame.pane_id === paneId) {
       state.frames++;
@@ -127,6 +128,7 @@ describe("a terminal another web bridge holds", () => {
       // several retries go by: still waiting, never ended, and told only once
       await Bun.sleep(900);
       expect(b.state.exits).toBe(0);
+      expect(b.state.ready).toBe(0);
       expect(b.state.errors.filter((code) => code === "attach_held")).toHaveLength(1);
       expect(b.state.errors).not.toContain("attach_conflict");
       // the error names its pane: a terminal that moved on to another pane ignores it
@@ -154,6 +156,7 @@ describe("a terminal another web bridge holds", () => {
       a.send({ type: "detach", pane_id: paneId });
       await until(() => b.state.resumed === 1, "second bridge attached after the first let go");
       await until(() => b.state.frames > 0, "second bridge paints the terminal");
+      expect(b.state.ready).toBe(1);
       expect(b.state.exits).toBe(0);
     } finally {
       // B's next try must not run another test's scripted herdr

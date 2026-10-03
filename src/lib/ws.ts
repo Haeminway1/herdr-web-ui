@@ -20,6 +20,8 @@ const DISCONNECTED: SubmitResult = { ok: false, code: "disconnected", message: "
 interface AttachState {
   cols: number;
   rows: number;
+  /** the chat lens covers the grid: attaches (a reconnect's too) leave the shared pty's size alone */
+  keepSize: boolean;
 }
 
 function defaultUrl(): string {
@@ -45,6 +47,9 @@ export class HerdrSocket {
   private readonly url: string;
   private readonly handlers = new Set<Handler>();
   private readonly disconnectHandlers = new Set<() => void>();
+  private snapshotKnown = false;
+  private readonly outputSeen = new Set<string>();
+  private readonly inputReady = new Set<string>();
   private readonly attached = new Map<string, AttachState>();
   private retries = 0;
   private reconnectTimer: number | null = null;
@@ -76,6 +81,9 @@ export class HerdrSocket {
     const socket = new WebSocket(this.url);
     this.socket = socket;
     this.features = new Set();
+    this.inputReady.clear();
+    this.outputSeen.clear();
+    this.snapshotKnown = false;
     this.snapshotSeen = new Promise((resolve) => { this.markSnapshot = resolve; });
 
     socket.addEventListener("open", () => {
@@ -86,7 +94,7 @@ export class HerdrSocket {
       // arrive - the UI would stay stuck in the old role while the header pill lies
       this.rawSend({ type: "role", mode: this.mode });
       for (const [paneId, state] of this.attached) {
-        this.rawSend({ type: "attach", pane_id: paneId, cols: state.cols, rows: state.rows, flow_control: "ack" });
+        this.rawSend({ type: "attach", pane_id: paneId, cols: state.cols, rows: state.rows, flow_control: "ack", ...(state.keepSize ? { keep_size: true } : {}) });
       }
     });
 
@@ -101,8 +109,15 @@ export class HerdrSocket {
       }
       if (message.type === "snapshot") {
         this.features = new Set(message.features ?? []);
+        this.snapshotKnown = true;
+        if (!this.features.has("input-ready")) for (const pane of this.outputSeen) if (this.attached.has(pane)) this.inputReady.add(pane);
         this.markSnapshot();
       }
+      if (message.type === "pty-data") this.outputSeen.add(message.pane_id);
+      if ((message.type === "input-ready" && message.ready !== false) || (message.type === "pty-data" && this.snapshotKnown && !this.features.has("input-ready"))) {
+        if (this.attached.has(message.pane_id)) this.inputReady.add(message.pane_id);
+      }
+      if ((message.type === "input-ready" && message.ready === false) || message.type === "pty-exit" || (message.type === "error" && message.pane_id && ["attach_held", "input_not_ready"].includes(message.code))) this.inputReady.delete(message.pane_id!);
       if (message.type === "submit-result") {
         const settle = this.submits.get(message.id);
         this.submits.delete(message.id);
@@ -172,9 +187,11 @@ export class HerdrSocket {
     return () => { this.disconnectHandlers.delete(handler); };
   }
 
-  attach(paneId: string, cols: number, rows: number): void {
-    this.attached.set(paneId, { cols, rows });
-    this.send({ type: "attach", pane_id: paneId, cols, rows, flow_control: "ack" });
+  attach(paneId: string, cols: number, rows: number, keepSize = false): void {
+    this.outputSeen.delete(paneId);
+    this.inputReady.delete(paneId);
+    this.attached.set(paneId, { cols, rows, keepSize });
+    this.send({ type: "attach", pane_id: paneId, cols, rows, flow_control: "ack", ...(keepSize ? { keep_size: true } : {}) });
     if (this.outputStopped) {
       this.outputStopped = false;
       this.connect();
@@ -195,6 +212,8 @@ export class HerdrSocket {
   }
 
   detach(paneId: string): void {
+    this.outputSeen.delete(paneId);
+    this.inputReady.delete(paneId);
     this.attached.delete(paneId);
     this.send({ type: "detach", pane_id: paneId });
   }
@@ -207,8 +226,15 @@ export class HerdrSocket {
       if (!force && state.cols === cols && state.rows === rows) return;
       state.cols = cols;
       state.rows = rows;
+      state.keepSize = false;
     }
     this.send({ type: "resize", pane_id: paneId, cols, rows });
+  }
+
+  /** The chat lens covers the grid again: a reconnect attaches without resizing, until the next resize. */
+  keepSize(paneId: string): void {
+    const state = this.attached.get(paneId);
+    if (state) state.keepSize = true;
   }
 
   /** Sets the connection's role. Not queued: the role replays before the attaches on reconnect. */
@@ -217,9 +243,13 @@ export class HerdrSocket {
     if (this.connected) this.rawSend({ type: "role", mode });
   }
 
-  sendInput(paneId: string, text: string): void {
-    if (!this.connected) return;
-    this.rawSend({ type: "input", pane_id: paneId, text });
+  canInput(paneId: string): boolean {
+    return this.connected && this.mode === "interact" && this.inputReady.has(paneId);
+  }
+
+  sendInput(paneId: string, text: string): boolean {
+    if (!this.canInput(paneId)) return false;
+    try { this.rawSend({ type: "input", pane_id: paneId, text }); return true; } catch { return false; }
   }
 
   /**

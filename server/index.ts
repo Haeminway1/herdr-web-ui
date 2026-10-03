@@ -41,10 +41,17 @@ import {
   paneSendText,
   ping,
   sessionSnapshot,
+  tabClose,
+  tabCreate,
+  tabRename,
   workspaceClose,
   workspaceCreate,
   workspaceMove,
   workspaceRename,
+  worktreeCreate,
+  worktreeList,
+  worktreeOpen,
+  worktreeRemove,
 } from "./herdr/client.ts";
 import { type AlertTiming, createPushService, defaultStateDir, handlePushRequest } from "./push.ts";
 import { codexQuestionsCollapsed, handlePromptRequest } from "./prompt.ts";
@@ -57,6 +64,7 @@ import { mirrorInput } from "./mirror-input.ts";
 import { OutputWindow, OUTPUT_HIGH_BYTES, OUTPUT_HARD_BYTES, OUTPUT_STALL_MS, ReplayBuffer } from "./output-window.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../shared/terminal-flow.ts";
 import { connectUpdater, handleUpdateRequest, type UpdateService } from "./update-api.ts";
+import { handleHerdrUpdateRequest, HerdrUpdater } from "./herdr-update.ts";
 import { handleUsageRequest, UsageService } from "./usage.ts";
 import { handleVoiceRequest, VoiceService } from "./voice.ts";
 
@@ -105,6 +113,18 @@ const ATTACH_REFUSING_RE = /terminal attach failed[^\r\n]*\s*$/;
 /** how long a refusal's exit is waited for before its output is taken for the pane's own */
 const ATTACH_REFUSAL_EXIT_MS = 2_000;
 const ATTACH_HELD_MESSAGE = "Another web bridge has this pane open. It connects here as soon as that bridge lets go.";
+/**
+ * How long a pane whose attach herdr ended is looked up again before its terminal is taken for
+ * ended. A live handoff (`herdr update --handoff`, `herdr server live-handoff`) moves every pane
+ * to a new server under a new terminal id and cuts each attach with "server shut down", the
+ * words a pane that exited gets too. Measured on herdr 0.9.3: the socket answers
+ * server_unavailable for ~200 ms, then the pane is back under its new terminal; an exited
+ * pane is gone from the snapshot within ~30 ms.
+ */
+const ATTACH_RELOOKUP_FOR_MS = 5_000;
+const ATTACH_RELOOKUP_MS = 100;
+/** what a pane lookup answers for a pane that has no terminal to attach any more */
+const PANE_GONE_CODES = new Set(["pane_not_found", "pane_not_restored", "no_terminal"]);
 /** The gap between a composer message's text and its Enter (see submitText). */
 export const SUBMIT_DELAY_MS = 120;
 /**
@@ -121,7 +141,7 @@ const TYPED_SETTLE_MS = 300;
  * reaches the pane later.
  */
 export const SUBMIT_DEADLINE_MS = 45_000;
-const SERVER_FEATURES: ServerFeature[] = ["submit", "secret-input"];
+const SERVER_FEATURES: ServerFeature[] = ["submit", "secret-input", "input-ready"];
 
 /** Bind addresses only this machine can reach, so an unset token is nobody else's business. */
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -158,6 +178,67 @@ async function paneContext(paneId: string): Promise<{ agent: string | null; cwd:
   return { agent: pane.agent ?? pane.agent_session?.agent ?? null, cwd };
 }
 
+type AgentPayload = { kind?: unknown; name?: unknown; args?: unknown };
+
+/** What is wrong with a request's `agent`, in the API's words; null when it can be started. */
+function agentFault(agent: AgentPayload | undefined): string | null {
+  if (agent === undefined) return null;
+  if (typeof agent !== "object" || typeof agent.kind !== "string" || agent.kind.length === 0) return "agent.kind is required";
+  if ((agent.name !== undefined && typeof agent.name !== "string")
+    || (agent.args !== undefined && (!Array.isArray(agent.args) || !agent.args.every((arg) => typeof arg === "string")))) {
+    return "agent.name must be a string and agent.args must be an array of strings";
+  }
+  return null;
+}
+
+/**
+ * Starts a checked `agent` in a pane herdr just made. A failure is answered, not thrown: the
+ * workspace, tab or worktree around the pane is there either way.
+ */
+async function agentLaunch(paneId: string, agent: AgentPayload): Promise<{ agent_started: true } | { agent_started: false; error: { code: string; message: string } }> {
+  try {
+    const kind = agent.kind as string;
+    const args = agent.args as string[] | undefined;
+    if (isShellAgentKind(kind)) await startShellAgent(kind, paneId, args);
+    else {
+      const given = typeof agent.name === "string" && agent.name.length > 0 ? agent.name : null;
+      // herdr refuses a name another agent holds. Two creations at once can pick the same
+      // free one: the refused one picks again. It also refuses a pane whose shell is not up
+      // yet (`agent_pane_busy`, herdr 0.9.3), which a pane made a moment ago can be.
+      const shellDeadline = Date.now() + 10_000;
+      for (let attempt = 1; ; ) {
+        try {
+          await agentStart({
+            name: given ?? freeAgentName(kind, (await sessionSnapshot()).agents.map((running) => running.name)),
+            kind,
+            paneId,
+            ...(args === undefined ? {} : { args }),
+            timeoutMs: 60_000,
+          });
+          break;
+        } catch (error) {
+          if (!(error instanceof HerdrError)) throw error;
+          if (error.code === "agent_pane_busy" && Date.now() < shellDeadline) {
+            await Bun.sleep(100);
+            continue;
+          }
+          if (given !== null || attempt === 3 || error.code !== "agent_name_taken") throw error;
+          attempt += 1;
+        }
+      }
+    }
+    return { agent_started: true };
+  } catch (error) {
+    return {
+      agent_started: false,
+      error: {
+        code: error instanceof HerdrError ? error.code : "agent_start_failed",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
+
 interface SocketData {
   deviceId?: string;
   readOnly?: boolean;
@@ -181,6 +262,7 @@ type Client = ServerWebSocket<SocketData>;
  * keeps screen state and selection, while herdr owns scrollback.
  */
 interface PaneAttachment {
+  ready: boolean;
   pty: PtySession | MirrorSession;
   /** set when herdr cannot attach here: `pty` repaints the pane's screen (server/mirror.ts), on the pane's own grid */
   mirror?: MirrorSession;
@@ -195,6 +277,8 @@ interface PaneAttachment {
   held?: boolean;
   /** the next try at a held terminal; a closed attachment cancels it */
   heldRetry?: ReturnType<typeof setTimeout>;
+  /** the next look for the terminal a pane lives on after herdr ended its attach; a closed attachment cancels it */
+  relookup?: ReturnType<typeof setTimeout>;
 }
 
 function send(client: Client, message: ServerMessage): number {
@@ -229,6 +313,8 @@ export function createServer(
     /** Native Codex store; defaults to CODEX_HOME. Tests use an isolated store. */
     codexHome?: string;
     updates?: UpdateService;
+    /** updates herdr itself (server/herdr-update.ts); unset, the app offers no herdr update. Tests pass one that runs a stand-in herdr. */
+    herdrUpdate?: HerdrUpdater;
     /** plan limits of the AI subscriptions signed in here; tests pass one without real sign-ins */
     usage?: UsageService;
     /** voice input's key, provider and models; tests pass one with their own env and fetch */
@@ -243,6 +329,8 @@ export function createServer(
     attachRetryForMs?: number;
     /** ATTACH_HELD_RETRY_MS; tests shorten it */
     attachHeldRetryMs?: number;
+    /** ATTACH_RELOOKUP_FOR_MS; tests shorten it */
+    attachRelookupForMs?: number;
     /** whether herdr can `terminal attach`; unset, its ping says, and this runtime's PTY sidecar has to be runnable. Tests give a Windows herdr's answer, at once or as late as a ping's. */
     terminalAttach?: boolean | (() => Promise<boolean>);
     /** whether this runtime can run the PTY sidecar; unset, server/pty/sidecar.ts says. Tests give a runtime without Node or node-pty, while herdr keeps its own answer. */
@@ -262,6 +350,7 @@ export function createServer(
   };
   const retryFor = options.attachRetryForMs ?? ATTACH_RETRY_FOR_MS;
   const heldRetry = options.attachHeldRetryMs ?? ATTACH_HELD_RETRY_MS;
+  const relookupFor = options.attachRelookupForMs ?? ATTACH_RELOOKUP_FOR_MS;
   /** attachments still resolving their terminal, so concurrent attaches share one pty */
   const pendingAttachments = new Map<string, Promise<PaneAttachment>>();
   // herdr releases its exclusive attach slot only after the old process exits.
@@ -447,8 +536,8 @@ export function createServer(
     for (const client of clients) send(client, message);
   }
 
-  async function terminalInfoFor(paneId: string): Promise<{ terminalId: string; rect: { width: number; height: number } | null }> {
-    const snapshot = await sessionSnapshot();
+  async function terminalInfoFor(paneId: string, timeoutMs?: number): Promise<{ terminalId: string; rect: { width: number; height: number } | null }> {
+    const snapshot = await sessionSnapshot(undefined, timeoutMs);
     const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId);
     if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
     // herdr (0.9.3+) could not restore it after a restart: its terminal has no process
@@ -467,6 +556,7 @@ export function createServer(
     if (!attachment) return;
     attachments.delete(paneId);
     clearTimeout(attachment.heldRetry);
+    clearTimeout(attachment.relookup);
     // its members hold nothing on this pane any more (a pty that exited leaves them on
     // the "terminal ended" screen): a stale entry would read as a live claim in
     // releaseUnclaimed and keep a later, empty pty on this pane running
@@ -522,6 +612,7 @@ export function createServer(
     const spawnCols = forObserver || mirrored ? (rect?.width ?? 80) : cols;
     const spawnRows = forObserver || mirrored ? (rect?.height ?? 24) : rows;
     const attachment: PaneAttachment = {
+      ready: mirrored,
       pty: undefined as unknown as PtySession,
       clients: new Set<Client>(),
       cols: spawnCols,
@@ -579,6 +670,8 @@ export function createServer(
     };
     let retries = 0;
     let refusedSince: number | null = null;
+    /** the terminal attached to: a pane keeps its id across a server handoff, its terminal does not */
+    let attachedTerminal = terminalId;
     const start = (): PtySession => {
       let output = ""; // this attach's own last words: herdr's refusal is in them
       // its first bytes wait ATTACH_HOLD_MS: a refusal (herdr's setup, teardown and message)
@@ -619,11 +712,15 @@ export function createServer(
           attachment.held = false;
           broadcast(paneId, { type: "attach-resumed", pane_id: paneId });
         }
+        attachment.ready = true;
+        broadcast(paneId, { type: "input-ready", pane_id: paneId });
         release();
       };
       const ended = (code: number | null): void => {
         clearTimeout(holdTimer);
         if (attachments.get(paneId) !== attachment) return;
+        if (attachment.ready) broadcast(paneId, { type: "input-ready", pane_id: paneId, ready: false });
+        attachment.ready = false;
         const now = Date.now();
         if (code !== 0 && ATTACH_READ_RACE_RE.test(output) && now - (refusedSince ??= now) < retryFor) {
           held = null;
@@ -671,12 +768,53 @@ export function createServer(
           return;
         }
         release();
-        broadcast(paneId, { type: "pty-exit", pane_id: paneId, code });
-        closeAttachment(paneId);
+        const finish = (): void => {
+          broadcast(paneId, { type: "pty-exit", pane_id: paneId, code });
+          closeAttachment(paneId);
+        };
+        // a refusal whose exit never came ended this try itself, on a terminal that is still there
+        if (retired) return finish();
+        // herdr ended the attach, maybe not the pane: after a live handoff the pane lives on under
+        // a new terminal, and the same clients attach to that one. A pane that is gone, or still
+        // on this terminal once the lookups run out, ended.
+        const deadline = Date.now() + relookupFor;
+        const again = (): void => {
+          if (Date.now() >= deadline) return finish();
+          attachment.relookup = setTimeout(relookup, ATTACH_RELOOKUP_MS);
+        };
+        const relookup = (): void => {
+          // a herdr that takes the request and never answers must not hold the terminal past the
+          // deadline: the lookup gets what is left of it, not the RPC's own 10 s
+          terminalInfoFor(paneId, Math.max(1, deadline - Date.now())).then(({ terminalId: now }) => {
+            if (attachments.get(paneId) !== attachment) return;
+            if (now === attachedTerminal) return again();
+            if (attachment.clients.size === 0) {
+              closeAttachment(paneId);
+              return;
+            }
+            attachedTerminal = now;
+            // a new terminal gets the whole read-race budget
+            refusedSince = null;
+            retries = 0;
+            try {
+              attachment.pty = start();
+            } catch (error) {
+              const message = spawnFailure(paneId, error);
+              broadcast(paneId, { type: "error", code: "command_failed", message });
+              finish();
+            }
+          }, (error: unknown) => {
+            if (attachments.get(paneId) !== attachment) return;
+            if (error instanceof HerdrError && PANE_GONE_CODES.has(error.code)) return finish();
+            // herdr is between servers (server_unavailable, connect_failed) or not answering (timeout): ask again
+            again();
+          });
+        };
+        relookup();
       };
       const session = new PtySession({
         command: process.env["HERDR_WEB_HERDR_BIN"] || "herdr",
-        args: ["terminal", "attach", terminalId],
+        args: ["terminal", "attach", attachedTerminal],
         // herdr's CLI reads HERDR_SOCKET_PATH, not HERDR_SOCKET: the stream must reach
         // the same session the RPCs talk to, or a named session's terminals are
         // looked up on the default socket and the attach dies.
@@ -800,7 +938,7 @@ export function createServer(
       const url = new URL(request.url);
       let { pathname } = url;
       const bridgeAuthorized = isAuthenticated(request, bridgeToken);
-      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === "/api/agents" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/fs/") || pathname === "/ws";
+      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === "/api/agents" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname.startsWith("/api/fs/") || pathname === "/ws";
       const ip = bunServer.requestIP(request);
       const access = decideAccess({
         loopback: ip !== null && isLoopbackAddress(ip.address),
@@ -845,10 +983,11 @@ export function createServer(
         if (pathname.startsWith("/api/machines/local/")) {
           if (!sameOrigin(request) || (request.method !== "GET" && request.headers.get("x-herdr-machine") !== "1")) return jsonResponse({ error: { code: "invalid_origin", message: "Use PC controls from this app" } }, 403);
           pathname = pathname.replace("/api/machines/local/", "/api/");
-          if (!/^\/api\/(session|agents|pane\/|workspace\/)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
+          if (!/^\/api\/(session|agents|pane\/|workspace\/|worktree\/|tab\/)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
           url.pathname = pathname;
         } else {
-          bunServer.timeout(request, pathname === "/api/machines/events" ? 0 : 80);
+          // a worktree made with an agent waits on git and then agent.start, up to 150 s on the PC
+          bunServer.timeout(request, pathname === "/api/machines/events" ? 0 : pathname.endsWith("/worktree/create") ? 180 : 80);
           const deviceId = access.level === "full" ? access.device?.id : undefined;
           const response = await handleMachineRequest(request, machines, deviceId ? (close) => devices.onRevoke(deviceId, close) : undefined);
           response.headers.set("cache-control", "no-store");
@@ -892,6 +1031,7 @@ export function createServer(
       if (pathname === "/api/updates" || pathname.startsWith("/api/updates/")) {
         return handleUpdateRequest(request, pathname, options.updates);
       }
+      if (pathname === "/api/herdr/update") return handleHerdrUpdateRequest(request, options.herdrUpdate);
 
       if (pathname === "/api/usage") return handleUsageRequest(request, url, usage);
       // a long clip can keep the provider silent past Bun's 10 s idle limit before the first line
@@ -985,15 +1125,22 @@ export function createServer(
         return listing === null ? badRequest("invalid_cwd", "path must be a directory this user can read") : jsonResponse(listing);
       }
 
-      if (pathname === "/api/workspace/create") {
+      // A tab is made the way a workspace is: herdr opens it with a shell in its root pane, and
+      // the agent (if any) starts there through the one launch path, so names, retries and a
+      // partial failure read the same for both.
+      if (pathname === "/api/workspace/create" || pathname === "/api/tab/create") {
+        const inWorkspace = pathname === "/api/tab/create";
         if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
-        let payload: { cwd?: unknown; label?: unknown; agent?: { kind?: unknown; name?: unknown; args?: unknown } | null };
+        let payload: { workspace_id?: unknown; cwd?: unknown; label?: unknown; agent?: { kind?: unknown; name?: unknown; args?: unknown } | null };
         try {
           payload = (await request.json()) as typeof payload;
         } catch {
           return badRequest("invalid_json", "request body must be JSON");
         }
         if (!isJsonObject(payload)) return badRequest("invalid_body", "request body must be a JSON object");
+        if (inWorkspace && (typeof payload.workspace_id !== "string" || payload.workspace_id.trim() === "")) {
+          return badRequest("missing_workspace_id", "workspace_id is required");
+        }
         // the client sends null for "not given": treat it exactly like an absent field
         if (payload.cwd === null) delete payload.cwd;
         if (payload.label === null) delete payload.label;
@@ -1002,73 +1149,45 @@ export function createServer(
         const cwd = payload.cwd === undefined ? undefined : expandedDirectory(payload.cwd);
         if (payload.cwd !== undefined && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
         if (payload.label !== undefined && typeof payload.label !== "string") return badRequest("missing_label", "label must be a string");
-        if (payload.agent !== undefined && (typeof payload.agent !== "object" || typeof payload.agent.kind !== "string" || payload.agent.kind.length === 0)) {
-          return badRequest("invalid_agent", "agent.kind is required");
-        }
-        if (payload.agent && ((payload.agent.name !== undefined && typeof payload.agent.name !== "string")
-          || (payload.agent.args !== undefined && (!Array.isArray(payload.agent.args) || !payload.agent.args.every((arg) => typeof arg === "string"))))) {
-          return badRequest("invalid_agent", "agent.name must be a string and agent.args must be an array of strings");
-        }
+        const fault = agentFault(payload.agent);
+        if (fault !== null) return badRequest("invalid_agent", fault);
         // agent.start can legitimately take a minute; Bun's default idle timeout is shorter.
         if (payload.agent) bunServer.timeout(request, 75);
         try {
-          const created = await workspaceCreate({
+          const options = {
             ...(cwd === undefined || cwd === null ? {} : { cwd }),
             ...(typeof payload.label === "string" ? { label: payload.label } : {}),
-          });
+          };
+          const created = inWorkspace
+            ? await tabCreate({ ...options, workspaceId: payload.workspace_id as string })
+            : await workspaceCreate(options);
+          const workspaceId = created.tab.workspace_id;
           if (!payload.agent) {
-            return jsonResponse({ workspace_id: created.workspace.workspace_id, pane_id: created.root_pane.pane_id, agent_started: false });
+            return jsonResponse({ workspace_id: workspaceId, pane_id: created.root_pane.pane_id, agent_started: false });
           }
-          try {
-            const kind = payload.agent.kind as string;
-            if (isShellAgentKind(kind)) await startShellAgent(kind, created.root_pane.pane_id, payload.agent.args as string[] | undefined);
-            else {
-              const given = typeof payload.agent.name === "string" && payload.agent.name.length > 0 ? payload.agent.name : null;
-              // herdr refuses a name another agent holds. Two creations at once can pick the same
-              // free one: the refused one picks again. It also refuses a pane whose shell is not up
-              // yet (`agent_pane_busy`, herdr 0.9.3), which a workspace made a moment ago can be.
-              const shellDeadline = Date.now() + 10_000;
-              for (let attempt = 1; ; ) {
-                try {
-                  await agentStart({
-                    name: given ?? freeAgentName(kind, (await sessionSnapshot()).agents.map((agent) => agent.name)),
-                    kind,
-                    paneId: created.root_pane.pane_id,
-                    ...(payload.agent.args === undefined ? {} : { args: payload.agent.args as string[] }),
-                    timeoutMs: 60_000,
-                  });
-                  break;
-                } catch (error) {
-                  if (!(error instanceof HerdrError)) throw error;
-                  if (error.code === "agent_pane_busy" && Date.now() < shellDeadline) {
-                    await Bun.sleep(100);
-                    continue;
-                  }
-                  if (given !== null || attempt === 3 || error.code !== "agent_name_taken") throw error;
-                  attempt += 1;
-                }
-              }
-            }
-            return jsonResponse({ workspace_id: created.workspace.workspace_id, pane_id: created.root_pane.pane_id, agent_started: true });
-          } catch (error) {
-            return jsonResponse({
-              workspace_id: created.workspace.workspace_id,
-              pane_id: created.root_pane.pane_id,
-              agent_started: false,
-              error: {
-                code: error instanceof HerdrError ? error.code : "agent_start_failed",
-                message: error instanceof Error ? error.message : String(error),
-              },
-            });
-          }
+          return jsonResponse({ workspace_id: workspaceId, pane_id: created.root_pane.pane_id, ...(await agentLaunch(created.root_pane.pane_id, payload.agent)) });
         } catch (error) {
           return errorResponse(error);
         }
       }
 
-      if (pathname === "/api/workspace/rename" || pathname === "/api/workspace/move" || pathname === "/api/workspace/close") {
+      // A worktree is a git checkout herdr opens as a workspace grouped with its repository's.
+      // The workspace names the repository; herdr finds the checkout root from its folder.
+      if (pathname === "/api/worktree/list") {
+        if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+        const workspaceId = url.searchParams.get("workspace_id") ?? "";
+        if (workspaceId === "") return badRequest("missing_workspace_id", "workspace_id is required");
+        try {
+          const listing = await worktreeList(workspaceId);
+          return jsonResponse({ source: listing.source, worktrees: listing.worktrees });
+        } catch (error) {
+          return errorResponse(error);
+        }
+      }
+
+      if (pathname === "/api/worktree/remove") {
         if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
-        let payload: { workspace_id?: unknown; label?: unknown; insert_index?: unknown };
+        let payload: { workspace_id?: unknown; force?: unknown };
         try {
           payload = (await request.json()) as typeof payload;
         } catch {
@@ -1077,6 +1196,91 @@ export function createServer(
         if (!isJsonObject(payload)) return badRequest("invalid_body", "request body must be a JSON object");
         if (typeof payload.workspace_id !== "string" || payload.workspace_id.length === 0) {
           return badRequest("missing_workspace_id", "workspace_id is required");
+        }
+        if (payload.force !== undefined && typeof payload.force !== "boolean") return badRequest("invalid_force", "force must be a boolean");
+        // git can take a while to delete a large checkout; Bun's default idle timeout is shorter.
+        bunServer.timeout(request, 75);
+        try {
+          const removed = await worktreeRemove(payload.workspace_id, payload.force === true);
+          return jsonResponse({ ok: true, path: removed.path, forced: removed.forced });
+        } catch (error) {
+          return errorResponse(error);
+        }
+      }
+
+      if (pathname === "/api/worktree/create" || pathname === "/api/worktree/open") {
+        if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+        let payload: { workspace_id?: unknown; branch?: unknown; base?: unknown; label?: unknown; path?: unknown; agent?: AgentPayload | null };
+        try {
+          payload = (await request.json()) as typeof payload;
+        } catch {
+          return badRequest("invalid_json", "request body must be JSON");
+        }
+        if (!isJsonObject(payload)) return badRequest("invalid_body", "request body must be a JSON object");
+        if (typeof payload.workspace_id !== "string" || payload.workspace_id.length === 0) {
+          return badRequest("missing_workspace_id", "workspace_id is required");
+        }
+        // the client sends null for "not given": an empty string is not given either
+        const text = (value: unknown, name: string): string | undefined => {
+          if (value === undefined || value === null) return undefined;
+          if (typeof value !== "string") throw badRequest(`invalid_${name}`, `${name} must be a string`);
+          const trimmed = value.trim();
+          return trimmed === "" ? undefined : trimmed;
+        };
+        let branch: string | undefined, base: string | undefined, label: string | undefined;
+        try {
+          branch = text(payload.branch, "branch"); base = text(payload.base, "base"); label = text(payload.label, "label");
+        } catch (response) {
+          return response as Response;
+        }
+        // a checkout path is taken as git names it, spaces and all
+        let path: string | undefined;
+        if (payload.path !== undefined && payload.path !== null) {
+          if (typeof payload.path !== "string") return badRequest("invalid_path", "path must be a string");
+          if (payload.path !== "") path = payload.path;
+        }
+        if (path !== undefined && !isAbsolute(path)) return badRequest("invalid_path", "path must be absolute");
+        const creating = pathname === "/api/worktree/create";
+        // a new checkout can start an agent in its pane, as a new workspace can; null is "not given"
+        const agent = creating ? payload.agent ?? undefined : undefined;
+        const fault = agentFault(agent);
+        if (fault !== null) return badRequest("invalid_agent", fault);
+        if (creating && branch === undefined) return badRequest("missing_branch", "branch is required");
+        if (!creating && branch === undefined && path === undefined) return badRequest("missing_target", "path or branch is required");
+        // a checkout of a large repository can take a while; Bun's default idle timeout is shorter.
+        // and agent.start after it can take a minute more.
+        if (creating) bunServer.timeout(request, agent ? 150 : 75);
+        try {
+          const opened = creating
+            ? await worktreeCreate({ workspaceId: payload.workspace_id, branch: branch as string, base, label, path })
+            : await worktreeOpen({ workspaceId: payload.workspace_id, path, branch, label });
+          return jsonResponse({
+            workspace_id: opened.workspace.workspace_id,
+            pane_id: opened.root_pane.pane_id,
+            already_open: opened.already_open === true,
+            path: opened.worktree.path,
+            branch: opened.worktree.branch,
+            ...(agent ? await agentLaunch(opened.root_pane.pane_id, agent) : {}),
+          });
+        } catch (error) {
+          return errorResponse(error);
+        }
+      }
+
+      if (pathname === "/api/workspace/rename" || pathname === "/api/workspace/move" || pathname === "/api/workspace/close") {
+        if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+        let payload: { workspace_id?: unknown; label?: unknown; insert_index?: unknown; close_group?: unknown };
+        try {
+          payload = (await request.json()) as typeof payload;
+        } catch {
+          return badRequest("invalid_json", "request body must be JSON");
+        }
+        if (!isJsonObject(payload)) return badRequest("invalid_body", "request body must be a JSON object");
+        if (typeof payload.workspace_id !== "string" || payload.workspace_id.length === 0) {
+          return badRequest("missing_workspace_id", "workspace_id is required");
+        }
+        if (pathname === "/api/workspace/close" && payload.close_group !== undefined && typeof payload.close_group !== "boolean") {
+          return badRequest("invalid_close_group", "close_group must be a boolean");
         }
         if (pathname === "/api/workspace/rename" && typeof payload.label !== "string") {
           return badRequest("missing_label", "label is required");
@@ -1087,7 +1291,36 @@ export function createServer(
         try {
           if (pathname === "/api/workspace/rename") await workspaceRename(payload.workspace_id, payload.label as string);
           else if (pathname === "/api/workspace/move") await workspaceMove(payload.workspace_id, payload.insert_index as number);
-          else await workspaceClose(payload.workspace_id);
+          else await workspaceClose(payload.workspace_id, undefined, payload.close_group === true);
+          return jsonResponse({ ok: true });
+        } catch (error) {
+          return errorResponse(error);
+        }
+      }
+
+      // herdr's prefix+shift+t and prefix+shift+x: a tab's name, and a tab closed with every pane in it
+      if (pathname === "/api/tab/rename" || pathname === "/api/tab/close") {
+        if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+        let payload: { tab_id?: unknown; label?: unknown };
+        try {
+          payload = (await request.json()) as typeof payload;
+        } catch {
+          return badRequest("invalid_json", "request body must be JSON");
+        }
+        if (!isJsonObject(payload)) return badRequest("invalid_body", "request body must be a JSON object");
+        if (typeof payload.tab_id !== "string" || payload.tab_id.length === 0) return badRequest("missing_tab_id", "tab_id is required");
+        try {
+          if (pathname === "/api/tab/rename") {
+            // herdr would keep an empty label as the tab's name, and its own tab row would show nothing
+            const label = typeof payload.label === "string" ? payload.label.trim() : "";
+            if (label === "") return badRequest("missing_label", "label is required");
+            await tabRename(payload.tab_id, label);
+            // no pane event follows a rename, so the clients are told here
+            broadcastAll({ type: "session-changed" });
+          } else {
+            // herdr emits pane.closed for the tab's panes, and the collector tells the clients
+            await tabClose(payload.tab_id);
+          }
           return jsonResponse({ ok: true });
         } catch (error) {
           return errorResponse(error);
@@ -1411,7 +1644,8 @@ export function createServer(
               client.data.attached.add(message.pane_id);
               let attachment: PaneAttachment;
               try {
-                attachment = await ensureAttachment(message.pane_id, geometry.cols, geometry.rows, client.data.mode === "observe");
+                // a covered grid (keep_size) creates the pty at the pane's own size, as an observer does
+                attachment = await ensureAttachment(message.pane_id, geometry.cols, geometry.rows, client.data.mode === "observe" || message.keep_size === true);
               } catch (error) {
                 client.data.attached.delete(message.pane_id);
                 throw error;
@@ -1442,12 +1676,13 @@ export function createServer(
               if (!alreadyAttached && attachment.held) send(client, { type: "error", code: "attach_held", message: ATTACH_HELD_MESSAGE, pane_id: message.pane_id });
               reconcileOutput(message.pane_id);
               if (client.data.closing) break;
+              if (attachment.ready && !attachment.held) send(client, { type: "input-ready", pane_id: message.pane_id });
               if (attachment.mirror) break;
-              if (client.data.mode === "interact") {
+              if (client.data.mode === "interact" && message.keep_size !== true) {
                 // an operator's viewport owns the shared grid
                 resizePty(message.pane_id, geometry.cols, geometry.rows);
               } else {
-                // an observer adopts whatever grid the operators left behind
+                // an observer, or a grid the chat lens covers, adopts the grid the operators left behind
                 send(client, {
                   type: "pane-geometry",
                   pane_id: message.pane_id,
@@ -1482,6 +1717,9 @@ export function createServer(
               // the pty holds a lone ESC ~150ms and a Stop would overtake nothing
               // typing reaches an attached pane only, queued or not
               const attachment = attachments.get(message.pane_id);
+              const inputFailed = () => {
+                if (clients.has(client)) send(client, { type: "error", code: "input_failed", message: "Terminal input could not be confirmed. Check the terminal before typing again.", pane_id: message.pane_id });
+              };
               // without a pty (Windows: no terminal, or a mirrored one) typing, the key bar's Enter,
               // Stop and arrows go through herdr itself, each in its turn behind a message in flight.
               // The turn is taken before herdr is asked what it can do: a message sent while
@@ -1490,7 +1728,7 @@ export function createServer(
                 const text = message.text;
                 void serialize(message.pane_id, async () => {
                   // a herdr that attaches: typing reaches an attached pane only
-                  if (await terminalAttach()) return;
+                  if (await terminalAttach()) { inputFailed(); return; }
                   // a pasted block asks herdr what the pane runs, so it is shaped before the checks below
                   const shaped = await mirrorInput(text, async () => (await paneContext(message.pane_id)).agent);
                   // nothing typed outlives its connection
@@ -1499,23 +1737,28 @@ export function createServer(
                   await paneSendText(message.pane_id, shaped);
                   // the echo is read at once, not at the mirror's next idle read
                   attachments.get(message.pane_id)?.mirror?.poke();
-                }).catch(() => undefined);
+                }).catch(inputFailed);
                 break;
               }
               // another web bridge has this pane's terminal: nothing typed here reaches it
-              if (!attachment || attachment.held) break;
+              if (!attachment?.clients.has(client) || !attachment.ready || attachment.held) {
+                send(client, { type: "error", code: "input_not_ready", message: "Terminal input is not ready. Nothing was sent.", pane_id: message.pane_id });
+                break;
+              }
               if (paneQueues.has(message.pane_id)) {
                 const text = message.text;
+                // typed into this attach: one that ended meanwhile (and was attached again) takes none of it
+                const pty = attachment.pty;
                 void serialize(message.pane_id, () => {
                   // held while this waited its turn: it goes nowhere, as unqueued typing would
-                  if (attachments.get(message.pane_id)?.held) return;
+                  if (attachments.get(message.pane_id) !== attachment || attachment.pty !== pty || !attachment.clients.has(client) || !attachment.ready || attachment.held) { inputFailed(); return; }
                   // nothing typed outlives its connection
                   if (!clients.has(client)) return;
                   authorizeSocket(client);
                   return paneSendText(message.pane_id, text);
-                }).catch(() => undefined);
+                }).catch(inputFailed);
               } else {
-                attachment.pty.write(message.text);
+                if (!attachment.pty.write(message.text)) { inputFailed(); break; }
                 lastTyped.set(message.pane_id, Date.now());
                 if (lastTyped.size > 64) {
                   for (const [pane, at] of lastTyped) if (Date.now() - at > TYPED_SETTLE_MS) lastTyped.delete(pane);
@@ -1532,6 +1775,14 @@ export function createServer(
               if (!geometry) {
                 send(client, { type: "error", code: "invalid_geometry", message: "cols and rows must be integers in 1..1000" });
                 break;
+              }
+              // the pty is still being created (an attach from the chat lens, then the switch to the
+              // terminal lens before the terminal was looked up): the resize waits for it. Dropped,
+              // it would leave the pty at the pane's own grid under a terminal fitted to another.
+              const creating = attachments.has(message.pane_id) ? undefined : pendingAttachments.get(message.pane_id);
+              if (creating && client.data.attached.has(message.pane_id)) {
+                try { await creating; } catch { break; }
+                if (client.data.closing || client.data.mode !== "interact" || !client.data.attached.has(message.pane_id)) break;
               }
               resizePty(message.pane_id, geometry.cols, geometry.rows);
               break;
@@ -1572,12 +1823,14 @@ export function createServer(
                 if (client.data.mode === "observe") { result(false, "read_only"); break; }
                 const attachment = attachments.get(message.pane_id);
                 if (!attachment?.clients.has(client)) { result(false, "not_attached"); break; }
+                if (!attachment.ready || attachment.held) { result(false, "input_not_ready"); break; }
                 if (paneQueues.has(message.pane_id)) { result(false, "pane_busy"); break; }
                 await serialize(message.pane_id, async () => {
                   const screen = await paneRead({ paneId: message.pane_id, source: "visible", format: "text" });
                   if (client.data.closing || client.data.mode === "observe") { result(false, "read_only"); return; }
                   authorizeSocket(client);
                   if (!attachment.clients.has(client) || attachments.get(message.pane_id) !== attachment) { result(false, "not_attached"); return; }
+                  if (!attachment.ready || attachment.held) { result(false, "input_not_ready"); return; }
                   if (secretPrompt(screen.text, attachment.cols) !== message.prompt) { result(false, "prompt_changed"); return; }
                   if (attachment.mirror) {
                     // A mirrored pane has no pty to type into: the secret is herdr's text, then the
@@ -1587,7 +1840,7 @@ export function createServer(
                     await paneSendKeys(message.pane_id, ["Enter"]);
                   } else {
                     // Direct attach keystrokes: no agent transcript, RPC payload or delayed Enter.
-                    attachment.pty.write(`${message.secret}\r`);
+                    if (!attachment.pty.write(`${message.secret}\r`)) { result(false, "input_not_ready"); return; }
                   }
                   result(true);
                 });
@@ -1690,7 +1943,7 @@ export function createServer(
 }
 
 if (import.meta.main) {
-  const instance = createServer({ updates: connectUpdater(), registerBridge: true });
+  const instance = createServer({ updates: connectUpdater(), herdrUpdate: new HerdrUpdater(), registerBridge: true });
   let stopping = false;
   const shutdown = () => {
     if (stopping) return;

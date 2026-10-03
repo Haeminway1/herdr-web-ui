@@ -16,12 +16,18 @@ export type Density = "compact" | "comfortable";
 export type SidebarGrouping = "workspace" | "directory";
 /** what the plan meters count: the share of a limit used, or what is left of it */
 export type UsageCount = "used" | "left";
+/** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
+export type UsageGlance = "week" | "session";
 /** amber: the herdr look (the default); report: the dark technical report look; charcoal: neutral Ghostty-style dark */
 export type Palette = "amber" | "report" | "charcoal";
-/** where the plan meters sit: chips beside Settings, or a panel at the top of the sidebar */
-export type UsagePlacement = "footer" | "top";
+/** the lens a pane opens in until it is switched there: auto is chat for an agent on a touch screen, else terminal */
+export type DefaultView = "auto" | "chat" | "terminal";
+
+import { sanitizeShortcutOverrides, type ShortcutOverrides } from "./shortcutBindings.ts";
 
 export interface Settings {
+  terminalInputMode: "auto" | "line" | "direct";
+  shortcutOverrides: ShortcutOverrides;
   theme: ThemeSetting;
   density: Density;
   /** The sidebar's display grouping; workspaces themselves remain independent. */
@@ -63,8 +69,10 @@ export interface Settings {
   /** the plan meters beside Settings in the sidebar (GET /api/usage); off until chosen, as it sends this PC's sign-ins out */
   showUsage: boolean;
   usageCount: UsageCount;
-  usagePlacement: UsagePlacement;
-  /** the plan meters' order by ProviderUsage.key; accounts not in it follow, the one nearest a limit first */
+  usageGlance: UsageGlance;
+  /** every pane's lens until switched in that pane; changing it puts every pane back on it */
+  defaultView: DefaultView;
+  /** the plan meters' order by ProviderUsage.key; accounts not in it follow as the server lists them */
   usageOrder: string[];
   /** accounts left out of the plan meters, strip and popover alike, by ProviderUsage.key */
   usageHidden: string[];
@@ -76,6 +84,8 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  terminalInputMode: "auto",
+  shortcutOverrides: {},
   theme: "dark",
   density: "comfortable",
   sidebarGrouping: "workspace",
@@ -98,7 +108,8 @@ export const DEFAULT_SETTINGS: Settings = {
   showSuggestionChip: false,
   showUsage: false,
   usageCount: "used",
-  usagePlacement: "footer",
+  usageGlance: "week",
+  defaultView: "auto",
   usageOrder: [],
   usageHidden: [],
   voiceInput: false,
@@ -155,6 +166,8 @@ export function sanitizeSettings(raw: unknown): Settings {
   const font = record["terminalFontSize"];
   const chatFont = record["chatFontSize"];
   return {
+    terminalInputMode: record["terminalInputMode"] === "line" || record["terminalInputMode"] === "direct" ? record["terminalInputMode"] : "auto",
+    shortcutOverrides: sanitizeShortcutOverrides(record["shortcutOverrides"]),
     theme: theme === "dark" || theme === "light" || theme === "system" ? theme : DEFAULT_SETTINGS.theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarGrouping: record["sidebarGrouping"] === "workspace" || record["sidebarGrouping"] === "directory" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
@@ -184,7 +197,8 @@ export function sanitizeSettings(raw: unknown): Settings {
     showSuggestionChip: typeof record["showSuggestionChip"] === "boolean" ? record["showSuggestionChip"] : DEFAULT_SETTINGS.showSuggestionChip,
     showUsage: typeof record["showUsage"] === "boolean" ? record["showUsage"] : DEFAULT_SETTINGS.showUsage,
     usageCount: record["usageCount"] === "used" || record["usageCount"] === "left" ? record["usageCount"] : DEFAULT_SETTINGS.usageCount,
-    usagePlacement: record["usagePlacement"] === "top" || record["usagePlacement"] === "footer" ? record["usagePlacement"] : DEFAULT_SETTINGS.usagePlacement,
+    usageGlance: record["usageGlance"] === "week" || record["usageGlance"] === "session" ? record["usageGlance"] : DEFAULT_SETTINGS.usageGlance,
+    defaultView: record["defaultView"] === "chat" || record["defaultView"] === "terminal" || record["defaultView"] === "auto" ? record["defaultView"] : DEFAULT_SETTINGS.defaultView,
     usageOrder: usageKeys(record["usageOrder"]),
     usageHidden: usageKeys(record["usageHidden"]),
     voiceInput: typeof record["voiceInput"] === "boolean" ? record["voiceInput"] : DEFAULT_SETTINGS.voiceInput,
@@ -317,4 +331,23 @@ export function useSettings(): SettingsContextValue {
   const value = useContext(SettingsContext);
   if (value === null) throw new Error("useSettings needs a SettingsProvider above it");
   return value;
+}
+
+export const PANE_VIEW_KEY_PREFIX = "herdr-web-ui:view:";
+
+/** Forgets every pane's own lens on this device, so each opens in the default one again. */
+export function forgetPaneViews(given?: Pick<Storage, "length" | "key" | "removeItem">): number {
+  const keys: string[] = [];
+  try {
+    // inside the try: reading localStorage itself throws where storage is blocked
+    const storage = given ?? window.localStorage;
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      if (key?.startsWith(PANE_VIEW_KEY_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) storage.removeItem(key);
+  } catch {
+    /* private mode: there is nothing remembered to forget */
+  }
+  return keys.length;
 }

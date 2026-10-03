@@ -1,24 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bell, FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
+import { Bell, FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Plus, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ClientRole, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
 import { ApiError, authenticate, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, sendTestPush, signOut, type HealthInfo } from "./lib/api.ts";
 import { deviceLabel, takePairCode } from "./lib/phone.ts";
-import { displayPaneTitle, paneTitle } from "./components/Sidebar.tsx";
+import { displayPaneTitle } from "./components/Sidebar.tsx";
 import { PaneTerminal } from "./components/PaneTerminal.tsx";
 import { AccessGate } from "./components/AccessGate.tsx";
 import { AgentMark } from "./components/AgentMark.tsx";
-import { NewSessionDialog } from "./components/NewSessionDialog.tsx";
+import { NewSessionDialog, type NewTabTarget } from "./components/NewSessionDialog.tsx";
+import { TabStrip } from "./components/TabStrip.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { MachineContext } from "./lib/machineContext.tsx";
 import { MachineActionBanner, MachineSidebar } from "./components/MachineSidebar.tsx";
 import { MachineDialog } from "./components/MachineDialog.tsx";
+import { focusWorkspaceListToggle } from "./lib/focus.ts";
 import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
-import { alertPrefs, useSettings } from "./lib/settings.ts";
+import { alertPrefs, useSettings, type DefaultView } from "./lib/settings.ts";
 import { useShortcuts } from "./lib/shortcuts.ts";
 import type { AppActions, PaneView } from "./lib/actions.ts";
 import {
@@ -97,7 +99,7 @@ function storeSelection(machineId: string, paneId: string | null): void {
  * its chat: its terminal lens is only a notice, so a remembered choice there is not worth
  * keeping. A mirrored PC counts as having a terminal.
  */
-function storedView(paneId: string, machineId: string, hasAgent: boolean | null, terminalAttach: boolean): PaneView {
+function storedView(paneId: string, machineId: string, hasAgent: boolean | null, terminalAttach: boolean, defaultView: DefaultView): PaneView {
   if (!terminalAttach) return "chat";
   try {
     const stored = window.localStorage.getItem(`herdr-web-ui:view:${paneStorageId(machineId, paneId)}`);
@@ -105,6 +107,9 @@ function storedView(paneId: string, machineId: string, hasAgent: boolean | null,
   } catch {
     /* private mode */
   }
+  // Settings' choice for every pane: chat needs an agent, a shell has no conversation to show
+  if (defaultView === "chat") return hasAgent !== false ? "chat" : "terminal";
+  if (defaultView === "terminal") return "terminal";
   return hasAgent !== false && window.matchMedia?.("(pointer: coarse)").matches === true ? "chat" : "terminal";
 }
 
@@ -141,6 +146,15 @@ export function App() {
   const machinesRef = useRef(machines); machinesRef.current = machines;
   const [updateRemote, setUpdateRemote] = useState(false);
   const [machineDialog, setMachineDialog] = useState<Machine | "new" | null>(null);
+  // Add PC from Settings or the palette leaves no trigger to return focus to once its dialog
+  // closes (Settings closed when it opened): the header's workspace-list toggle stands in
+  const addPcFocusReturn = useRef(false);
+  const closeMachineDialog = useCallback(() => {
+    setMachineDialog(null);
+    if (!addPcFocusReturn.current) return;
+    addPcFocusReturn.current = false;
+    focusWorkspaceListToggle();
+  }, []);
   const [newSessionMachineId, setNewSessionMachineId] = useState("local");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -174,7 +188,7 @@ export function App() {
   // on a phone the drawer follows a swipe in from the left edge, and a swipe back (lib/edgeSwipe.ts)
   useEffect(() => watchDrawerSwipe(() => drawerOpenRef.current, setDrawerOpen), []);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [view, setViewState] = useState<PaneView>("terminal");
+  const [lens, setLens] = useState<{ key: string; view: PaneView }>({ key: "", view: "terminal" });
   const [paletteOpen, setPaletteOpen] = useState(false);
   // the Files dialog, and the file open in the viewer (a path as the chat or the dialog gave it)
   const [filesOpen, setFilesOpen] = useState(false);
@@ -185,6 +199,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
+  // the dialog makes a tab in this workspace instead of a workspace, while set
+  const [newTab, setNewTab] = useState<NewTabTarget | null>(null);
   const [connected, setConnected] = useState(false);
   const [outputStopped, setOutputStopped] = useState(false);
   // the connection's role: the server's role-ack confirms it (no UI control today)
@@ -317,7 +333,7 @@ export function App() {
         const worked = trackTurn(turnStartRef.current, key, previous, message.agent_status, Date.now());
         if (worked !== null) lastTurnRef.current.set(key, worked);
         if (pane && shouldNotifyStatus(previous, message.agent_status) && dropletAllows(alertsRef.current, message.agent_status, worked)) dropIn(machine, pane, message.agent_status === "blocked" ? "blocked" : "done");
-        if (pane && shouldNotifyStatus(previous, message.agent_status) && alertsOnRef.current && !pushOnRef.current && alertsAllow(alertsRef.current, message.agent_status)) showPaneStatusNotification(message.pane_id, `${machine.name} · ${paneTitle(pane)}`, message.agent_status, () => selectTargetRef.current(machine.id, message.pane_id), machine.id);
+        if (pane && shouldNotifyStatus(previous, message.agent_status) && alertsOnRef.current && !pushOnRef.current && alertsAllow(alertsRef.current, message.agent_status)) showPaneStatusNotification(message.pane_id, `${machine.name} · ${displayPaneTitle(pane)}`, message.agent_status, () => selectTargetRef.current(machine.id, message.pane_id), machine.id);
         setMachines((list) => {
           let changed = false;
           const next = list.map((m) => {
@@ -337,7 +353,7 @@ export function App() {
       }
       if (message.type === "pane-exited" && alertsOnRef.current && !pushOnRef.current && alertsRef.current.done !== "off") {
         const pane = machine.snapshot?.panes.find((p) => p.pane_id === message.pane_id);
-        if (pane) showPaneEndedNotification(message.pane_id, `${machine.name} · ${paneTitle(pane)}`, () => selectTargetRef.current(machine.id, message.pane_id), machine.id);
+        if (pane) showPaneEndedNotification(message.pane_id, `${machine.name} · ${displayPaneTitle(pane)}`, () => selectTargetRef.current(machine.id, message.pane_id), machine.id);
       }
       if (message.type === "session-changed" || message.type === "pane-exited") scheduleRefetch();
     };
@@ -485,15 +501,19 @@ export function App() {
   // a server that repaints the pane's screen instead (terminal_mirror) has a terminal lens too
   const terminalAttach = targetHerdr?.terminal_attach !== false || targetHerdr?.terminal_mirror === true;
 
-  // the lens follows the selected pane: each pane remembers its own
-  useEffect(() => {
-    if (selectedPaneId === null) return;
-    setViewState(storedView(selectedPaneId, selectedMachineId, selectedPane ? selectedAgent !== null : null, terminalAttach));
-  }, [selectedPaneId, selectedMachineId, selectedPane !== null, selectedAgent !== null, terminalAttach]);
+  // the lens follows the selected pane: each pane remembers its own. It is settled in the render
+  // that selects the pane, not in an effect after it: the pane's terminal attaches in that render's
+  // layout effect, and an attach in the previous pane's lens resized a pane whose lens is chat
+  const lensKey = JSON.stringify([selectedPaneId, selectedMachineId, selectedPane !== null, selectedAgent !== null, terminalAttach, settings.defaultView]);
+  let view = lens.view;
+  if (lens.key !== lensKey) {
+    if (selectedPaneId !== null) view = storedView(selectedPaneId, selectedMachineId, selectedPane ? selectedAgent !== null : null, terminalAttach, settings.defaultView);
+    setLens({ key: lensKey, view });
+  }
 
   const setView = useCallback(
     (next: PaneView) => {
-      setViewState(next);
+      setLens((current) => ({ ...current, view: next }));
       setAutoSelected(false);
       if (selectedPaneId === null) return;
       try {
@@ -542,12 +562,39 @@ export function App() {
       openNewSession: () => {
         setDrawerOpen(false);
         setNewSessionMachineId(selectedMachineId);
+        setNewTab(null);
+        setNewSessionOpen(true);
+      },
+      openNewTab: (target) => {
+        const machineId = target?.machineId ?? selectionRef.current.machineId;
+        const roster = machinesRef.current.find((m) => m.id === machineId)?.snapshot;
+        // pane ids repeat across PCs: the selected pane counts only on the PC the tab is for
+        const selectedPaneId = selectionRef.current.machineId === machineId ? selectionRef.current.paneId : null;
+        const workspaceId = target?.workspaceId ?? roster?.panes.find((pane) => pane.pane_id === selectedPaneId)?.workspace_id;
+        const workspace = roster?.workspaces.find((candidate) => candidate.workspace_id === workspaceId);
+        if (!roster || !workspace) return;
+        // the tab's folder is the workspace's: a worktree's checkout, else where the pane in
+        // front (the selected one, else the one herdr has in front, else the first) is
+        const panes = roster.panes.filter((pane) => pane.workspace_id === workspace.workspace_id);
+        const inFront = panes.find((pane) => pane.pane_id === selectedPaneId)
+          ?? panes.find((pane) => pane.pane_id === roster.layouts?.find((layout) => layout.tab_id === workspace.active_tab_id)?.focused_pane_id)
+          ?? panes[0];
+        setDrawerOpen(false);
+        setNewSessionMachineId(machineId);
+        setNewTab({ workspaceId: workspace.workspace_id, workspaceLabel: workspace.label, cwd: workspace.worktree?.checkout_path ?? inFront?.cwd ?? null, number: workspace.tab_count + 1 });
         setNewSessionOpen(true);
       },
       openPalette: () => setPaletteOpen(true),
       openSettings: () => {
         setDrawerOpen(false);
         setSettingsOpen(true);
+      },
+      openAddPc: () => {
+        // the new PC reports its progress in the sidebar: nothing should sit over it
+        setSettingsOpen(false);
+        setUpdateRemote(false);
+        addPcFocusReturn.current = true;
+        setMachineDialog("new");
       },
       toggleSidebar: () => {
         if (window.matchMedia("(max-width: 768px)").matches) setDrawerOpen((open) => !open);
@@ -637,6 +684,12 @@ export function App() {
         ) : (
           <><Brand /><span className="machine-context-name">{selectedMachine?.name ?? selectedMachineId}</span></>
         )}
+        {selectedPane && selectedWorkspace && (
+          <button type="button" className="btn btn-ghost new-tab-button" title={t("New tab in {workspace}", { workspace: selectedWorkspace.label })} onClick={() => actions.openNewTab()}>
+            <Plus aria-hidden="true" />
+            <span>{t("New tab")}</span>
+          </button>
+        )}
         {selectedPane && (
           <div className="segmented view-switch" role="group" aria-label="Pane view">
             <button type="button" aria-pressed={view === "chat"} onClick={() => setView("chat")} title={t("Chat transcript (⌘⇧J)")}>
@@ -693,13 +746,17 @@ export function App() {
       <div className="app-body">
         <aside id="workspace-drawer" className={`sidebar${drawerOpen ? " is-open" : ""}`}>
           {error && <div className="error-state" role="alert"><p>{error}</p><button className="btn" onClick={() => void load()}>{t("Retry")}</button></div>}
-          <MachineSidebar version={health?.herdr?.version ?? null} machines={machines} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} actions={actions} onSelect={selectTarget} onAdd={() => { setUpdateRemote(false); setMachineDialog("new"); }} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewSessionOpen(true); setDrawerOpen(false); }} />
+          <MachineSidebar version={health?.herdr?.version ?? null} machines={machines} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} />
         </aside>
 
         {drawerOpen && <div className="scrim" aria-hidden="true" onClick={() => setDrawerOpen(false)} />}
 
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
+        <div className="pane-column">
+        {snapshot && selectedPane && selectedWorkspace && (
+          <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()} />
+        )}
         <main className="terminal-host">
           <PaneTerminal
             key={selectedMachineId}
@@ -721,6 +778,7 @@ export function App() {
             onServerMessage={handleServerMessage}
           />
         </main>
+        </div>
         </OpenFileContext.Provider>
       </div>
 
@@ -728,6 +786,7 @@ export function App() {
         key={newSessionMachineId}
         machineName={machines.find((m) => m.id === newSessionMachineId)?.name ?? newSessionMachineId}
         open={newSessionOpen}
+        tab={newTab}
         defaultCwd={newSessionMachineId === selectedMachineId ? selectedPane?.cwd ?? null : null}
         onClose={() => setNewSessionOpen(false)}
         onCreated={(paneId) => {
@@ -736,7 +795,7 @@ export function App() {
           void load();
         }}
       /></MachineContext.Provider>
-      {machineDialog && <MachineDialog updateRemote={updateRemote} machine={machineDialog === "new" ? undefined : machineDialog} onClose={() => setMachineDialog(null)} onConnected={(id) => { setMachineDialog(null); selectTarget(id, null); void load(); }} />}
+      {machineDialog && <MachineDialog updateRemote={updateRemote} machine={machineDialog === "new" ? undefined : machineDialog} onClose={closeMachineDialog} onConnected={(id) => { closeMachineDialog(); selectTarget(id, null); void load(); }} />}
       <Droplet onOpen={(machineId, paneId) => {
         // an ended pane's card outlives the pane: the refetch has dropped it, and selecting it attaches nothing
         if (!machinesRef.current.find((m) => m.id === machineId)?.snapshot?.panes.some((p) => p.pane_id === paneId)) return;

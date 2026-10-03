@@ -204,9 +204,11 @@ function finishPrompt(
   agent: string,
   input: Omit<InteractivePrompt, "id" | "agent">,
   internal: Omit<ParsedPrompt, keyof InteractivePrompt>,
+  /** fields as the id reads them, where that is not as the card shows them (a fallback card's ticking working line) */
+  hashed: Partial<Pick<InteractivePrompt, "question" | "body">> = {},
 ): ParsedPrompt {
   const id = createHash("sha256")
-    .update(JSON.stringify({ agent, ...input }))
+    .update(JSON.stringify({ agent, ...input, ...hashed }))
     .digest("hex")
     .slice(0, 12);
   // Hash all approval details before applying the display cap. Cursor movement
@@ -1564,9 +1566,47 @@ const MENU_WRAP_LINES = 2;
 /** a line that is an input box or quoted output rather than a prompt's own text */
 const NOT_PROMPT_TEXT_RE = /^(?:[❯›>"'“]|\$ )/;
 
+/**
+ * Claude Code's working line, whole: one of its spinner's frames, what it is doing ending in an
+ * ellipsis, and in parentheses the time it has taken and the tokens it has used, then maybe the
+ * interrupt hint: "✢ Tempering… (1m 55s · ↓ 10.0k tokens)".
+ */
+const WORKING_LINE_RE = /^[·✢✳✶✻✽*] (\S(?:.*\S)?…) \((?:\d+h )?(?:\d+m )?\d+s · [↑↓] [\d.,]+[kKmM]? tokens( · esc to interrupt)?\)$/u;
+
+/**
+ * How a fallback card's id reads a line of the screen. Claude Code keeps its working line on the
+ * screen while it waits on a prompt, and the line's spinner, time and token count change every
+ * second or so. An id that took them in refused each answer tapped after a tick as stale (#365).
+ *
+ * They are blanked on that one line, and only when it is known to be it: the pane runs Claude,
+ * the line is its working line to the letter, token count with its arrow included, and no other
+ * line of the screen has that shape. Without the token count a time in parentheses may be one
+ * that is offered ("Restart service… (300s)"), and two such lines may be a menu's rows with their
+ * marker ("· Delete all…" / "* Cancel…"): those screens are hashed as they are, like every other
+ * line and every other agent's screen. The words stay in the id, so "Deleting staging…" is never
+ * "Deleting production…".
+ */
+function steadyReader(agent: string, shown: string[]): SteadyReader {
+  const working = agent === "claude" ? shown.flatMap((line, at) => WORKING_LINE_RE.test(line) ? [at] : []) : [];
+  const [at] = working;
+  if (working.length !== 1 || at === undefined) return { read: (other) => other, working: null };
+  const line = shown[at]!;
+  const steady = line.replace(WORKING_LINE_RE, (_all, doing: string, hint: string | undefined) => `* ${doing} (<time> · <tokens>${hint ?? ""})`);
+  return { read: (other) => other === line ? steady : other, working: at };
+}
+
+interface SteadyReader {
+  read(line: string): string;
+  /** which of the shown lines was read as the working line; it goes into the id beside the text, so
+   * that a screen holding the blanked form as its own text ("* Tempering… (<time> · <tokens>)") is
+   * another card */
+  working: number | null;
+}
+
 export function parseFallbackPrompt(agent: string, screen: string): InteractivePrompt {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const shown = lines.flatMap((line, index) => cleanLine(line) && !isDivider(line) ? [index] : []);
+  const steady = steadyReader(agent, shown.map((index) => cleanLine(lines[index]!)));
   const menu = fallbackMenu(lines, shown);
   if (menu) {
     const above = shown.filter((index) => index < menu.start).map((index) => cleanLine(lines[index]!));
@@ -1578,18 +1618,19 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
       { label: "Enter", steps: keySteps([KEY.enter]) },
       { label: "Esc", steps: keySteps([KEY.escape]) },
     ];
-    return screenCard(lines, shown, finishPrompt(agent, {
+    const body = withoutLine(above, question);
+    return screenCard(lines, shown, steady, finishPrompt(agent, {
       // the body is every other line above the rows, so a changed command above a same-looking
       // menu is another card; the display cap applies after the hash
       kind: "menu", fallback: true, title: "Waiting for your answer", question: question ?? "The agent is waiting for your answer.",
-      body: withoutLine(above, question),
+      body,
       options: choices.map(({ label }) => ({ label, description: null })),
       multi_select: false, custom_option_index: null,
     }, {
       responder: "fallback-menu", menuLabels: choices.map(({ label }) => label), selectedIndex: 0,
       checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
       optionSteps: choices.map(({ steps }) => steps),
-    }));
+    }, steadyFields(question, body, steady.read)));
   }
   const last = shown.slice(-16).map((index) => cleanLine(lines[index]!));
   // letters and arrows only for the prompt's own last lines, never while an input box ends the
@@ -1605,25 +1646,32 @@ export function parseFallbackPrompt(agent: string, screen: string): InteractiveP
     { label: "Enter", steps: keySteps([KEY.enter]) },
     { label: "Esc", steps: keySteps([KEY.escape]) },
   ];
-  return screenCard(lines, shown, finishPrompt(agent, {
+  const body = withoutLine(last, question);
+  return screenCard(lines, shown, steady, finishPrompt(agent, {
     kind: "menu", fallback: true, title: "Waiting for input", question: question ?? "The agent is waiting for input.",
-    body: withoutLine(last, question),
+    body,
     options: choices.map(({ label }) => ({ label, description: null })),
     multi_select: false, custom_option_index: null,
   }, {
     responder: "fallback-keys", menuLabels: choices.map(({ label }) => label), selectedIndex: 0,
     checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
     optionSteps: choices.map(({ steps }) => steps),
-  }));
+  }, steadyFields(question, body, steady.read)));
+}
+
+/** A fallback card's question and body as its id reads them: with the working line's ticking parts blanked. */
+function steadyFields(question: string | undefined, body: string | null, steady: (line: string) => string): Partial<Pick<InteractivePrompt, "question" | "body">> {
+  return { ...(question === undefined ? {} : { question: steady(question) }), body: body === null ? null : body.split("\n").map(steady).join("\n") };
 }
 
 /**
  * A fallback card's id covers the whole visible screen, not just the lines it shows: a changed
- * command, footer or wrapped label anywhere on it makes an answer to the old card stale.
+ * command, footer or wrapped label anywhere on it makes an answer to the old card stale. A working
+ * line's spinner, time and token count are the one thing it leaves out (steadyReader).
  */
-function screenCard(lines: string[], shown: number[], parsed: ParsedPrompt): InteractivePrompt {
-  const screen = shown.map((index) => cleanLine(lines[index]!)).join("\n");
-  parsed.id = createHash("sha256").update(JSON.stringify({ card: parsed.id, screen })).digest("hex").slice(0, 12);
+function screenCard(lines: string[], shown: number[], steady: SteadyReader, parsed: ParsedPrompt): InteractivePrompt {
+  const screen = shown.map((index) => steady.read(cleanLine(lines[index]!))).join("\n");
+  parsed.id = createHash("sha256").update(JSON.stringify({ card: parsed.id, screen, ...(steady.working === null ? {} : { working: steady.working }) })).digest("hex").slice(0, 12);
   return publicPrompt(parsed);
 }
 
@@ -1779,7 +1827,7 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
     return { agent, status, prompt: known.prompt };
   }
   // herdr says the agent waits on the user and no reader knows the screen: the fallback card
-  const screen = known.screen ?? (await paneRead({ paneId, source: "visible", format: "text" })).text;
+  const screen = known.screen ?? await liveScreen(paneId);
   // Codex's collapsed question queue reads blocked while its main prompt takes a message
   if (agent === "codex" && codexQuestionsCollapsed(screen)) {
     fallbackLogged.delete(paneId);
@@ -1791,6 +1839,15 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
     console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
   }
   return { agent, status, prompt };
+}
+
+/**
+ * The pane's live screen as text: herdr's bottom buffer, whatever part of the history the pane's
+ * viewport shows. A pane scrolled up (a drag or the wheel in a terminal) stays scrolled while the
+ * agent draws its next menu at the bottom, out of that viewport.
+ */
+async function liveScreen(paneId: string): Promise<string> {
+  return (await paneRead({ paneId, source: "detection", format: "text" })).text;
 }
 
 /** omo's form on a screen, by a line of its key hint: worth a look in the pane's session. */
@@ -1834,16 +1891,16 @@ async function readKnownPrompt(
   panes: HerdrPane[] = [],
 ): Promise<{ prompt: InteractivePrompt | null; screen?: string }> {
   if (!["claude", "omp", "codex", "omo", "pi", ""].includes(agent)) return { prompt: null };
-  const screen = await paneRead({ paneId, source: "visible", format: "text" });
+  const screen = await liveScreen(paneId);
   // omo's form reads its text from the session's call, the screen showing where the form stands
-  const omoAsk = ["omo", "pi", "claude", ""].includes(agent) && pane.cwd && OMO_FORM_RE.test(screen.text)
+  const omoAsk = ["omo", "pi", "claude", ""].includes(agent) && pane.cwd && OMO_FORM_RE.test(screen)
     ? await omoAskFor(paneId, pane.cwd, panes) : null;
   // a pane herdr names claude, or not at all, is omo's only on evidence: herdr reports it waiting
   // on the user, or the session's pending call is the form on screen
   const omoTrusted = (agent !== "claude" && agent !== "") || pane.agent_status === "blocked";
-  const prompt = parseInteractivePrompt(agent, screen.text, omoAsk, omoTrusted);
-  const count = agent === "codex" && prompt === null ? queuedQuestionCount(screen.text) : 0;
-  if (count === 0 || !pane.cwd) return { prompt, screen: screen.text };
+  const prompt = parseInteractivePrompt(agent, screen, omoAsk, omoTrusted);
+  const count = agent === "codex" && prompt === null ? queuedQuestionCount(screen) : 0;
+  if (count === 0 || !pane.cwd) return { prompt, screen };
   let rollout = queueRollouts.get(paneId);
   if (!rollout || Date.now() - rollout.at > QUEUE_ROLLOUT_MS) {
     rollout = { path: await codexTranscriptPath(paneId, pane.cwd, codexHome), at: Date.now() };
@@ -1855,11 +1912,11 @@ async function readKnownPrompt(
     const front = queueFronts.get(paneId);
     if (front && front.rollout !== rollout.path) queueFronts.delete(paneId);
     return {
-      prompt: rollout.path ? codexQueuedPrompt(screen.text, await unansweredCodexQuestions(rollout.path), front?.rollout === rollout.path ? front : null) : null,
-      screen: screen.text,
+      prompt: rollout.path ? codexQueuedPrompt(screen, await unansweredCodexQuestions(rollout.path), front?.rollout === rollout.path ? front : null) : null,
+      screen,
     };
   } catch {
-    return { prompt: null, screen: screen.text }; // the rollout went away
+    return { prompt: null, screen }; // the rollout went away
   }
 }
 
@@ -1873,7 +1930,7 @@ async function closeQueue(paneId: string, answered: string): Promise<void> {
   const since = Date.now();
   for (let attempt = 0; attempt < 10; attempt += 1) {
     await Bun.sleep(100);
-    const screen = (await paneRead({ paneId, source: "visible", format: "text" })).text;
+    const screen = await liveScreen(paneId);
     const shown = parsePrompt("codex", screen);
     if (shown?.responder === "codex-async-question") {
       // the question just answered, a moment ago; still there after 600ms, it is its twin
@@ -1904,11 +1961,11 @@ function sameText(shown: string, asked: string): boolean {
  */
 async function openQueuedQuestion(paneId: string, queued: ParsedPrompt): Promise<InteractivePrompt | null> {
   // the key only once the screen still shows the questions' count, nothing of the user's queued
-  if (queuedQuestionCount((await paneRead({ paneId, source: "visible", format: "text" })).text) === 0) return null;
+  if (queuedQuestionCount(await liveScreen(paneId)) === 0) return null;
   await paneSendKeys(paneId, [KEY.openQueue]);
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await Bun.sleep(100);
-    const opened = parsePrompt("codex", (await paneRead({ paneId, source: "visible", format: "text" })).text);
+    const opened = parsePrompt("codex", await liveScreen(paneId));
     if (opened?.responder !== "codex-async-question") continue;
     if (sameText(opened.question, queued.question) && opened.options.length === queued.options.length
       && opened.options.every((option, index) => sameText(option.label, queued.options[index]!.label))) return publicPrompt(opened);
@@ -1925,7 +1982,7 @@ async function openQueuedQuestion(paneId: string, queued: ParsedPrompt): Promise
 
 /** Closes Codex's queue if a question shows open in it. */
 async function closeOpenQuestion(paneId: string): Promise<void> {
-  const screen = (await paneRead({ paneId, source: "visible", format: "text" })).text;
+  const screen = await liveScreen(paneId);
   if (parsePrompt("codex", screen)?.responder === "codex-async-question") await paneSendKeys(paneId, [KEY.closeQueue]);
 }
 

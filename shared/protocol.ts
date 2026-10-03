@@ -92,9 +92,26 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  POST   /api/workspace/create { cwd?, label?, agent?: { kind, name?, args? } }
  *         -> WorkspaceCreated (workspace.create, then agent.start in the root pane when `agent` is given;
  *         omo and gjc, which herdr cannot start, are typed into the root pane's shell)
+ *  POST   /api/tab/create { workspace_id, cwd?, label?, agent?: { kind, name?, args? } }
+ *         -> TabCreated (tab.create in that workspace, then the same agent launch in the tab's root
+ *         pane; without cwd herdr uses the workspace's folder, without label the tab's number)
+ *  POST   /api/tab/rename { tab_id, label } -> { ok: true } (tab.rename; an empty label is refused:
+ *         herdr would keep it as the name)
+ *  POST   /api/tab/close  { tab_id } -> { ok: true } (tab.close: every pane in the tab closes, and
+ *         a workspace's last tab takes the workspace with it)
  *  POST   /api/workspace/rename { workspace_id, label } -> { ok: true }
  *  POST   /api/workspace/move   { workspace_id, insert_index } -> { ok: true } (sidebar reorder)
- *  POST   /api/workspace/close  { workspace_id } -> { ok: true }
+ *  POST   /api/workspace/close  { workspace_id, close_group? } -> { ok: true } (close_group takes the
+ *         repository's open worktree workspaces with it; without it herdr refuses: workspace_group_close_required)
+ *  POST   /api/worktree/create { workspace_id, branch, base?, label?, path?, agent?: { kind, name?, args? } } -> WorktreeOpened
+ *         (worktree.create: a git worktree of that workspace's repo, checked out under herdr's
+ *         worktree directory unless `path` says where, and opened as a new workspace grouped with it)
+ *  GET    /api/worktree/list?workspace_id= -> WorktreeListing (worktree.list: the repo's checkouts)
+ *  POST   /api/worktree/open   { workspace_id, path | branch, label? } -> WorktreeOpened
+ *         (worktree.open: an existing checkout as a workspace; already_open names the one it has)
+ *  POST   /api/worktree/remove { workspace_id, force? } -> WorktreeRemoved (worktree.remove: deletes the
+ *         checkout and closes its workspace, keeps the branch; a dirty checkout is refused without force:
+ *         dirty_worktree_requires_force)
  *  POST   /api/auth        { token }     -> 204 + Set-Cookie herdr_web_token (401 invalid_token on mismatch)
  *  DELETE /api/auth                      -> 204, clears the token and the device cookies
  *  GET    /api/devices                   -> { devices: PairedDevice[] } (the paired devices; `current` marks the caller's)
@@ -388,7 +405,82 @@ export interface AgentKind {
   label: string;
 }
 
+export interface CreateWorkspaceRequest {
+  cwd?: string | null;
+  label?: string | null;
+  agent?: { kind: string; name?: string; args?: string[] } | null;
+}
+
+/** POST /api/tab/create: the workspace is required; `label` names the new tab. */
+export interface CreateTabRequest extends CreateWorkspaceRequest {
+  workspace_id: string;
+}
+
 /** POST /api/workspace/create: the workspace herdr made and the pane the agent (if any) runs in. */
+/** POST /api/worktree/create: branch is the new checkout's branch (created from base, or HEAD, unless it exists). */
+export interface CreateWorktreeRequest {
+  workspace_id: string;
+  branch: string;
+  base?: string | null;
+  label?: string | null;
+  /** an absolute checkout path; herdr's `<worktrees.directory>/<repo>/<branch>` when absent */
+  path?: string | null;
+  /** started in the new workspace's root pane, as /api/workspace/create starts one */
+  agent?: { kind: string; name?: string; args?: string[] } | null;
+}
+
+/** POST /api/worktree/open: one of path or branch names the checkout. */
+export interface OpenWorktreeRequest {
+  workspace_id: string;
+  path?: string | null;
+  branch?: string | null;
+  label?: string | null;
+}
+
+/** The workspace a worktree is open in, and its root pane. `already_open` when open before the call. */
+export interface WorktreeOpened {
+  workspace_id: string;
+  pane_id: string;
+  already_open: boolean;
+  path: string;
+  branch: string | null;
+  /** create with `agent` only: whether herdr reported it ready in the root pane */
+  agent_started?: boolean;
+  /** The worktree's workspace still exists when its requested agent could not start. */
+  error?: { code: string; message: string };
+}
+
+/** POST /api/worktree/remove: `git worktree remove` of the workspace's checkout; force when git refuses a dirty one. */
+export interface RemoveWorktreeRequest {
+  workspace_id: string;
+  force?: boolean;
+}
+
+export interface WorktreeRemoved {
+  ok: true;
+  path: string;
+  forced: boolean;
+}
+
+/** One checkout of a repository, from herdr's `worktree.list` (git worktree list, annotated). */
+export interface WorktreeEntry {
+  path: string;
+  branch: string | null;
+  label: string;
+  is_linked_worktree: boolean;
+  is_bare: boolean;
+  is_detached: boolean;
+  is_prunable: boolean;
+  /** the herdr workspace this checkout is open in, if any */
+  open_workspace_id: string | null;
+}
+
+/** GET /api/worktree/list: the repository the workspace is in, and every checkout of it. */
+export interface WorktreeListing {
+  source: { repo_key: string; repo_name: string; repo_root: string; source_checkout_path: string; source_workspace_id: string | null };
+  worktrees: WorktreeEntry[];
+}
+
 export interface WorkspaceCreated {
   workspace_id: string;
   pane_id: string;
@@ -397,6 +489,12 @@ export interface WorkspaceCreated {
   /** The workspace still exists when its requested agent could not start. */
   error?: { code: string; message: string };
 }
+
+/**
+ * POST /api/tab/create: the existing workspace and the new tab's root pane. A failed agent
+ * launch leaves the tab there, reachable through pane_id, as workspace creation does.
+ */
+export type TabCreated = WorkspaceCreated;
 
 /** GET /api/pane/commands: one slash command the pane's agent understands. */
 export interface SlashCommand {
@@ -497,7 +595,8 @@ export interface PushPayload {
 export type ClientRole = "interact" | "observe";
 
 export type ClientMessage =
-  | { type: "attach"; pane_id: string; cols: number; rows: number; flow_control?: "ack" }
+  /** keep_size: the grid is covered (the chat lens), so the attach leaves the shared pty's size as it is */
+  | { type: "attach"; pane_id: string; cols: number; rows: number; flow_control?: "ack"; keep_size?: boolean }
   | { type: "detach"; pane_id: string }
   | { type: "input"; pane_id: string; text: string }
   | { type: "keys"; pane_id: string; keys: string[] }
@@ -516,7 +615,7 @@ export type ClientMessage =
   | { type: "role"; mode: ClientRole };
 
 /** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "secret-input";
+export type ServerFeature = "submit" | "secret-input" | "input-ready";
 
 export type ServerMessage =
   | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[] }
@@ -525,6 +624,8 @@ export type ServerMessage =
   | { type: "pty-exit"; pane_id: string; code: number | null }
   /** a pane that waited for another web bridge to let go of its terminal (error `attach_held`) is attached again */
   | { type: "attach-resumed"; pane_id: string }
+  /** Attachment readiness (omitted ready means true); false revokes it during retry. Never a typed-text acknowledgement. */
+  | { type: "input-ready"; pane_id: string; ready?: boolean }
   /** the shared pty's grid changed: observe clients adopt it, interact clients drive it. `fixed`: the grid is the pane's own in herdr (a mirrored pane), so every client adopts it and none resizes */
   | { type: "pane-geometry"; pane_id: string; cols: number; rows: number; fixed?: boolean }
   | { type: "role-ack"; mode: ClientRole }
