@@ -168,7 +168,6 @@ export function UsagePanel() {
   const { settings } = useSettings();
   const top = settings.showUsage && settings.usagePlacement === "top";
   const { report, loading, refresh } = useUsage(top);
-  const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const detailId = useId();
   useEffect(() => {
@@ -180,9 +179,19 @@ export function UsagePanel() {
 
   const count = settings.usageCount;
   const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
-  // a phone's drawer gives the sessions the room: one line of percents, the rows a tap away
+  // three views, each a click further: one line of percents, the rows, the rows and every limit.
+  // A phone's drawer starts on the line (the sessions get the room), a wide sidebar on the rows;
+  // the view chosen is kept on this device
   const narrow = useNarrow();
-  const [unfolded, setUnfolded] = useState(false);
+  const [chosen, setChosen] = useState<PanelLevel | null>(readPanelLevel);
+  const view: PanelLevel = chosen ?? (narrow ? 0 : 1);
+  const choose = (next: PanelLevel): void => {
+    toggled.current = true;
+    setChosen(next);
+    writePanelLevel(next);
+  };
+  const unfolded = view > 0;
+  const open = view === 2;
   // folding swaps the toggles: the keyboard follows to the one that takes the pressed one's place
   const lineRef = useRef<HTMLButtonElement>(null);
   const foldRef = useRef<HTMLButtonElement>(null);
@@ -193,10 +202,10 @@ export function UsagePanel() {
     (unfolded ? foldRef : lineRef).current?.focus();
   }, [unfolded]);
   if (!top || shown.length === 0) return null;
-  if (narrow && !unfolded) {
+  if (!unfolded) {
     return (
       <section className="usage-panel is-folded" aria-label={t("Subscription usage")}>
-        <button ref={lineRef} type="button" className="usage-panel-line" aria-expanded={false} aria-label={`${t("Show plan limits")}: ${shown.map((usage) => { const window = tightestWindow(usage); return `${usageName(usage)} ${window ? meterText(window, count) : "—"}`; }).join(", ")}`} title={t("Show plan limits")} onClick={() => { toggled.current = true; setUnfolded(true); }}>
+        <button ref={lineRef} type="button" className="usage-panel-line" aria-expanded={false} aria-label={`${t("Show plan limits")}: ${shown.map((usage) => { const window = tightestWindow(usage); return `${usageName(usage)} ${window ? meterText(window, count) : "—"}`; }).join(", ")}`} title={t("Show plan limits")} onClick={() => choose(1)}>
           <span className="usage-panel-line-chips">
           {shown.map((usage) => {
             const window = tightestWindow(usage);
@@ -216,12 +225,11 @@ export function UsagePanel() {
   }
   return (
     <section className="usage-panel" aria-label={t("Subscription usage")}>
-      {narrow && (
-        <button ref={foldRef} type="button" className="usage-panel-fold" aria-expanded={true} aria-label={t("Fold plan limits")} title={t("Fold plan limits")} onClick={() => { toggled.current = true; setUnfolded(false); setOpen(false); }}>
-          <ChevronUp aria-hidden="true" />
-        </button>
-      )}
-      <button type="button" className="usage-panel-rows" aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={() => setOpen(!open)}>
+      <button ref={foldRef} type="button" className="usage-panel-fold" aria-expanded={true} aria-label={t("Fold plan limits")} title={t("Fold plan limits")} onClick={() => choose(0)}>
+        <ChevronUp aria-hidden="true" />
+      </button>
+      {/* a click goes one view further, and from every limit back to the line */}
+      <button type="button" className="usage-panel-rows" aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={() => choose(open ? 0 : 2)}>
         {shown.map((usage) => {
           const window = tightestWindow(usage);
           const value = window ? meterPercent(window, count) : 0;
@@ -273,6 +281,23 @@ export function UsagePanel() {
       )}
     </section>
   );
+}
+
+/** The top panel's view: 0 one line of percents, 1 the rows, 2 the rows and every limit. */
+type PanelLevel = 0 | 1 | 2;
+const PANEL_LEVEL_KEY = "herdr-web-ui:usage-panel-level";
+
+function readPanelLevel(): PanelLevel | null {
+  try {
+    const stored = window.localStorage.getItem(PANEL_LEVEL_KEY);
+    return stored === "0" || stored === "1" || stored === "2" ? Number(stored) as PanelLevel : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePanelLevel(level: PanelLevel): void {
+  try { window.localStorage.setItem(PANEL_LEVEL_KEY, String(level)); } catch { /* kept for this page only */ }
 }
 
 /** The drawer's width (the sidebar is a drawer at 768px and under), kept as it changes. */
