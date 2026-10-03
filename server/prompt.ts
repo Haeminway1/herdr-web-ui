@@ -1789,6 +1789,8 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   if (!fallbackLogged.has(paneId) && fallbackLogged.size < FALLBACK_LOGGED_MAX) {
     fallbackLogged.add(paneId);
     console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
+    // fork: the screen itself, to teach a reader its layout (this machine's log only)
+    console.warn(`prompt: fallback screen of ${paneId} (${agent}):\n${screen.replace(ANSI_RE, "").split(/\r?\n/).slice(-40).join("\n")}\n-- end of screen`);
   }
   return { agent, status, prompt };
 }
