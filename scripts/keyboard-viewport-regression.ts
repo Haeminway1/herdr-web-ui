@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
 
-async function checkState(page: Page, visible: boolean, height: number, inset: number): Promise<void> {
+async function checkState(page: Page, visible: boolean, height: number, inset: number, standaloneCorrection = false): Promise<void> {
   const state = await page.evaluate((visible) => {
     const composer = document.querySelector(".composer")!;
     const root = document.documentElement;
@@ -24,7 +24,7 @@ async function checkState(page: Page, visible: boolean, height: number, inset: n
     };
   }, visible);
   assert.equal(state.keyboard, visible, "keyboard flag follows occlusion, not focus alone");
-  assert.equal(state.published, visible ? `${height}px` : "", "dismissal removes the visual-height override");
+  assert.equal(state.published, visible || standaloneCorrection ? `${height}px` : "", "height override follows keyboard or measured standalone status inset");
   assert.equal(state.height, height, "unobstructed standalone shell remains 100dvh without a blank band");
   assert.equal(state.bottom, height, "composer stays at the shell bottom");
   assert.equal(state.padding, visible ? state.space : Math.max(state.space, inset - state.space), "home indicator padding is restored on dismissal");
@@ -51,46 +51,68 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
   if (url.pathname === "/viewport.js") return new Response(js, { headers: { "content-type": "text/javascript" } });
   if (url.pathname === "/styles.css") {
     const inset = url.searchParams.get("inset") ?? "0";
-    return new Response(css.replace(/env\(safe-area-inset-bottom,\s*0px\)/g, `${inset}px`), { headers: { "content-type": "text/css" } });
+    const standalone = url.searchParams.has("standalone");
+    const fixtureCss = standalone ? css.replace("height: var(--app-height, 100dvh);", "height: var(--app-height, 793px);") : css;
+    return new Response(fixtureCss.replace(/env\(safe-area-inset-bottom,\s*0px\)/g, `${inset}px`).replace(/env\(safe-area-inset-top,\s*0px\)/g, standalone ? "59px" : "0px"), { headers: { "content-type": "text/css" } });
   }
-  return new Response(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><link rel="stylesheet" href="/styles.css?inset=${url.searchParams.get("inset") ?? "0"}"><style>.terminal-host{display:flex;flex-direction:column}.fixture-chat{flex:1;min-height:0}.xterm-helper-textarea{position:absolute;width:1px;height:1px;opacity:0}</style></head><body><div class="app"><div class="app-body"><div class="terminal-host"><div class="fixture-chat"></div><div class="composer"><textarea aria-label="Message"></textarea></div><textarea class="xterm-helper-textarea"></textarea></div></div></div><script src="/viewport.js"></script></body></html>`, { headers: { "content-type": "text/html" } });
+  return new Response(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><link rel="stylesheet" href="/styles.css?inset=${url.searchParams.get("inset") ?? "0"}${url.searchParams.has("standalone") ? "&standalone" : ""}"><style>.terminal-host{display:flex;flex-direction:column}.fixture-chat{flex:1;min-height:0}.xterm-helper-textarea{position:absolute;width:1px;height:1px;opacity:0}</style></head><body><div class="app"><div class="app-body"><div class="terminal-host"><div class="fixture-chat"></div><div class="composer"><textarea aria-label="Message"></textarea></div><textarea class="xterm-helper-textarea"></textarea></div></div></div><script src="/viewport.js"></script></body></html>`, { headers: { "content-type": "text/html" } });
 } });
 let browser: Browser | undefined;
 try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
-  for (const scenario of ["mobile", "desktop", "virtual-keyboard"] as const) {
+  for (const scenario of ["mobile", "desktop", "virtual-keyboard", "standalone"] as const) {
     const mobile = scenario !== "desktop";
     const context = await browser.newContext({ viewport: mobile ? { width: 393, height: 852 } : { width: 1280, height: 800 }, isMobile: mobile, hasTouch: mobile });
     try {
-      await context.addInitScript(({ mobile, virtualKeyboard }) => {
+      await context.addInitScript(({ mobile, virtualKeyboard, scenario }) => {
         // Init scripts run before the viewport meta tag is parsed. Playwright's
         // emulated screen, unlike innerHeight at that point, has the requested size.
         const initialHeight = window.screen.height;
         const fake = {
-          height: initialHeight - (mobile ? (window.screen.width > initialHeight ? 21 : 59) : 0), layout: initialHeight, large: initialHeight,
+          height: initialHeight - (mobile ? (window.screen.width > initialHeight ? 21 : 59) : 0), layout: initialHeight, large: scenario === "standalone" ? 793 : initialHeight,
           scale: 1, viewport: new EventTarget(), keyboard: new EventTarget(), keyboardHeight: 0,
         };
         Object.assign(window, { viewportFixture: fake });
         for (const key of ["height", "scale"] as const) Object.defineProperty(fake.viewport, key, { get: () => fake[key] });
         Object.defineProperty(window, "visualViewport", { configurable: true, value: fake.viewport });
         Object.defineProperty(window, "innerHeight", { configurable: true, get: () => fake.layout });
+        if (scenario === "standalone") {
+          const originalMatchMedia = window.matchMedia.bind(window);
+          window.matchMedia = (query) => query === "(display-mode: standalone)"
+            ? { matches: true, media: query } as MediaQueryList : originalMatchMedia(query);
+        }
         const nativeRect = HTMLElement.prototype.getBoundingClientRect;
         HTMLElement.prototype.getBoundingClientRect = function () {
           // Only the module's invisible large-viewport ruler is faked, never app layout.
-          return this.style.height === "100lvh" ? new DOMRect(0, 0, 0, fake.large) : nativeRect.call(this);
+          if (this.style.height === "100lvh") return new DOMRect(0, 0, 0, fake.large);
+          if (this.style.height === "env(safe-area-inset-top, 0px)" && scenario === "standalone") return new DOMRect(0, 0, 0, 59);
+          return nativeRect.call(this);
         };
         if (virtualKeyboard) {
           Object.defineProperty(fake.keyboard, "boundingRect", { get: () => new DOMRect(0, 0, 393, fake.keyboardHeight) });
           Object.defineProperty(navigator, "virtualKeyboard", { configurable: true, value: fake.keyboard });
         } else Object.defineProperty(navigator, "virtualKeyboard", { configurable: true, value: undefined });
-      }, { mobile, virtualKeyboard: scenario === "virtual-keyboard" });
+      }, { mobile, virtualKeyboard: scenario === "virtual-keyboard", scenario });
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      await page.goto(`http://127.0.0.1:${server.port}/?inset=${mobile ? 34 : 0}`);
-      await checkState(page, false, mobile ? 852 : 800, mobile ? 34 : 0);
+      await page.goto(`http://127.0.0.1:${server.port}/?inset=${mobile ? 34 : 0}${scenario === "standalone" ? "&standalone" : ""}`);
+      await checkState(page, false, mobile ? 852 : 800, mobile ? 34 : 0, scenario === "standalone");
+      if (scenario === "standalone") {
+        const bounds = await page.evaluate(() => {
+          const root = document.documentElement;
+          const composer = document.querySelector(".composer")!;
+          const after = composer.getBoundingClientRect().bottom;
+          root.style.removeProperty("--app-height");
+          const before = composer.getBoundingClientRect().bottom;
+          window.dispatchEvent(new Event("resize"));
+          return { before, after, padding: parseFloat(getComputedStyle(composer).paddingBottom) };
+        });
+        assert.deepEqual(bounds, { before: 793, after: 852, padding: 18 });
+        console.log(`PASS standalone 393x852 fixture: composer bottom ${bounds.before} -> ${bounds.after}, home clearance ${bounds.padding}px`);
+      }
       await page.getByRole("textbox", { name: "Message", exact: true }).focus();
-      await checkState(page, false, mobile ? 852 : 800, mobile ? 34 : 0); // hardware keyboard / focus without soft keyboard
+      await checkState(page, false, mobile ? 852 : 800, mobile ? 34 : 0, scenario === "standalone"); // hardware keyboard / focus without soft keyboard
       if (scenario === "mobile") {
         await geometry(page, 472, 852, 852);
         await checkState(page, true, 472, 34);
@@ -124,6 +146,11 @@ try {
         await page.locator(".terminal-host").evaluate((el) => el.setAttribute("data-direct-typing", ""));
         await geometry(page, 210, 393, 393);
         await checkState(page, true, 210, 21);
+      } else if (scenario === "standalone") {
+        await geometry(page, 472, 852, 793);
+        await checkState(page, true, 472, 34);
+        await geometry(page, 793, 852, 793, "scroll");
+        await checkState(page, false, 852, 34, true); // focused after native keyboard dismissal
       } else if (scenario === "virtual-keyboard") {
         await geometry(page, 793, 852, 852);
         await checkState(page, false, 852, 34);

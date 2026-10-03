@@ -16,7 +16,8 @@
  * The visual height is published only while the soft keyboard is up. An iPhone home
  * screen app (standalone, black-translucent status bar) reports a visual viewport
  * shorter than the screen with no keyboard at all, which left a band as tall as the
- * status bar under the composer. Without a keyboard the shell is 100dvh.
+ * status bar under the composer. Without a keyboard the shell is 100dvh unless
+ * that missing height matches the measured standalone top safe area.
  */
 
 const viewport = window.visualViewport;
@@ -39,6 +40,10 @@ const largeViewport = document.createElement("div");
 largeViewport.style.cssText = "position:fixed;top:0;left:0;width:0;height:100lvh;visibility:hidden;pointer-events:none;contain:strict";
 largeViewport.setAttribute("aria-hidden", "true");
 root.append(largeViewport);
+const topInset = document.createElement("div");
+topInset.style.cssText = "position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top, 0px);visibility:hidden;pointer-events:none;contain:strict";
+topInset.setAttribute("aria-hidden", "true");
+root.append(topInset);
 // Width separates portrait and landscape without mistaking a shortened keyboard
 // viewport for landscape. Keep the maximum through keyboard closing animations.
 const unobstructedHeights = new Map<number, number>();
@@ -56,7 +61,17 @@ const syncKeyboard = (): void => {
   if (!visible) unobstructedHeights.set(width, Math.max(reference, height, window.innerHeight));
   root.toggleAttribute("data-keyboard", visible);
   if (visible && viewport) root.style.setProperty("--app-height", `${Math.round(height)}px`);
-  else root.style.removeProperty("--app-height");
+  else {
+    // Some iOS standalone layouts exclude the status region even from 100dvh.
+    // Correct only when the missing screen height agrees with the actual top
+    // safe area; ordinary browser chrome, landscape and full-height layouts do not.
+    const inset = topInset.getBoundingClientRect().height;
+    const missing = window.screen.height - largeViewport.getBoundingClientRect().height;
+    if (window.matchMedia("(display-mode: standalone)").matches && inset > 0
+      && Math.abs(missing - inset) < 2 && window.screen.height > window.innerWidth)
+      root.style.setProperty("--app-height", `${Math.round(window.screen.height)}px`);
+    else root.style.removeProperty("--app-height");
+  }
   if (document.querySelector(".app") !== null) window.scrollTo(0, 0);
 };
 viewport?.addEventListener("resize", syncKeyboard);

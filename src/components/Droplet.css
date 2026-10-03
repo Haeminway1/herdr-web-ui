@@ -1,6 +1,6 @@
 /*
  * The phone's in-app alert (Droplet.tsx, motion in lib/dropletMotion.ts), as the iPhone's
- * Dynamic Island: one black shape, the island, that grows into a rounded banner and back. Its
+ * notification pill: one black shape that grows into a rounded banner and back. Its
  * colours are the island's in every theme (the --droplet-* group): black, white text, the status
  * colour on the dot and what happened.
  */
@@ -59,8 +59,6 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  width: min(400px, calc(100vw - 24px));
-  margin-left: calc(min(400px, calc(100vw - 24px)) / -2);
   padding: 0 18px 0 14px;
   opacity: 0;
   transform-origin: center top;

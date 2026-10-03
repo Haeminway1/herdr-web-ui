@@ -60,10 +60,11 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     await card.waitFor({ state: "visible" });
     assert.match((await card.getAttribute("aria-label")) ?? "", /Needs input/);
     assert.equal(await droplet.getAttribute("data-kind"), "blocked");
-    // it hangs under the top edge, centred, inside the screen
+    // The alert stays clear of the native status region and the app header.
     await Bun.sleep(1_800); // the springs settle: the drop's fall and the card's spread overshoot first
     const box = (await card.boundingBox())!;
-    assert.ok(box.y >= 12 && box.y < 40, `card top ${box.y}`);
+    const header = (await page.locator(".app-header").boundingBox())!;
+    assert.ok(box.y >= header.y + header.height + 12, `card top ${box.y}, header bottom ${header.y + header.height}`);
     assert.ok(Math.abs(box.x + box.width / 2 - 195) <= 1, `card centre ${box.x + box.width / 2}`);
     assert.ok(box.width <= 390 - 24 && box.width > 300, `card width ${box.width}`);
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "droplet-phone.png") });

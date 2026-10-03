@@ -2,27 +2,19 @@
  * The phone's in-app alert (components/Droplet.tsx) as the iPhone's Dynamic Island shows one:
  * the black island itself grows from its compact pill into a wide rounded banner on a lively
  * spring, its content fades in, and on the way out the content goes first and the island shrinks
- * back into the pill. On an iPhone with an island it grows out of the island; elsewhere a pill of
- * the same size appears under the top of the screen and grows the same way.
+ * back into the pill. The pill stays below the safe area and app header so native status UI
+ * remains visible and the notification does not cover header controls.
  */
 
 /** the compact island, as an iPhone draws it in portrait */
 export const ISLAND_WIDTH = 126;
 export const ISLAND_HEIGHT = 37.33;
-/** where an iPhone's Dynamic Island sits in portrait, measured from the top of the screen */
-export const DYNAMIC_ISLAND_TOP = 11;
 /** the expanded island: a screen's width less a margin each side, one name and one line under it */
 export const EXPANDED_MARGIN = 12;
 export const EXPANDED_MAX_WIDTH = 400;
 export const EXPANDED_HEIGHT = 68;
 export const EXPANDED_RADIUS = 30;
-/**
- * Grown out of a phone's own island, the camera stays where it was: the banner keeps the island's
- * height clear at its top and puts its content under it, as the system's expanded island does.
- */
-export const CAMERA_CLEARANCE = Math.ceil(ISLAND_HEIGHT);
-export const EXPANDED_ISLAND_RADIUS = 38;
-/** without an island, the pill's gap under the top of what can be seen */
+/** the pill's gap below the header or safe area's top */
 export const TOP_SPACING = 12;
 
 export interface SpringConfig {
@@ -48,27 +40,20 @@ export interface IslandLayout {
   compactHeight: number;
   expandedWidth: number;
   expandedHeight: number;
-  /** the content's top inside the grown island: below the camera when it is the phone's own */
-  contentTop: number;
-  /** the island is the phone's own: at rest it is simply not drawn over it */
-  overIsland: boolean;
 }
 
 /**
- * Where the island grows. `dynamicIsland`: an iPhone in portrait with one (Droplet.tsx tells by
- * its safe area); anything else gets a pill TOP_SPACING under the safe area's top.
+ * Keep the entire pill below both the native status inset and the app header.
  */
-export function islandLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0, dynamicIsland = false): IslandLayout {
+export function islandLayout(width: number, insetTop: number, insetLeft = 0, insetRight = 0, headerBottom = 0): IslandLayout {
   const safeWidth = Math.max(width - insetLeft - insetRight, 0);
   return {
-    top: dynamicIsland ? DYNAMIC_ISLAND_TOP : insetTop + TOP_SPACING,
+    top: Math.max(insetTop, headerBottom) + TOP_SPACING,
     centerX: insetLeft + safeWidth / 2,
     compactWidth: ISLAND_WIDTH,
     compactHeight: ISLAND_HEIGHT,
     expandedWidth: Math.max(Math.min(safeWidth - EXPANDED_MARGIN * 2, EXPANDED_MAX_WIDTH), ISLAND_WIDTH),
-    expandedHeight: dynamicIsland ? CAMERA_CLEARANCE + EXPANDED_HEIGHT - 8 : EXPANDED_HEIGHT,
-    contentTop: dynamicIsland ? CAMERA_CLEARANCE - 4 : 0,
-    overIsland: dynamicIsland,
+    expandedHeight: EXPANDED_HEIGHT,
   };
 }
 
@@ -81,7 +66,7 @@ export interface IslandShape {
   width: number;
   height: number;
   radius: number;
-  /** without a phone's own island under it, the pill fades in as it starts and out as it ends */
+  /** the pill fades in as it starts and out as it ends */
   opacity: number;
 }
 
@@ -89,14 +74,14 @@ export interface IslandShape {
 export function islandShape(grow: number, layout: IslandLayout): IslandShape {
   const width = mix(grow, layout.compactWidth, layout.expandedWidth);
   const height = mix(clamp(grow, 0, 1.08), layout.compactHeight, layout.expandedHeight);
-  const radius = Math.min(mix(clamp(grow, 0, 1), layout.compactHeight / 2, layout.overIsland ? EXPANDED_ISLAND_RADIUS : EXPANDED_RADIUS), height / 2);
+  const radius = Math.min(mix(clamp(grow, 0, 1), layout.compactHeight / 2, EXPANDED_RADIUS), height / 2);
   return {
     left: layout.centerX - width / 2,
     top: layout.top,
     width,
     height,
     radius,
-    opacity: layout.overIsland ? 1 : clamp(grow * 4, 0, 1),
+    opacity: clamp(grow * 4, 0, 1),
   };
 }
 

@@ -12,7 +12,7 @@ import "./Droplet.css";
  * The phone's in-app alert (lib/droplet.ts), as the iPhone's Dynamic Island shows one
  * (lib/dropletMotion.ts): the black island grows into a wide rounded banner with the pane's name
  * and what it wants, and shrinks back when it is done. On an iPhone with an island it grows out
- * of the island; elsewhere a pill appears under the top of the screen and grows the same way.
+ * of a pill below the native status area and app header.
  * One shows at a time; a newer one has the current one shrink away first. A tap opens the pane,
  * a flick up puts it away, and it leaves by itself after a while.
  */
@@ -32,20 +32,13 @@ export function prefersDroplet(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
 }
 
-/**
- * An iPhone in portrait whose safe area is as tall as a Dynamic Island's (59px and up; a notch is
- * 44 to 50): the alert grows out of the island itself. Anything else grows from a pill.
- */
-function hasDynamicIsland(insetTop: number): boolean {
-  return /iPhone/.test(navigator.userAgent) && insetTop >= 54 && window.innerHeight > window.innerWidth;
-}
-
 /** the safe area as CSS reports it: env() is readable only through a laid-out element */
 function measureLayout(probe: HTMLElement | null): IslandLayout {
   const style = probe ? getComputedStyle(probe) : null;
   const px = (value: string | undefined): number => Number.parseFloat(value ?? "") || 0;
   const top = px(style?.paddingTop);
-  return islandLayout(window.innerWidth, top, px(style?.paddingLeft), px(style?.paddingRight), hasDynamicIsland(top));
+  const headerBottom = document.querySelector(".app-header")?.getBoundingClientRect().bottom ?? 0;
+  return islandLayout(window.innerWidth, top, px(style?.paddingLeft), px(style?.paddingRight), headerBottom);
 }
 
 function reducedMotion(): boolean {
@@ -267,7 +260,7 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
           onPointerUp={(event) => endPress(event, false)}
           onPointerCancel={(event) => endPress(event, true)}
         >
-          <span ref={bodyEl} className="droplet-body" style={{ top: `${layout.contentTop}px` }}>
+          <span ref={bodyEl} className="droplet-body" style={{ width: `${layout.expandedWidth}px`, marginLeft: `${-layout.expandedWidth / 2}px` }}>
             <span className="droplet-mark">{current.agent ? <AgentMark agent={current.agent} size={18} /> : null}</span>
             <span className="droplet-text">
               <span className="droplet-title">{current.title}</span>
