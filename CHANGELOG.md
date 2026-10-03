@@ -8,6 +8,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Fixed
+- On an iPhone the image viewer's controls and the composer stay inside the usable screen: the
+  viewer is bounded by the safe-area insets and the keyboard's height, the keyboard is told from
+  the viewport's geometry rather than from focus alone, and in-app alerts stay below the header.
+  ([#400](https://github.com/devswha/herdr-web-ui/pull/400) by @Haeminway1)
 - A Linux or macOS PC whose herdr was lost to a restart or a kill connects again. herdr leaves
   its socket file behind, the bridge took that file for a running herdr and did not start, and
   **Update** ended in "Bridge did not start" each time. The bridge now starts herdr when nothing
