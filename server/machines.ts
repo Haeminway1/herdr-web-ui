@@ -85,6 +85,8 @@ export class MachineManager {
   private localBusy = false;
   private localRefreshQueued = false;
   private localRevision = 0;
+  /** the last read state told for each local pane: a load begun before it must not undo it */
+  private readonly latestAttention = new Map<string, Extract<ServerMessage, { type: "pane-attention" }>>();
   private localTimer: ReturnType<typeof setInterval>;
   private saveTimer?: ReturnType<typeof setTimeout>;
   private statePath: string;
@@ -132,7 +134,9 @@ export class MachineManager {
     for (const listener of this.listeners) listener(event ?? { type: "machines", machines: this.list() });
   }
   localMessage(message: ServerMessage): void {
-    if (["pane-status", "pane-attention", "session-changed", "pane-exited"].includes(message.type)) {
+    // a read state is no roster change: patched in and kept over the next load (latestAttention),
+    // never a reason to read herdr again, which a busy minute of finishes turned into a loop
+    if (["pane-status", "session-changed", "pane-exited"].includes(message.type)) {
       this.localRevision++;
       if (this.localBusy) this.localRefreshQueued = true;
     }
@@ -140,8 +144,18 @@ export class MachineManager {
     if (message.type === "pane-status" && this.local.snapshot) {
       this.local.snapshot = { ...this.local.snapshot, panes: this.local.snapshot.panes.map((p: HerdrPane) => p.pane_id === message.pane_id ? paneAfterStatus(p, message) : p) };
     }
-    if (message.type === "pane-attention" && this.local.snapshot) this.local.snapshot = snapshotWithAttention(this.local.snapshot, message);
+    if (message.type === "pane-attention") {
+      this.latestAttention.set(message.pane_id, message);
+      if (this.local.snapshot) this.local.snapshot = snapshotWithAttention(this.local.snapshot, message);
+    }
     if (message.type === "session-changed" || message.type === "pane-exited") void this.refreshLocal();
+  }
+  private withLatestAttention(snapshot: SessionSnapshot): SessionSnapshot {
+    const present = new Set(snapshot.panes.map((pane) => pane.pane_id));
+    for (const paneId of this.latestAttention.keys()) if (!present.has(paneId)) this.latestAttention.delete(paneId);
+    let patched = snapshot;
+    for (const message of this.latestAttention.values()) patched = snapshotWithAttention(patched, message);
+    return patched;
   }
   async refreshLocal(): Promise<void> {
     if (this.stopped) return;
@@ -156,7 +170,7 @@ export class MachineManager {
           if (this.stopped) break;
           // A newer event already patched the roster. Never publish this older load.
           if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
-          this.local.snapshot = snapshot; this.local.state = "connected"; this.local.error = null;
+          this.local.snapshot = this.withLatestAttention(snapshot); this.local.state = "connected"; this.local.error = null;
         } catch (e) {
           if (this.stopped) break;
           if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
