@@ -223,4 +223,39 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     await top.close();
   }
   console.log("PASS plan meters at the top of the list: one poller, accounts apart, phone fit, open panel leaves the PCs room, back beside Settings");
+
+  // a wide sidebar: the same three views, a click further each (rows, every limit, one line),
+  // the view kept on this device
+  const wide = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+  try {
+    await staged(wide);
+    await wide.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ showUsage: true, usagePlacement: "top" })));
+    const page = await wide.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(origin);
+    const panel = page.getByRole("region", { name: "Subscription usage", exact: true });
+    const rows = panel.locator(".usage-panel-rows");
+    await rows.waitFor();
+    assert.equal(await panel.locator(".usage-panel-line").count(), 0, "a wide sidebar starts on the rows");
+    await rows.click();
+    assert.equal(await rows.getAttribute("aria-expanded"), "true", "a click opens every limit");
+    await rows.click();
+    const line = panel.locator(".usage-panel-line");
+    await line.waitFor();
+    assert.equal(await panel.locator(".usage-panel-chip").count(), 7, "and the next one folds to one line, a percent per account");
+    assert.equal(await line.evaluate((node) => node.scrollWidth <= node.clientWidth), true, "the line fits the sidebar");
+    if (process.env.UI_EVIDENCE_DIR) await page.locator(".sidebar-shell").screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "usage-panel-line-desktop.png") });
+    await page.reload();
+    await line.waitFor();
+    assert.equal(await panel.locator(".usage-panel-rows").count(), 0, "the line is kept across a reload");
+    await line.click();
+    await rows.waitFor();
+    await panel.getByRole("button", { name: "Fold plan limits", exact: true }).click();
+    await line.waitFor();
+    assert.deepEqual(errors, []);
+  } finally {
+    await wide.close();
+  }
+  console.log("PASS plan meters at the top of a wide sidebar: line, rows and every limit a click apart, the view kept");
 }
