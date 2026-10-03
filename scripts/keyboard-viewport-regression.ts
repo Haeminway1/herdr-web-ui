@@ -61,7 +61,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
 let browser: Browser | undefined;
 try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
-  for (const scenario of ["mobile", "desktop", "virtual-keyboard", "standalone", "standalone-full", "browser-short"] as const) {
+  for (const scenario of ["mobile", "split-view", "desktop", "virtual-keyboard", "standalone", "standalone-full", "browser-short"] as const) {
     const mobile = scenario !== "desktop";
     const context = await browser.newContext({ viewport: mobile ? { width: 393, height: 852 } : { width: 1280, height: 800 }, isMobile: mobile, hasTouch: mobile });
     try {
@@ -110,7 +110,23 @@ try {
       }
       await page.getByRole("textbox", { name: "Message", exact: true }).focus();
       await checkState(page, false, mobile ? scenario === "standalone" ? 852 : scenario === "browser-short" ? 793 : 852 : 800, mobile ? 34 : 0, scenario === "standalone"); // hardware keyboard / focus without soft keyboard
-      if (scenario === "mobile") {
+      if (scenario === "split-view") {
+        await page.setViewportSize({ width: 393, height: 1000 });
+        await geometry(page, 976, 1000, 1000);
+        await checkState(page, false, 1000, 34);
+        // Same-width top/bottom split view changes the large/layout viewport,
+        // while the visual viewport retains a small non-keyboard inset.
+        await page.setViewportSize({ width: 393, height: 600 });
+        await geometry(page, 576, 600, 600);
+        await checkState(page, false, 600, 34); // focused hardware keyboard
+        await geometry(page, 300, 600, 600);
+        await checkState(page, true, 300, 34);
+        await geometry(page, 576, 600, 600, "scroll");
+        await checkState(page, false, 600, 34); // soft keyboard dismissed, still focused
+        await page.getByRole("textbox", { name: "Message", exact: true }).blur();
+        await page.getByRole("textbox", { name: "Message", exact: true }).focus();
+        await checkState(page, false, 600, 34); // blur/refocus must not revive stale height
+      } else if (scenario === "mobile") {
         await geometry(page, 472, 852, 852);
         await checkState(page, true, 472, 34);
         await geometry(page, 793, 852, 852, "scroll"); // native dismissal, focus remains
@@ -192,5 +208,5 @@ try {
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
   }
-  console.log("PASS mobile viewport: dismissal without blur, hardware keyboard, dual viewport resize, orientation, standalone, safe area, desktop, zoom, xterm, keyboard geometry");
+  console.log("PASS mobile viewport: same-width split view, dismissal without blur, hardware keyboard, dual viewport resize, orientation, standalone, safe area, desktop, zoom, xterm, keyboard geometry");
 } finally { await browser?.close(); server.stop(); }

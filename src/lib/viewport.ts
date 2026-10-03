@@ -44,9 +44,10 @@ const topInset = document.createElement("div");
 topInset.style.cssText = "position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top, 0px);visibility:hidden;pointer-events:none;contain:strict";
 topInset.setAttribute("aria-hidden", "true");
 root.append(topInset);
-// Width separates portrait and landscape without mistaking a shortened keyboard
-// viewport for landscape. Keep the maximum through keyboard closing animations.
-const unobstructedHeights = new Map<number, number>();
+// Width separates portrait and landscape. Retain the baseline when a keyboard
+// shrinks all three viewports, but not when a split view shrinks the large
+// viewport while leaving only its ordinary visual inset.
+const unobstructedHeights = new Map<number, { large: number; height: number }>();
 const typing = (element: Element | null): boolean =>
   (element instanceof HTMLTextAreaElement && (!element.classList.contains("xterm-helper-textarea") || element.closest("[data-direct-typing]") !== null))
   || (element instanceof HTMLInputElement && !["button", "checkbox", "radio", "range", "submit", "reset", "file", "color"].includes(element.type))
@@ -54,11 +55,14 @@ const typing = (element: Element | null): boolean =>
 const syncKeyboard = (): void => {
   const width = window.innerWidth;
   const height = viewport?.height ?? window.innerHeight;
-  const reference = Math.max(largeViewport.getBoundingClientRect().height, unobstructedHeights.get(width) ?? 0, window.innerHeight);
+  const large = largeViewport.getBoundingClientRect().height;
+  const remembered = unobstructedHeights.get(width);
+  const resizedWindow = remembered && large < remembered.large && height < large && large - height <= large * 0.2;
+  const reference = Math.max(large, resizedWindow ? 0 : remembered?.height ?? 0, window.innerHeight);
   const focused = touch.matches && typing(document.activeElement);
   const visible = focused && ((keyboard?.boundingRect.height ?? 0) > 0
     || !!viewport && viewport.scale === 1 && reference - height > reference * 0.2);
-  if (!visible) unobstructedHeights.set(width, Math.max(reference, height, window.innerHeight));
+  if (!visible) unobstructedHeights.set(width, { large, height: resizedWindow ? Math.max(large, height, window.innerHeight) : Math.max(reference, height) });
   root.toggleAttribute("data-keyboard", visible);
   if (visible && viewport) root.style.setProperty("--app-height", `${Math.round(height)}px`);
   else {
