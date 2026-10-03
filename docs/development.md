@@ -36,6 +36,15 @@ Tests run against a herdr session of their own, `herdr-web-ui-test`. The first r
 
 Browser checks look for Chrome at `/opt/google/chrome/chrome`; set `CHROME_PATH` otherwise. After a herdr upgrade, refresh the generated wire types with `bun run generate:types --refresh` (and `--check` to verify).
 
+For the isolated phone viewer and keyboard layout regressions (no herdr session or production build):
+
+```bash
+bun scripts/file-viewer-mobile-regression.ts  # 8 viewport cases × tall/wide images
+bun scripts/mobile-viewport-regression.ts     # keyboard geometry, dismissal and rotation
+```
+
+`FILE_VIEWER_CASE=landscape-notch` selects a viewer case; `FILE_VIEWER_CSS=/path/to/before.css` compares another stylesheet. These checks use Chromium mobile emulation and synthetic safe-area/keyboard geometry; they cannot verify actual iOS Safari keyboard dismissal or notch insets. The existing `bun scripts/file-viewer-regression.ts` separately checks history with an owned herdr pane.
+
 ## README media
 
 `bun run build && bun scripts/readme-media/capture.ts` regenerates the stills and demos in `docs/screenshots/` from a staged, fictional session in its own herdr session (`herdr-web-ui-demo`). Pass `shots` or `video` to redo only one of them. It needs ffmpeg.
