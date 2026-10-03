@@ -931,11 +931,10 @@
 .chat-abandoned > summary { font-style: italic; }
 .chat-abandoned-note { margin: var(--space-2) 0 0; color: var(--text-dim); }
 
-<<<<<<< HEAD
 /* a message sent from here, before the transcript holds it (lib/outbox.ts) */
 .chat-turn-user.is-outgoing .chat-bubble { opacity: 0.72; }
 .chat-turn-user.is-outgoing[data-sent] .chat-bubble { opacity: 0.9; }
-=======
+
 /* a notice named by its own first line: one line, cut short, between the divider rules */
 .chat-notice-label {
   flex: 0 1 auto;
@@ -952,4 +951,3 @@
   font-size: var(--fs-xs);
   line-height: 1.5;
 }
->>>>>>> origin/feat/omo-chat-polish
