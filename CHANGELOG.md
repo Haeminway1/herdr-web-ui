@@ -8,6 +8,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
+- The top of the pane list shows what needs you on every PC: Needs you, then To read (answers
+  that came in since the pane was last opened, newest first, with their first line), then
+  Working, folded to a count. Read state is kept on the server that runs the pane, so a pane
+  read on the phone is read on the PC too. ([#366](https://github.com/devswha/herdr-web-ui/pull/366) by @Haeminway1)
 - Native Windows x64 installation through `install.ps1`, with the same herdr plugin startup
   and updates. Windows needs Bun and Git, without Node or WSL, and keeps using the terminal
   screen mirror. ([#330](https://github.com/devswha/herdr-web-ui/pull/330) by @JJLiebig)
