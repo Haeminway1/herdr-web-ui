@@ -229,6 +229,49 @@ describe("voice transcribe", () => {
     expect((form.get("file") as File).name).toBe("audio.webm");
   });
 
+  it("sends normalized container filenames and unchanged bytes to a local provider", async () => {
+    const captured: Array<{ filename: string; type: string; bytes: number[]; disposition: string }> = [];
+    const provider = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const wire = await request.clone().text();
+        const part = (await request.formData()).get("file") as File;
+        captured.push({
+          filename: part.name,
+          type: part.type,
+          bytes: [...new Uint8Array(await part.arrayBuffer())],
+          disposition: wire.split("\r\n").find((line) => line.startsWith("Content-Disposition: form-data; name=\"file\"")) ?? "",
+        });
+        return Response.json({ text: "transcribed" });
+      },
+    });
+    try {
+      const voice = new VoiceService({
+        stateDir,
+        env: { HERDR_WEB_OPENAI_API_KEY: KEY, HERDR_WEB_OPENAI_BASE_URL: `http://127.0.0.1:${provider.port}/v1` },
+        fetch: (url, init) => fetch(url, init),
+      });
+      for (const [name, mime, bytes] of [
+        ["clip.webm", "audio/webm;codecs=opus", [1, 2, 3, 255]],
+        ["voice.mp4", "audio/mp4", [0, 20, 127, 254]],
+        ["memo.m4a", "audio/x-m4a", [3, 0, 42, 240]],
+      ] as const) {
+        const audio = new Blob([new Uint8Array(bytes)], { type: mime });
+        const response = await transcribe(voice, clipForm({ audio, name }));
+        expect(response.status).toBe(200);
+        expect(await events(response)).toEqual([{ type: "done", text: "transcribed" }]);
+      }
+      expect(captured).toEqual([
+        { filename: "audio.webm", type: "video/webm", bytes: [1, 2, 3, 255], disposition: 'Content-Disposition: form-data; name="file"; filename="audio.webm"' },
+        { filename: "audio.mp4", type: "video/mp4", bytes: [0, 20, 127, 254], disposition: 'Content-Disposition: form-data; name="file"; filename="audio.mp4"' },
+        { filename: "audio.m4a", type: "audio/x-m4a", bytes: [3, 0, 42, 240], disposition: 'Content-Disposition: form-data; name="file"; filename="audio.m4a"' },
+      ]);
+    } finally {
+      provider.stop(true);
+    }
+  });
+
   it("adds the polished text when asked", async () => {
     handler = (url, init) => {
       if (url.endsWith("/audio/transcriptions")) return transcriptAnswer();

@@ -297,7 +297,9 @@ export class VoiceService {
     const cancelled = new AbortController();
     const upstream = AbortSignal.any([signal, cancelled.signal]);
     const form = new FormData();
-    form.append("file", new File([clip.audio], clip.filename, { type: clip.audio.type }));
+    // Bun retains a nested File's original name in FormData.get() even when the
+    // multipart wire uses append's filename. Rebuild from bytes for consistent metadata.
+    form.append("file", new Blob([await clip.audio.arrayBuffer()], { type: clip.audio.type }), clip.filename);
     form.append("model", transcribeModel);
     form.append("stream", "true");
     for (const language of clip.languages) form.append("languages[]", language);
