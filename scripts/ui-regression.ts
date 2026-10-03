@@ -226,6 +226,8 @@ try {
   await checkDroplet(browser, origin);
   await checkComposerReconnect(browser, origin, paneB);
   await checkAttentionInbox(browser, origin);
+  // An attention toast can briefly cover the composer; let it expire before testing queue clicks.
+  await page.waitForFunction(() => !document.querySelector(".alert-toast[data-shown]"), null, { timeout: 12_000 });
 
   const report = (state: string) => herdrRpc("pane.report_agent", {
     pane_id: paneA, source: "manual", agent: "claude", state,
