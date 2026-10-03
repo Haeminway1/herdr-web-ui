@@ -290,7 +290,7 @@ export class CompletionTracker {
 }
 
 /** The herdr server this one talks to, as its socket file: a herdr started anew has another. */
-function herdrSocketId(): string | null {
+export function herdrSocketId(): string | null {
   try {
     const stat = statSync(herdrSocketPath());
     return `${stat.dev}:${stat.ino}`;
