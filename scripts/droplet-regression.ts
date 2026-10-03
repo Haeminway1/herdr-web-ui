@@ -99,6 +99,47 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     assert.ok(lasted > 5_000 && lasted < 9_000, `stayed ${lasted}ms`);
     console.log("PASS an in-app alert goes by itself");
 
+    const quiet = await browser.newContext({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true, locale: "en-US", reducedMotion: "reduce" });
+    try {
+      const quietPage = await quiet.newPage();
+      quietPage.on("pageerror", (error) => errors.push(error.message));
+      await quietPage.goto(`${origin}/?pane=${encodeURIComponent(openPane)}`);
+      await quietPage.locator(".conn-live").waitFor();
+      const quietCard = quietPage.locator(".droplet-card");
+      await report(otherPane, "idle");
+      await quietPage.bringToFront();
+      await report(otherPane, "working");
+      await quietPage.locator(`.pane-item:has(.pane-select[title^="${otherPane} —"]) [data-status="working"]`).first().waitFor({ state: "attached" });
+      await report(otherPane, "blocked");
+      await quietCard.waitFor({ state: "attached" });
+      await quietPage.waitForFunction(() => (document.querySelector(".droplet-card")?.getBoundingClientRect().width ?? 0) > 300);
+      const geometry = async () => quietCard.evaluate((element) => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return { x, y, width, height };
+      });
+      const start = await geometry();
+      await quietPage.waitForTimeout(65);
+      const middle = await geometry();
+      await quietPage.waitForTimeout(250);
+      const end = await geometry();
+      assert.deepEqual(middle, start, "reduced-motion entry has no intermediate geometry change");
+      assert.deepEqual(end, start, "reduced-motion entry has no final geometry change");
+      await quietPage.waitForFunction(() => Number(getComputedStyle(document.querySelector(".droplet-card")!).opacity) > 0.95);
+      await quietCard.evaluate((element) => (element as HTMLElement).click());
+      await quietPage.locator('.droplet[data-phase="out"]').waitFor({ state: "attached" });
+      const exitStart = await geometry();
+      await quietPage.waitForTimeout(65);
+      const exitMiddle = await geometry();
+      const fadingOpacity = await quietCard.evaluate((element) => Number(getComputedStyle(element).opacity));
+      assert.deepEqual(exitStart, start, "reduced-motion exit starts at expanded geometry");
+      assert.deepEqual(exitMiddle, start, "reduced-motion exit has no intermediate geometry change");
+      assert.ok(fadingOpacity > 0 && fadingOpacity < 1, `reduced-motion exit fades in place: ${fadingOpacity}`);
+      await quietPage.locator(".droplet").waitFor({ state: "detached" });
+      console.log("PASS reduced-motion entry and exit keep geometry fixed at intermediate frames");
+    } finally {
+      await quiet.close();
+    }
+
     // turned off in Settings: none
     await page.evaluate(() => {
       const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}");

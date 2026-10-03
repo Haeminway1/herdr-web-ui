@@ -85,6 +85,11 @@ export function islandShape(grow: number, layout: IslandLayout): IslandShape {
   };
 }
 
+/** Reduced motion keeps the expanded card in place and fades the entire shape. */
+export function reducedMotionShape(reveal: number, layout: IslandLayout): IslandShape {
+  return { ...islandShape(1, layout), opacity: clamp(reveal, 0, 1) };
+}
+
 /** The content at a reveal: it fades and settles in from a little smaller and softer. */
 export function contentStyle(reveal: number): { opacity: number; scale: number; blur: number } {
   const progress = clamp(reveal, 0, 1);

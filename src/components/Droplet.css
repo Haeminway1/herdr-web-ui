@@ -43,6 +43,11 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .droplet-card { will-change: opacity; }
+  .droplet-body { will-change: auto; }
+}
+
 .droplet[data-phase="out"] .droplet-card { pointer-events: none; }
 
 .droplet-card:focus-visible {

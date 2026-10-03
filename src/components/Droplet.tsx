@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Pointer
 import { flickVelocity, onDroplet, type PressSample, type QueuedDroplet } from "../lib/droplet.ts";
 import {
   DRAG_SPRING, GROW_SPRING, HIDE_SPRING, REVEAL_DELAY, REVEAL_SPRING, SHRINK_DELAY, SHRINK_SPRING,
-  Spring, contentStyle, islandLayout, islandShape, type IslandLayout,
+  Spring, contentStyle, islandLayout, islandShape, reducedMotionShape, type IslandLayout,
 } from "../lib/dropletMotion.ts";
 import { useT } from "../lib/i18n.ts";
 import { AgentMark } from "./AgentMark.tsx";
@@ -74,7 +74,8 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     const el = islandEl.current;
     if (!box || !el) return;
     const s = springs.current;
-    const shape = islandShape(s.grow.value, box);
+    const reduce = reducedMotion();
+    const shape = reduce ? reducedMotionShape(s.reveal.value, box) : islandShape(s.grow.value, box);
     el.style.left = `${shape.left}px`;
     el.style.top = `${shape.top}px`;
     el.style.width = `${shape.width}px`;
@@ -84,9 +85,9 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     el.style.transform = `translateY(${s.drag.value}px)`;
     const look = contentStyle(s.reveal.value);
     if (bodyEl.current) {
-      bodyEl.current.style.opacity = String(look.opacity);
-      bodyEl.current.style.transform = `scale(${look.scale})`;
-      bodyEl.current.style.filter = look.blur > 0.05 ? `blur(${look.blur}px)` : "";
+      bodyEl.current.style.opacity = reduce ? "1" : String(look.opacity);
+      bodyEl.current.style.transform = reduce ? "" : `scale(${look.scale})`;
+      bodyEl.current.style.filter = !reduce && look.blur > 0.05 ? `blur(${look.blur}px)` : "";
     }
   }, []);
 
@@ -121,9 +122,14 @@ export function Droplet({ onOpen }: { onOpen: (machineId: string, paneId: string
     setPhase("out");
     const s = springs.current;
     const now = performance.now();
+    if (reducedMotion()) {
+      s.grow.set(1);
+      s.drag.set(0);
+    } else {
+      s.grow.to(0, SHRINK_SPRING, now, SHRINK_DELAY);
+      s.drag.to(0, DRAG_SPRING, now);
+    }
     s.reveal.to(0, HIDE_SPRING, now);
-    s.grow.to(0, reducedMotion() ? HIDE_SPRING : SHRINK_SPRING, now, SHRINK_DELAY);
-    s.drag.to(0, DRAG_SPRING, now);
     run();
     if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
     exitTimer.current = window.setTimeout(() => {

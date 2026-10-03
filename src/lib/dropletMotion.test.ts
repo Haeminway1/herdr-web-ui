@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { GROW_SPRING, ISLAND_HEIGHT, ISLAND_WIDTH, Spring, islandLayout, islandShape } from "./dropletMotion.ts";
+import { GROW_SPRING, ISLAND_HEIGHT, ISLAND_WIDTH, Spring, islandLayout, islandShape, reducedMotionShape } from "./dropletMotion.ts";
 
 describe("island layout", () => {
   it("keeps the full pill below the native inset and app header", () => {
@@ -36,6 +36,16 @@ describe("island shape", () => {
     expect(islandShape(0, pill).opacity).toBe(0);
     expect(islandShape(0.5, pill).opacity).toBe(1);
     expect(islandShape(0, layout).opacity).toBe(0);
+  });
+  it("keeps expanded geometry while the whole reduced-motion card fades on either layout", () => {
+    for (const box of [layout, islandLayout(390, 47)]) {
+      const expanded = islandShape(1, box);
+      for (const opacity of [0, 0.25, 0.75, 1]) {
+        expect(reducedMotionShape(opacity, box)).toEqual({ ...expanded, opacity });
+      }
+      expect(reducedMotionShape(-0.2, box).opacity).toBe(0);
+      expect(reducedMotionShape(1.2, box).opacity).toBe(1);
+    }
   });
 });
 
