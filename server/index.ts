@@ -438,7 +438,8 @@ export function createServer(
     const askedAt = Date.now();
     const settled = await completions.readSnapshot(rawSnapshot);
     // a pane first seen already done finished before this server knew it: it counts from now
-    for (const paneId of attention.baseline(settled.panes, askedAt)) readPreview(paneId);
+    // and one whose finish no status event told (herdr missed it) is read from the snapshot
+    for (const paneId of attention.baseline(settled.panes, askedAt)) { tellAttention(paneId); readPreview(paneId); }
     const snapshot = attention.decorate(settled);
     if (!snapshot.panes.some((pane) => omo.backgroundOf(pane.pane_id) > 0)) return snapshot;
     return { ...snapshot, panes: snapshot.panes.map((pane) => omo.backgroundOf(pane.pane_id) > 0 ? { ...pane, background_tasks: omo.backgroundOf(pane.pane_id) } : pane) };
