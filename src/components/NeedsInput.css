@@ -58,3 +58,32 @@
     gap: var(--space-2);
   }
 }
+
+/* Working folds to its count: a heading that is its own toggle, quiet like the heading it replaces */
+.attention-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.attention-toggle svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--text-dim);
+}
+
+/* when it finished, then the answer's first line: both on line two, never wrapping */
+.attention-when {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+}

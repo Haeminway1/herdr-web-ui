@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
-import type { AgentStatus, ClientRole, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
-import { ApiError, authenticate, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, sendTestPush, signOut, type HealthInfo } from "./lib/api.ts";
+import type { AgentStatus, ClientRole, ServerMessage, AccessRefusal, HealthAuth, HerdrPane, PaneAttention } from "../shared/protocol.ts";
+import { ApiError, authenticate, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, markPaneSeen, pairDevice, sendTestPush, signOut, type HealthInfo } from "./lib/api.ts";
 import { deviceLabel, takePairCode } from "./lib/phone.ts";
 import { displayPaneTitle } from "./components/Sidebar.tsx";
 import { PaneTerminal } from "./components/PaneTerminal.tsx";
@@ -17,6 +17,7 @@ import { MachineDialog } from "./components/MachineDialog.tsx";
 import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
+import { applyPaneAttention, isUnread } from "./lib/attention.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
 import { alertPrefs, useSettings, type DefaultView } from "./lib/settings.ts";
 import { useShortcuts } from "./lib/shortcuts.ts";
@@ -330,6 +331,21 @@ export function App() {
     return () => document.removeEventListener("visibilitychange", merge);
   }, []);
 
+  /** A pane's read state, as its server pushed it or as this device just read it. */
+  const patchAttention = useCallback((machineId: string, paneId: string, attention: PaneAttention) => {
+    setMachines((list) => {
+      let changed = false;
+      const next = list.map((m) => {
+        if (m.id !== machineId || !m.snapshot) return m;
+        const snapshot = applyPaneAttention(m.snapshot, paneId, attention);
+        if (snapshot === m.snapshot) return m;
+        changed = true;
+        return { ...m, snapshot };
+      });
+      return changed ? next : list;
+    });
+  }, []);
+
   // One SSE subscription watches every PC, even when no terminal is selected.
   useEffect(() => {
     if (locked !== false) return;
@@ -373,6 +389,7 @@ export function App() {
           return changed ? next : list;
         });
       }
+      if (message.type === "pane-attention") patchAttention(machine.id, message.pane_id, message.attention);
       if (message.type === "pane-exited") {
         const pane = machine.snapshot?.panes.find((p) => p.pane_id === message.pane_id);
         const worked = endedTurn(turnStartRef.current, lastTurnRef.current, paneStorageId(machine.id, message.pane_id), Date.now());
@@ -385,7 +402,7 @@ export function App() {
       if (message.type === "session-changed" || message.type === "pane-exited") scheduleRefetch();
     };
     return () => events.close();
-  }, [locked, scheduleRefetch, dropIn]);
+  }, [locked, scheduleRefetch, dropIn, patchAttention]);
 
   const handleServerMessage = useCallback((message: ServerMessage) => {
     if (message.type === "error" && message.code === "output_stalled") setOutputStopped(true);
@@ -521,6 +538,36 @@ export function App() {
   }, []);
 
   const selectedPane = snapshot?.panes.find((pane) => pane.pane_id === selectedPaneId) ?? null;
+
+  // The open pane's answer is read once it is on screen: when it is opened, and when it finishes
+  // while the user looks at it. Never by moving herdr's focus: its server keeps the read for
+  // every device (server/attention.ts).
+  const seenPosted = useRef(new Set<string>());
+  useEffect(() => {
+    const pane = selectedPane as HerdrPane | null;
+    const machineId = selectedMachineId;
+    const markIfLooking = (): void => {
+      if (pane === null || !isUnread(pane)) return;
+      // a hidden tab, another window in front, or the phone's drawer over the pane has read nothing
+      if (document.visibilityState !== "visible" || !document.hasFocus() || drawerOpenRef.current) return;
+      const finishedAt = pane.attention!.finished_at!;
+      const key = `${paneStorageId(machineId, pane.pane_id)}@${finishedAt}`;
+      if (seenPosted.current.has(key)) return;
+      seenPosted.current.add(key);
+      patchAttention(machineId, pane.pane_id, { ...pane.attention!, seen_at: new Date(Math.max(Date.now(), Date.parse(finishedAt))).toISOString() });
+      markPaneSeen(pane.pane_id, machineId)
+        .then((state) => { if (state) patchAttention(machineId, pane.pane_id, state); })
+        // a watch-only device, or a PC whose bridge predates read state, keeps its local read; anything else tries again
+        .catch((err) => { if (!(err instanceof ApiError && (err.status === 403 || err.status === 404))) seenPosted.current.delete(key); });
+    };
+    markIfLooking();
+    window.addEventListener("focus", markIfLooking);
+    document.addEventListener("visibilitychange", markIfLooking);
+    return () => {
+      window.removeEventListener("focus", markIfLooking);
+      document.removeEventListener("visibilitychange", markIfLooking);
+    };
+  }, [selectedPane, selectedMachineId, drawerOpen, patchAttention]);
   useScreenWakeLock(settings.keepScreenOn && locked === false && selectedPane !== null);
   const selectedWorkspace = selectedPane
     ? (snapshot?.workspaces.find((workspace) => workspace.workspace_id === selectedPane.workspace_id) ?? null)

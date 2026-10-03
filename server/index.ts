@@ -21,6 +21,7 @@ import { omoPanes } from "./omo.ts";
 import { OMO_ALIASES, OmoStatus, processAlive } from "./omo-status.ts";
 import { omoRuns, omoTasks } from "./omo-tasks.ts";
 import { CompletionTracker } from "./completion.ts";
+import { AttentionStore, answerPreview } from "./attention.ts";
 import { freeAgentName } from "./agent-name.ts";
 import { SHELL_AGENTS, isShellAgentKind, shellAgentExecutable, startShellAgent } from "./shell-agent.ts";
 import { listDirectories } from "./directories.ts";
@@ -121,6 +122,8 @@ const TYPED_SETTLE_MS = 300;
  * reaches the pane later.
  */
 export const SUBMIT_DEADLINE_MS = 45_000;
+/** a finished agent may write its answer's last lines just after its status changed: the preview waits this long */
+const PREVIEW_DELAY_MS = 1_500;
 const SERVER_FEATURES: ServerFeature[] = ["submit", "secret-input", "input-ready"];
 
 /** Bind addresses only this machine can reach, so an unset token is nobody else's business. */
@@ -428,9 +431,15 @@ export function createServer(
     await omo.refresh(snapshot.panes);
     return omo.apply(snapshot);
   };
-  /** the snapshot clients get: finishes settled, OmO panes named, their running background tasks counted */
+  /** which finished panes nobody has read yet (server/attention.ts), kept across restarts */
+  const attention = new AttentionStore(join(options.stateDir ?? defaultStateDir(), "attention.json"));
+  /** the snapshot clients get: finishes settled, OmO panes named, their running background tasks counted, read state in */
   const clientSnapshot = async (): Promise<SessionSnapshot> => {
-    const snapshot = await completions.readSnapshot(rawSnapshot);
+    const askedAt = Date.now();
+    const settled = await completions.readSnapshot(rawSnapshot);
+    // a pane first seen already done finished before this server knew it: it counts from now
+    for (const paneId of attention.baseline(settled.panes, askedAt)) readPreview(paneId);
+    const snapshot = attention.decorate(settled);
     if (!snapshot.panes.some((pane) => omo.backgroundOf(pane.pane_id) > 0)) return snapshot;
     return { ...snapshot, panes: snapshot.panes.map((pane) => omo.backgroundOf(pane.pane_id) > 0 ? { ...pane, background_tasks: omo.backgroundOf(pane.pane_id) } : pane) };
   };
@@ -752,10 +761,41 @@ export function createServer(
     console.error(`web push: ${error instanceof Error ? error.message : String(error)}`);
   };
 
+  /** Every device learns a pane's read state as it changes: a finish, a preview, a read. */
+  function tellAttention(paneId: string): void {
+    const state = attention.get(paneId);
+    if (state) broadcastAll({ type: "pane-attention", pane_id: paneId, attention: state });
+  }
+
+  /** A status as clients are shown it: a finish is stamped, told, and its answer's first line read. */
+  function noteStatus(paneId: string, status: AgentStatus): void {
+    if (!attention.observe(paneId, status)) return;
+    tellAttention(paneId);
+    readPreview(paneId);
+  }
+
+  const previewTimers = new Set<ReturnType<typeof setTimeout>>();
+  /**
+   * The first line of the answer a pane just finished with, read once, later and on the side:
+   * it never holds up a status, and a pane with no transcript (a shell) simply has none.
+   */
+  function readPreview(paneId: string): void {
+    const finishedAt = attention.get(paneId)?.finished_at;
+    if (!finishedAt) return;
+    const timer = setTimeout(() => {
+      previewTimers.delete(timer);
+      paneConversation(paneId, options.codexHome)
+        .then(({ turns }) => { if (attention.setPreview(paneId, finishedAt, answerPreview(turns))) tellAttention(paneId); })
+        .catch(() => { /* no transcript, or unreadable: the row goes without a preview */ });
+    }, PREVIEW_DELAY_MS);
+    previewTimers.add(timer);
+  }
+
   /** Status of EVERY pane, attached or not: one collector feeds all connected clients and web push. */
   function omoChanged(paneId: string, derived: AgentStatus, background: number, turn: boolean): void {
     // a background task starting or ending is no turn: the status stands, and nothing is alerted
     const status = turn ? completions.observe(paneId, derived, "omo") : completions.current(paneId) ?? completions.observe(paneId, derived, "omo");
+    noteStatus(paneId, status);
     broadcastAll({ type: "pane-status", pane_id: paneId, agent_status: status, background_tasks: background });
     if (turn) push.onStatus(paneId, status).catch(logPushError);
   }
@@ -772,11 +812,14 @@ export function createServer(
       // an agent herdr lost on the way still works and finishes as such (server/completion.ts);
       // an OmO pane whose session is not known keeps herdr's status, under its own name
       const status = completions.observe(paneId, raw, omo.runs(paneId) ? "omo" : agent);
+      noteStatus(paneId, status);
       broadcastAll({ type: "pane-status", pane_id: paneId, agent_status: status });
       push.onStatus(paneId, status).catch(logPushError);
     },
     // a finish reported as done, now in front at herdr's terminal: seen, idle again
     onFocus: (paneId) => {
+      // brought to the front at herdr's terminal: whoever did that has it in front of them
+      if (attention.unread(paneId) && attention.markSeen(paneId)) tellAttention(paneId);
       if (!completions.seen(paneId)) return;
       broadcastAll({ type: "pane-status", pane_id: paneId, agent_status: "idle" });
       push.onStatus(paneId, "idle").catch(logPushError);
@@ -786,6 +829,8 @@ export function createServer(
     // what the alerts are measured against from here, or the next event would alert of it
     onResync: (panes, newer) => {
       completions.resync(panes, newer);
+      // a finish during the loss had no event: the corrected status is measured like one
+      for (const pane of panes) if (!newer.has(pane.pane_id)) noteStatus(pane.pane_id, completions.current(pane.pane_id) ?? pane.agent_status);
       push.resync(panes.map((pane) => ({ ...pane, agent_status: completions.current(pane.pane_id) ?? pane.agent_status })), newer);
     },
     onPaneEnded: (paneId) => {
@@ -1117,6 +1162,22 @@ export function createServer(
         } catch (error) {
           return errorResponse(error);
         }
+      }
+
+      if (pathname === "/api/pane/seen") {
+        if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+        let payload: { pane_id?: unknown };
+        try {
+          payload = (await request.json()) as typeof payload;
+        } catch {
+          return badRequest("invalid_json", "request body must be JSON");
+        }
+        if (!isJsonObject(payload)) return badRequest("invalid_body", "request body must be a JSON object");
+        if (typeof payload.pane_id !== "string" || !payload.pane_id.trim() || payload.pane_id.length > 200) return badRequest("missing_pane_id", "pane_id is required");
+        // only the web UI's own record: herdr's focus, and with it the TUI, is left alone
+        const seen = attention.unread(payload.pane_id) ? attention.markSeen(payload.pane_id) : null;
+        if (seen) tellAttention(payload.pane_id);
+        return jsonResponse({ attention: seen ?? attention.get(payload.pane_id) });
       }
 
       if (pathname === "/api/pane/commands" || pathname === "/api/pane/files") {
@@ -1695,6 +1756,7 @@ export function createServer(
     stop: () => {
       clearInterval(outputTimer);
       collector.stop();
+      for (const timer of previewTimers) clearTimeout(timer);
       omo.stop();
       machines?.stop();
       registration?.close();

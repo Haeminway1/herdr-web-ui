@@ -9,6 +9,7 @@ import type {
   OmoActivity,
   PairedDevice,
   PairingCode,
+  PaneAttention,
   PaneReadResult,
   PromptAnswer,
   PushKey,
@@ -275,6 +276,11 @@ export async function closePane(paneId: string, machineId = "local"): Promise<vo
 /** POST /api/pane/rename: sets the pane's label in herdr (an empty label clears it). */
 export async function renamePane(paneId: string, label: string, machineId = "local"): Promise<void> {
   await sendJson(machinePath(machineId, "pane/rename"), "POST", { pane_id: paneId, label });
+}
+
+/** POST /api/pane/seen: the pane was read here; its server keeps that for every device (never herdr's focus). */
+export async function markPaneSeen(paneId: string, machineId = "local"): Promise<PaneAttention | null> {
+  return ((await (await sendJson(machinePath(machineId, "pane/seen"), "POST", { pane_id: paneId })).json()) as { attention: PaneAttention | null }).attention;
 }
 
 /** GET /api/agents: the agent kinds herdr can start, for the new-session dialog. */

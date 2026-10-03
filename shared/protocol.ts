@@ -27,8 +27,18 @@ import type { AgentStatus, PaneInfo, SessionSnapshot, TabInfo, WorkspaceInfo } f
 /** Friendly aliases used across the UI. */
 export type HerdrWorkspace = WorkspaceInfo;
 export type HerdrTab = TabInfo;
-/** `background_tasks`: an OmO pane's `task` children still running, counted by the server; absent when none */
-export type HerdrPane = PaneInfo & { background_tasks?: number };
+/**
+ * A pane's read state, kept by the server whose herdr runs the pane (server/attention.ts):
+ * `finished_at` when it last finished (work ended at rest), `seen_at` when someone last opened it
+ * in the web UI, `preview` the first line of that answer. To read: finished after it was last seen.
+ */
+export interface PaneAttention { finished_at: string | null; seen_at: string | null; preview: string | null }
+
+/**
+ * `background_tasks`: an OmO pane's `task` children still running, counted by the server; absent when none.
+ * `attention`: its read state; absent for a pane that never finished while this server watched.
+ */
+export type HerdrPane = PaneInfo & { background_tasks?: number; attention?: PaneAttention };
 
 export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAction, BridgeIdentity, BridgeHealth } from "./machines.ts";
 
@@ -74,6 +84,8 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  POST   /api/pane/close { pane_id }         -> { ok: true } (pane.close RPC; the collector's
  *         session-changed broadcast removes it from every client's sidebar)
  *  POST   /api/pane/rename { pane_id, label } -> { ok: true } (pane.rename; empty label clears it)
+ *  POST   /api/pane/seen   { pane_id }        -> { attention: PaneAttention | null } (the pane was read
+ *         in the web UI; a pane-attention frame tells every device; never moves herdr's focus)
  *  POST   /api/pane/image  { pane_id, content_type, data_base64 } -> { ok: true, path }
  *         pasted image -> file under <pane cwd>/.herdr-web-ui/, path for the prompt
  *  GET    /api/pane/commands?pane_id=   -> { commands: SlashCommand[] } (the agent's slash
@@ -482,7 +494,7 @@ export interface PushPayload {
  *    | keys {pane_id, keys} | resize {pane_id, cols, rows} | role {mode}
  *    | pty-ack {pane_id, stream_id, offset} | secret {id, pane_id, prompt, secret}
  *  Server -> client frames: snapshot | pty-data | pty-exit | pane-geometry | role-ack
- *    | pane-status | pane-exited | session-changed | secret-result | error
+ *    | pane-status | pane-attention | pane-exited | session-changed | secret-result | error
  *
  *  attach {flow_control:"ack"} opts into per-subscription output credit.
  *  pty-data.flow carries a stream_id and cumulative UTF-8 payload offset;
@@ -540,6 +552,8 @@ export type ServerMessage =
   | { type: "secret-result"; id: number; pane_id: string; ok: boolean; code?: string }
   /** agent-status push for ANY pane, attached or not (server-side status collector) */
   | { type: "pane-status"; pane_id: string; agent_status: AgentStatus; /** an OmO pane's running background tasks, when the frame is about one */ background_tasks?: number }
+  /** a pane finished or was read: its new read state, for every device (HerdrPane.attention) */
+  | { type: "pane-attention"; pane_id: string; attention: PaneAttention }
   /** a pane's process exited (pushed even when nobody is attached to it) */
   | { type: "pane-exited"; pane_id: string }
   /** session structure changed (pane created/closed): refetch /api/session */

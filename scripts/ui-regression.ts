@@ -22,6 +22,7 @@ import { checkDefaultView } from "./default-view-regression.ts";
 import { checkAlertBell, checkPushedAlertWhileClosed } from "./alert-bell-regression.ts";
 import { checkDroplet } from "./droplet-regression.ts";
 import { checkComposerReconnect } from "./composer-reconnect-regression.ts";
+import { checkAttentionInbox } from "./attention-regression.ts";
 import { UsageService } from "../server/usage.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-browser-")));
@@ -224,6 +225,7 @@ try {
   await checkPushedAlertWhileClosed(browser, origin);
   await checkDroplet(browser, origin);
   await checkComposerReconnect(browser, origin, paneB);
+  await checkAttentionInbox(browser, origin);
 
   const report = (state: string) => herdrRpc("pane.report_agent", {
     pane_id: paneA, source: "manual", agent: "claude", state,

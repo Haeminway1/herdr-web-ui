@@ -8,7 +8,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { deviceLabel } from "../lib/phone.ts";
 import type { HealthAuth, PairedDevice, PairingCode } from "../../shared/protocol.ts";
 import { QrCode } from "./QrCode.tsx";
-import { currentLocale, t as tt, useT } from "../lib/i18n.ts";
+import { t as tt, timeAgo, useT } from "../lib/i18n.ts";
 
 const POLL_MS = 3000;
 
@@ -30,12 +30,7 @@ export const VIA: Record<NonNullable<HealthAuth["via"]>, string> = {
 };
 
 function lastSeen(value: string | null): string {
-  if (value === null) return tt("never");
-  const minutes = Math.round((Date.now() - Date.parse(value)) / 60_000);
-  if (minutes < 2) return tt("just now");
-  if (minutes < 60) return tt("{n} min ago", { n: minutes });
-  if (minutes < 60 * 48) return tt("{n} h ago", { n: Math.round(minutes / 60) });
-  return new Date(value).toLocaleDateString(currentLocale());
+  return value === null ? tt("never") : timeAgo(value);
 }
 
 /** Settings → Devices: the paired devices, and a code to pair one more. */

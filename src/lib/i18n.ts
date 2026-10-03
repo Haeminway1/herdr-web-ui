@@ -67,6 +67,15 @@ export function t(key: string, vars?: Vars): string {
   return translate(current, key, vars);
 }
 
+/** How long ago an ISO time was, in words: minutes, then hours, then the date. */
+export function timeAgo(value: string, now = Date.now()): string {
+  const minutes = Math.round((now - Date.parse(value)) / 60_000);
+  if (minutes < 2) return t("just now");
+  if (minutes < 60) return t("{n} min ago", { n: minutes });
+  if (minutes < 60 * 48) return t("{n} h ago", { n: Math.round(minutes / 60) });
+  return new Date(value).toLocaleDateString(currentLocale());
+}
+
 export type Translate = (key: string, vars?: Vars) => string;
 
 /** `t` bound to the current language, a new function whenever the language changes. */

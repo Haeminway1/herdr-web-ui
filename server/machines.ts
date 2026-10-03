@@ -120,7 +120,7 @@ export class MachineManager {
     for (const listener of this.listeners) listener(event ?? { type: "machines", machines: this.list() });
   }
   localMessage(message: ServerMessage): void {
-    if (["pane-status", "session-changed", "pane-exited"].includes(message.type)) {
+    if (["pane-status", "pane-attention", "session-changed", "pane-exited"].includes(message.type)) {
       this.localRevision++;
       if (this.localBusy) this.localRefreshQueued = true;
     }
@@ -128,6 +128,7 @@ export class MachineManager {
     if (message.type === "pane-status" && this.local.snapshot) {
       this.local.snapshot = { ...this.local.snapshot, panes: this.local.snapshot.panes.map((p: HerdrPane) => p.pane_id === message.pane_id ? paneAfterStatus(p, message) : p) };
     }
+    if (message.type === "pane-attention" && this.local.snapshot) this.local.snapshot = snapshotWithAttention(this.local.snapshot, message);
     if (message.type === "session-changed" || message.type === "pane-exited") void this.refreshLocal();
   }
   async refreshLocal(): Promise<void> {
@@ -460,12 +461,13 @@ export class MachineManager {
       if (generation !== runtime.generation || this.stopped) return;
       let message: ServerMessage;
       try { message = JSON.parse(String(event.data)); } catch { return; }
-      if (["snapshot", "pane-status", "pane-exited", "session-changed"].includes(message.type)) runtime.snapshotRevision++;
+      if (["snapshot", "pane-status", "pane-attention", "pane-exited", "session-changed"].includes(message.type)) runtime.snapshotRevision++;
       if (message.type === "snapshot") { runtime.machine.snapshot = message.snapshot; this.push.seed(message.snapshot.panes, runtime.machine.id, runtime.machine.name); this.emit(); }
       if (message.type === "pane-status") {
         if (runtime.machine.snapshot) runtime.machine.snapshot = { ...runtime.machine.snapshot, panes: runtime.machine.snapshot.panes.map((p) => p.pane_id === message.pane_id ? paneAfterStatus(p, message) : p) };
         void this.push.onStatus(message.pane_id, message.agent_status, runtime.machine.id).catch(() => {});
       }
+      if (message.type === "pane-attention" && runtime.machine.snapshot) runtime.machine.snapshot = snapshotWithAttention(runtime.machine.snapshot, message);
       if (message.type === "pane-exited") void this.push.onEnded(message.pane_id, runtime.machine.id).catch(() => {});
       this.emit({ type: "machine-message", machine_id: runtime.machine.id, message });
       if (["pane-status", "pane-exited", "session-changed"].includes(message.type)) void this.refresh(runtime).catch((e) => this.lost(runtime, generation, e));
@@ -563,4 +565,9 @@ export function paneAfterStatus(p: HerdrPane, message: Extract<ServerMessage, { 
   const { background_tasks: before, ...pane } = p;
   const tasks = message.background_tasks === undefined ? before : message.background_tasks > 0 ? message.background_tasks : undefined;
   return { ...pane, agent_status: message.agent_status, ...(tasks === undefined ? {} : { background_tasks: tasks }) };
+}
+
+/** A snapshot with one pane's read state replaced (a pane-attention frame). */
+export function snapshotWithAttention(snapshot: SessionSnapshot, message: Extract<ServerMessage, { type: "pane-attention" }>): SessionSnapshot {
+  return { ...snapshot, panes: snapshot.panes.map((p: HerdrPane) => p.pane_id === message.pane_id ? { ...p, attention: message.attention } : p) };
 }

@@ -283,6 +283,14 @@ The Dynamic Island's own colours, the same in every theme.
 
 ### Sidebar roster row and footer
 - Top bar: **New session** only. Search lives in the command palette, not the roster.
+- Above the PCs, what needs the user across every connected PC, each group a `.needs-input`
+  block with heading and count pill, gone when empty: **Needs you** (blocked panes), **To read**
+  (finished after it was last opened, newest first; line two is how long ago, then the answer's
+  first line) and **Working**, folded to its count until opened. Read and idle panes are not
+  listed. Rows are the roster's compact two-line row without row actions, one line each, cut
+  with an ellipsis. Read state lives on the server that runs the pane (`attention.json`), so a
+  pane read on a phone is read on the PC too; opening a pane, or it finishing while open on
+  screen, reads it. herdr's focus is never moved for this.
 - Appearance's **Sidebar grouping** is **By workspace** by default, with numbered, foldable
   workspace headers even for one pane. **By folder** opts into the grouping below.
   The choice applies immediately and persists in the browser's existing Settings record. Workspace
