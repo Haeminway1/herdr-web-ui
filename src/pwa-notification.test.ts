@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 type Selection = { type: string; pane_id: string; machine_id: string };
-type WindowClient = { focused: boolean; postMessage: (data: Selection) => void; focus: () => Promise<void> };
+type WindowClient = { url: string; focused: boolean; postMessage: (data: Selection) => void; focus: () => Promise<void> };
 
 function deferred() {
   let resolve!: () => void;
@@ -22,6 +22,7 @@ function notifications(
   const opened: string[] = [];
   let closed = 0;
   const self = {
+    location: { origin: "https://app.example" },
     addEventListener: (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
     clients: { matchAll, openWindow: async (url: string) => { opened.push(url); return openWindow(url); } },
   };
@@ -37,12 +38,32 @@ function notifications(
   return { click, opened, closed: () => closed };
 }
 
-function client(focus = async () => {}, focused = false) {
+function client(focus = async () => {}, focused = false, url = "https://app.example/") {
   const selected: Selection[] = [];
-  return { focused, focus, selected, postMessage: (data: Selection) => selected.push(data) };
+  return { url, focused, focus, selected, postMessage: (data: Selection) => selected.push(data) };
 }
 
 describe("notification clicks", () => {
+  it("does not deliver an app notification to a focused unrelated same-origin page", async () => {
+    const unrelated = client(undefined, true, "https://app.example/api/health");
+    const app = client();
+    const worker = notifications([unrelated, app]);
+    await worker.click("pane-b", "remote");
+    expect(unrelated.selected).toEqual([]);
+    expect(app.selected.at(-1)).toEqual({ type: "select-pane", pane_id: "pane-b", machine_id: "remote" });
+    expect(worker.opened).toEqual([]);
+  });
+
+  it("opens the exact app target when only unrelated windows exist", async () => {
+    const unrelated = client(undefined, true, "https://app.example/api/health");
+    const foreign = client(undefined, false, "https://other.example/");
+    const worker = notifications([unrelated, foreign]);
+    await worker.click("pane-b", "remote&pc");
+    expect(unrelated.selected).toEqual([]);
+    expect(foreign.selected).toEqual([]);
+    expect(worker.opened).toEqual(["/?machine=remote%26pc&pane=pane-b"]);
+  });
+
   it("selects the pane before a delayed focus and repeats after the page resumes", async () => {
     const pending = deferred();
     const target = client(() => pending.promise);

@@ -167,7 +167,15 @@ self.addEventListener("notificationclick", (event) => {
   latestNotificationSelection = paneId ? { type: "select-pane", pane_id: paneId, machine_id: machineId } : null;
   event.waitUntil(
     (async () => {
-      const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      // includeUncontrolled also lists other same-origin pages (e.g. /api/health).
+      // Only the app shell handles select-pane; focusing another page loses the tap.
+      const windows = (await self.clients.matchAll({ type: "window", includeUncontrolled: true }))
+        .filter((client) => {
+          try {
+            const url = new URL(client.url);
+            return url.origin === self.location.origin && (url.pathname === "/" || url.pathname === "/index.html");
+          } catch { return false; }
+        });
       if (click !== latestNotificationClick) return;
       const url = paneId ? `/?machine=${encodeURIComponent(machineId)}&pane=${encodeURIComponent(paneId)}` : "/";
       const selectLatest = (client) => { if (client && latestNotificationSelection) client.postMessage(latestNotificationSelection); };
