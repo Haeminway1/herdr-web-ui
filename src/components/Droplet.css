@@ -35,7 +35,8 @@ body:has(.droplet[data-island="true"]) .app-header { visibility: hidden; }
   padding: 0;
   border: 0;
   background: var(--droplet-island);
-  box-shadow: 0 8px 24px var(--droplet-shadow);
+  /* An inset stroke travels with the clipped silhouette; the black shadow alone disappears on dark UI. */
+  box-shadow: inset 0 0 0 1px var(--droplet-keyline), 0 8px 24px var(--droplet-shadow);
   color: var(--droplet-title);
   font: inherit;
   text-align: left;

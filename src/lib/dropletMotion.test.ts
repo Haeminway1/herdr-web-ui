@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { GROW_SPRING, HIDE_SPRING, ISLAND_HEIGHT, ISLAND_WIDTH, REVEAL_DELAY, REVEAL_SPRING, SHRINK_DELAY, SHRINK_SPRING, Spring, islandLayout, islandShape, reducedMotionShape } from "./dropletMotion.ts";
+import { EXPANDED_RADIUS, GROW_SPRING, HIDE_SPRING, ISLAND_HEIGHT, ISLAND_WIDTH, REVEAL_DELAY, REVEAL_SPRING, SHRINK_DELAY, SHRINK_SPRING, Spring, islandLayout, islandShape, reducedMotionShape } from "./dropletMotion.ts";
 
 describe("island layout", () => {
   it("keeps the full pill below the native inset and app header", () => {
@@ -36,8 +36,52 @@ describe("island shape", () => {
     const grown = islandShape(1, layout);
     expect(grown.width).toBe(layout.expandedWidth);
     expect(grown.height).toBe(layout.expandedHeight);
+    expect(grown.radius).toBe(EXPANDED_RADIUS);
     expect(grown.top).toBe(rest.top);
     expect(grown.left + grown.width / 2).toBeCloseTo(rest.left + rest.width / 2);
+  });
+  it("grows with distinct width and delayed height phases rather than linearly scaling the pill", () => {
+    const compact = islandShape(0, layout);
+    const expanded = islandShape(1, layout);
+    const early = islandShape(0.25, layout);
+    const middle = islandShape(0.5, layout);
+    const late = islandShape(0.75, layout);
+    const widthProgress = (middle.width - compact.width) / (expanded.width - compact.width);
+    const heightProgress = (middle.height - compact.height) / (expanded.height - compact.height);
+    expect(Math.abs(widthProgress - 0.5)).toBeGreaterThan(0.03);
+    expect(heightProgress).toBeLessThan(widthProgress);
+    expect(early.width).toBeGreaterThan(compact.width);
+    expect(late.width).toBeLessThanOrEqual(expanded.width);
+    expect(early.height).toBeGreaterThanOrEqual(compact.height);
+    expect(late.height).toBeGreaterThan(middle.height);
+    expect(middle.radius).toBeGreaterThan(compact.radius);
+    expect(middle.radius).toBeLessThanOrEqual(Math.min(EXPANDED_RADIUS, middle.height / 2));
+  });
+  it("bounds the spring overshoot and compact return inside the safe viewport", () => {
+    const insetLeft = 18;
+    const insetRight = 24;
+    const viewport = 393;
+    const box = islandLayout(viewport, 59, insetLeft, insetRight, 105, true);
+    const expanded = islandShape(1, box);
+    expect(islandShape(1.04, box).width).toBeGreaterThan(expanded.width);
+    for (const progress of [0, 0.15, 0.4, 0.8, 1, 1.02, 1.04, 1.08, 1.2, 0.8, 0.4, 0]) {
+      const shape = islandShape(progress, box);
+      expect(shape.left).toBeGreaterThanOrEqual(insetLeft);
+      expect(shape.left + shape.width).toBeLessThanOrEqual(viewport - insetRight);
+      expect(shape.top).toBe(box.top);
+      expect(shape.left + shape.width / 2).toBeCloseTo(box.centerX);
+      expect(shape.radius).toBeGreaterThan(0);
+      expect(shape.radius).toBeLessThanOrEqual(shape.height / 2);
+      expect(shape.radius).toBeLessThanOrEqual(EXPANDED_RADIUS);
+    }
+    expect(islandShape(0, box)).toEqual({
+      left: box.centerX - ISLAND_WIDTH / 2,
+      top: box.top,
+      width: ISLAND_WIDTH,
+      height: ISLAND_HEIGHT,
+      radius: ISLAND_HEIGHT / 2,
+      opacity: 0,
+    });
   });
   it("returns to the same center and top through entry and exit, never leaving a second pill", () => {
     const center = layout.centerX;
@@ -65,6 +109,20 @@ describe("island shape", () => {
       }
       expect(reducedMotionShape(-0.2, box).opacity).toBe(0);
       expect(reducedMotionShape(1.2, box).opacity).toBe(1);
+    }
+  });
+  it("samples only opacity during reduced-motion reveal and return", () => {
+    for (const box of [layout, islandLayout(390, 47)]) {
+      const expanded = islandShape(1, box);
+      for (const reveal of [0, 0.1, 0.35, 0.65, 0.9, 1, 0.65, 0.1, 0]) {
+        const shape = reducedMotionShape(reveal, box);
+        expect(shape.opacity).toBeCloseTo(reveal);
+        expect(shape.width).toBe(box.expandedWidth);
+        expect(shape.height).toBe(box.expandedHeight);
+        expect(shape.radius).toBe(expanded.radius);
+        expect(shape.top).toBe(box.top);
+        expect(shape.left + shape.width / 2).toBeCloseTo(box.centerX);
+      }
     }
   });
 });

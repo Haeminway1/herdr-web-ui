@@ -79,11 +79,19 @@ export interface IslandShape {
   opacity: number;
 }
 
-/** The island at `grow` (0 compact, 1 expanded; the spring overshoots past 1 and back). */
+/** The same anchored silhouette on both journeys: broad shoulders open before the lower
+ * edge stretches, then the rounded corners catch up. No independent falling layer exists. */
 export function islandShape(grow: number, layout: IslandLayout): IslandShape {
-  const width = mix(grow, layout.compactWidth, layout.expandedWidth);
-  const height = mix(clamp(grow, 0, 1.08), layout.compactHeight, layout.expandedHeight);
-  const radius = Math.min(mix(clamp(grow, 0, 1), layout.compactHeight / 2, EXPANDED_RADIUS), height / 2);
+  const phase = clamp(grow, 0, 1);
+  const shoulder = 1 - Math.pow(1 - phase, 1.35);
+  const stretch = phase * phase * (3 - 2 * phase);
+  // Keep even the spring's peak inside the safe viewport; the settled dimensions are exact.
+  const bloom = Math.min(Math.max(grow - 1, 0) * 0.4, 0.016);
+  const width = Math.min(mix(shoulder + bloom, layout.compactWidth, layout.expandedWidth),
+    layout.expandedWidth + Math.min(4, (layout.expandedWidth - layout.compactWidth) * 0.016));
+  const height = mix(stretch + Math.min(Math.max(grow - 1, 0), 0.04), layout.compactHeight, layout.expandedHeight);
+  const radius = Math.min(mix(stretch, layout.compactHeight / 2, EXPANDED_RADIUS)
+    + 2 * Math.sin(Math.PI * phase) ** 2, height / 2);
   return {
     left: layout.centerX - width / 2,
     top: layout.top,

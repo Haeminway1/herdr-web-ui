@@ -19,6 +19,8 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#334](https://github.com/devswha/herdr-web-ui/pull/334))
 
 ### Changed
+- On the personal fork, the iPhone in-app island opens with a connected, staggered silhouette
+  and a fine neutral edge that remains visible against the dark app background.
 - In the sidebar's By workspace view, a workspace with one pane keeps its numbered header and
   can be folded, renamed and reordered from that header, just like a workspace with several panes.
   ([#332](https://github.com/devswha/herdr-web-ui/pull/332) by @beomq)

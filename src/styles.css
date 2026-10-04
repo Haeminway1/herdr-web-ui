@@ -144,6 +144,7 @@
 
   /* in-app alert on a phone (components/Droplet.css): the Dynamic Island's own colours, any theme */
   --droplet-island: #000;
+  --droplet-keyline: #66666b;
   --droplet-title: #fff;
   --droplet-message: #98989f;
   --droplet-avatar: rgba(255, 255, 255, 0.14);

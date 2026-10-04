@@ -37,6 +37,21 @@ async function geometry(page: Page) {
   });
 }
 
+async function assertKeyline(page: Page, theme: string): Promise<void> {
+  const { shadow, color, radius, height } = await page.locator(".droplet-card").evaluate((element) => {
+    const style = getComputedStyle(element);
+    const colorProbe = document.createElement("span");
+    colorProbe.style.color = "var(--droplet-keyline)";
+    document.body.append(colorProbe);
+    const color = getComputedStyle(colorProbe).color;
+    colorProbe.remove();
+    return { shadow: style.boxShadow, color, radius: parseFloat(style.borderTopLeftRadius), height: element.getBoundingClientRect().height };
+  });
+  assert.match(shadow, /0px 0px 0px 1px inset(?:,|$)/, `${theme} island has a normal-state inset 1px keyline: ${shadow}`);
+  assert.ok(shadow.includes(color), `${theme} keyline uses the theme color: ${shadow}, ${color}`);
+  assert.ok(radius >= 14 && radius <= height / 2 + 1, `${theme} island retains a rounded capsule/banner silhouette: ${radius}px / ${height}px`);
+}
+
 /**
  * In-app alerts on a phone-sized page: real herdr status changes reach the open app, which
  * drops a card for a pane other than the open one (and none for the open one). A tap opens
@@ -95,9 +110,15 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     assert.ok(start.y >= 9 && start.y <= 14, `island starts at physical camera: ${JSON.stringify(start)}`);
     assert.ok(start.width < 300, `entry starts compact: ${JSON.stringify(start)}`);
     await islandScreenshot(page, "start");
-    await page.waitForTimeout(110);
+    await page.waitForFunction((width) => {
+      const element = document.querySelector(".droplet-card");
+      const current = element?.getBoundingClientRect().width ?? 0;
+      return current > width + 5 && current < 380;
+    }, start.width, { timeout: 1_000, polling: "raf" });
     const middle = await geometry(page);
     assert.ok(middle.width > start.width + 5 && middle.width < 380, `island grows during entry: ${JSON.stringify({ start, middle })}`);
+    assert.ok(middle.y >= 9 && middle.y <= 14 && Math.abs(middle.x + middle.width / 2 - 196.5) <= 1, `intermediate frame stays anchored at camera centre/top: ${JSON.stringify(middle)}`);
+    await assertKeyline(page, "dark intermediate");
     await islandScreenshot(page, "mid");
     assert.match((await card.getAttribute("aria-label")) ?? "", /Needs input/);
     assert.equal(await droplet.getAttribute("data-kind"), "blocked");
@@ -115,6 +136,7 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     assert.ok(header.y + header.height < box.y + box.height, "island expands over header while content clears camera");
     assert.ok(Math.abs(box.x + box.width / 2 - 196.5) <= 1, `card centre ${box.x + box.width / 2}`);
     assert.ok(box.width <= 393 - 24 && box.width > 300, `card width ${box.width}`);
+    await assertKeyline(page, "dark expanded");
     await islandScreenshot(page, "expanded");
     await card.tap();
     await page.locator('.droplet[data-phase="out"]').waitFor({ state: "attached" });
@@ -122,16 +144,46 @@ export async function checkDroplet(browser: Browser, origin: string): Promise<vo
     const exit = await geometry(page);
     assert.ok(exit.width < box.width - 5 && exit.width >= 126, `exit shrinks toward camera: ${JSON.stringify(exit)}`);
     await islandScreenshot(page, "exit");
-    await page.waitForTimeout(220);
-    if (await card.count()) {
-      const compact = await geometry(page);
-      assert.ok(compact.width < exit.width && compact.y >= 9 && compact.y <= 14, `exit returns to camera: ${JSON.stringify(compact)}`);
-      await islandScreenshot(page, "compact");
-    }
+    await page.waitForFunction(() => {
+      const width = document.querySelector(".droplet-card")?.getBoundingClientRect().width;
+      return width !== undefined && width <= 160;
+    }, null, { timeout: 800, polling: "raf" });
+    const compact = await geometry(page);
+    assert.ok(compact.width < exit.width && compact.y >= 9 && compact.y <= 14, `exit returns to camera: ${JSON.stringify(compact)}`);
+    await islandScreenshot(page, "compact");
     await droplet.waitFor({ state: "detached" });
     await page.locator(`.pane-select[title^="${otherPane} —"][aria-current="true"]`).waitFor({ state: "attached", timeout: 5_000 });
     assert.equal(await selected(), otherPane, "a tap opens the pane it is about");
     console.log("PASS an in-app alert drops in for another pane, and a tap opens it");
+
+    const light = await browser.newContext({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true, locale: "en-US", userAgent: iphoneUA });
+    try {
+      await islandFixture(light);
+      await light.addInitScript(() => {
+        localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertDone: "off", theme: "light" }));
+      });
+      const lightPage = await light.newPage();
+      lightPage.on("pageerror", (error) => errors.push(error.message));
+      await lightPage.goto(`${origin}/?pane=${encodeURIComponent(openPane)}`);
+      await lightPage.locator(".conn-live").waitFor();
+      await report(otherPane, "idle");
+      await lightPage.bringToFront();
+      await report(otherPane, "working");
+      await lightPage.locator(`.pane-item:has(.pane-select[title^="${otherPane} —"]) [data-status="working"]`).first().waitFor({ state: "attached" });
+      await report(otherPane, "blocked");
+      await lightPage.locator(".droplet-card").waitFor({ state: "visible" });
+      await lightPage.waitForFunction(() => {
+        const card = document.querySelector(".droplet-card");
+        const body = document.querySelector(".droplet-body");
+        return (card?.getBoundingClientRect().width ?? 0) > 360
+          && Number(getComputedStyle(body!).opacity) > 0.95;
+      });
+      assert.equal(await lightPage.locator("html").getAttribute("data-theme"), "light");
+      await assertKeyline(lightPage, "light expanded");
+      await islandScreenshot(lightPage, "light-expanded");
+    } finally {
+      await light.close();
+    }
 
     // a flick up puts it away, and opens nothing
     await report(openPane, "idle");
