@@ -291,6 +291,8 @@ export function DashboardUsage() {
   const { settings } = useSettings();
   const { report, loading, error, refresh } = useUsage(settings.dashboardSidebar);
   const [now, setNow] = useState(() => Date.now());
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailId = useId();
   useEffect(() => {
     if (!settings.dashboardSidebar) return;
     const tick = setInterval(() => setNow(Date.now()), 30_000);
@@ -299,35 +301,42 @@ export function DashboardUsage() {
 
   if (!settings.dashboardSidebar) return null;
   const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
+  const primary = shown.filter((usage, index) => shown.findIndex((other) => other.id === usage.id) === index);
   const count = settings.usageCount;
   return (
     <section className="dashboard-usage" aria-label={t("Subscription usage")}>
       <header className="dashboard-usage-head">
         <span>{t("Subscription usage")}</span>
-        <button type="button" className="icon-button" aria-label={t("Refresh")} title={t("Refresh")} aria-busy={loading} onClick={() => { if (!loading) refresh(); }}>
-          <RefreshCw aria-hidden="true" className={loading ? "is-spinning" : undefined} />
+        <button type="button" className="dashboard-usage-toggle" aria-expanded={detailsOpen} aria-controls={detailId} onClick={() => setDetailsOpen(!detailsOpen)}>
+          {t("Details")} <ChevronDown aria-hidden="true" />
         </button>
       </header>
       {shown.length === 0 && <p className="dashboard-usage-empty">{!report ? (loading ? t("Loading") : error ? t("Usage unavailable") : t("Loading")) : report.providers.length ? t("All accounts hidden") : t("No limits reported")}</p>}
       {error && shown.length > 0 && <p className="dashboard-usage-empty">{t("Usage unavailable")} · {t("Last known values")}</p>}
-      {shown.map((usage) => {
+      {primary.map((usage) => {
         const window = glanceWindow(usage, settings.usageGlance);
-        const reset = window ? formatResetShort(window.resets_at, now) : null;
+        const reset = window ? formatResetIn(window.resets_at, now) : null;
         const problem = problemText(t, usage);
+        const extra = shown.filter((other) => other.id === usage.id).length - 1;
         return (
-          <details key={usage.key} className="dashboard-usage-account">
-            <summary className="dashboard-usage-summary">
+          <div key={usage.key} className="dashboard-usage-account" title={usageName(usage)}>
+            <div className="dashboard-usage-summary">
               <AgentMark agent={PROVIDER_MARK[usage.id]} size={16} />
-              <span className="dashboard-usage-name" title={usageName(usage)}>{usageName(usage)}</span>
+              <span className="dashboard-usage-name">{PROVIDER_NAME[usage.id]}{extra > 0 && <span className="dashboard-usage-extra" title={shown.filter((other) => other.id === usage.id).map(usageName).join("; ")}> +{extra}</span>}</span>
               <span className="dashboard-usage-percent">{window ? meterText(window, count) : "—"}</span>
-              {window && <span className={`dashboard-usage-bar is-left-${leftLevel(window)}`} role="meter" aria-label={windowLabel(window)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={meterPercent(window, count)} aria-valuetext={meterText(window, count)}><span style={{ width: `${meterPercent(window, count)}%` }} /></span>}
-              {window && <span className="dashboard-usage-window">{windowLabel(window)}{reset ? ` · ${reset}` : ""}</span>}
-              {problem && <span className={`dashboard-usage-problem${isError(usage) ? " is-problem" : ""}`}>{problem}</span>}
-            </summary>
-            <Provider usage={usage} now={now} count={count} />
-          </details>
+              <span className={`dashboard-usage-bar${window ? ` is-left-${leftLevel(window)}` : ""}`} role={window ? "meter" : undefined} aria-label={window ? `${usageName(usage)} · ${windowLabel(window)}` : undefined} aria-valuemin={window ? 0 : undefined} aria-valuemax={window ? 100 : undefined} aria-valuenow={window ? meterPercent(window, count) : undefined} aria-valuetext={window ? meterText(window, count) : undefined}><span style={{ width: window ? `${meterPercent(window, count)}%` : 0 }} /></span>
+              <span className="dashboard-usage-window" title={reset ? t("Resets in {time}", { time: reset }) : undefined}>{reset ? t("Resets in {time}", { time: reset }) : window ? windowLabel(window) : ""}</span>
+            </div>
+            {problem && <span className={`dashboard-usage-problem${isError(usage) ? " is-problem" : ""}`}>{problem}</span>}
+          </div>
         );
       })}
+      {detailsOpen && <div id={detailId} className="dashboard-usage-details">
+        <button type="button" className="icon-button" aria-label={t("Refresh")} title={t("Refresh")} aria-busy={loading} onClick={() => { if (!loading) refresh(); }}>
+          <RefreshCw aria-hidden="true" className={loading ? "is-spinning" : undefined} />
+        </button>
+        {shown.map((usage) => <Provider key={usage.key} usage={usage} now={now} count={count} />)}
+      </div>}
     </section>
   );
 }
