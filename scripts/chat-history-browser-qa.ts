@@ -211,6 +211,29 @@ try {
   assert.deepEqual(await page.evaluate(() => window.qa.frames.filter((frame) => frame.pane === "conversation of a" && frame.text.includes("AFTER FALLBACK A TURN"))), [], "new agent session on the same pane cannot paint the old session");
   await newSession.reply(200, { source: "omp-transcript", history_id: "new-session", cursor: null, turns: [user("NEW SESSION A TURN")] });
   await page.getByText("NEW SESSION A TURN", { exact: true }).waitFor();
+  hold.add("local:b");
+  await page.evaluate(() => window.qa.chat("b", "local", "devin", "devin-session"));
+  const devin = await waitHeld("local:b");
+  await assertLoadingOnly("NEW SESSION A TURN");
+  await devin.reply(200, { source: "devin-transcript", history_id: "devin-session", cursor: null, turns: [
+    user("Synthetic Devin prompt"),
+    { role: "assistant", ts: null, parts: [
+      { kind: "tool", name: "synthetic_tool", summary: "synthetic_tool", input: "{}", output: "synthetic result" },
+      { kind: "text", text: "Synthetic Devin answer" },
+    ] },
+  ] });
+  await page.getByText("Synthetic Devin prompt", { exact: true }).waitFor();
+  await page.getByText("Synthetic Devin answer", { exact: true }).waitFor();
+  assert.equal(await page.locator(".work-row-name").filter({ hasText: "synthetic_tool" }).count(), 1);
+  assert.equal(await page.getByText("NEW SESSION A TURN", { exact: true }).count(), 0);
+  hold.add("local:a");
+  await page.evaluate(() => window.qa.chat("a", "local", "claude", "claude-session"));
+  const claude = await waitHeld("local:a");
+  await assertLoadingOnly("Synthetic Devin answer");
+  await claude.reply(200, { source: "claude-transcript", history_id: "claude-session", cursor: null, turns: [user("Synthetic Claude prompt")] });
+  await page.getByText("Synthetic Claude prompt", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Synthetic Devin answer", { exact: true }).count(), 0);
+  console.log("PASS Devin bubbles and tools render; switching to Claude clears Devin history");
   console.log("PASS rapid A→B→A, same-pane machine/session switch, stale error, delayed scrollback and genuine unavailable error");
   assert.deepEqual(errors, []);
   console.log("PASS reused tool ids after clear, machine switch and unmount cancellation; no browser errors");

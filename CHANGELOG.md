@@ -8,6 +8,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
+- On the personal fork, Devin CLI panes with an unambiguous native session show the
+  active conversation branch and tool activity in Chat from the read-only SQLite store.
+  Ambiguous same-directory sessions are not guessed; Terminal remains available.
 - Native Windows x64 installation through `install.ps1`, with the same herdr plugin startup
   and updates. Windows needs Bun and Git, without Node or WSL, and keeps using the terminal
   screen mirror. ([#330](https://github.com/devswha/herdr-web-ui/pull/330) by @JJLiebig)
