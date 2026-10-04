@@ -1,7 +1,7 @@
 {
   "name": "herdr-web-ui",
   "private": true,
-  "version": "0.3.4315",
+  "version": "0.3.4316",
   "type": "module",
   "description": "Browser version of the herdr terminal - live herdr workspaces, panes and agents in a web UI",
   "license": "MIT",

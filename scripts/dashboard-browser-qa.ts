@@ -137,9 +137,13 @@ try {
     assert.ok(await page.locator(".dashboard-usage").getByText("Account 1").count() > 0);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const switches = page.locator(".usage-accounts-visibility");
-    const total = await switches.count();
-    for (let index = 0; index < total; index++) {
-      if (await switches.nth(index).getAttribute("aria-checked") === "true") await switches.nth(index).click();
+    const names = await switches.evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label")!));
+    for (const name of names) {
+      const toggle = page.getByRole("switch", { name, exact: true });
+      if (await toggle.getAttribute("aria-checked") === "true") {
+        await toggle.click();
+        await page.waitForFunction((label) => document.querySelector(`.usage-accounts-visibility[aria-label="${label}"]`)?.getAttribute("aria-checked") === "false", name);
+      }
     }
     assert.equal(await page.locator('.usage-accounts-visibility[aria-checked="true"]').count(), 0, "all account visibility switches must be off");
     await page.getByRole("button", { name: "Close settings" }).click();
@@ -147,10 +151,14 @@ try {
     assert.equal(await page.locator(".dashboard-usage-empty").innerText(), "All accounts hidden", JSON.stringify(await page.evaluate(() => ({ settings: localStorage.getItem("herdr-web-ui:settings"), usage: document.querySelector(".dashboard-usage")?.textContent }))));
     assert.equal(await page.locator(".dashboard-usage-account").count(), 0);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    for (let index = 0; index < total; index++) await switches.nth(index).click();
+    for (const name of names) {
+      const toggle = page.getByRole("switch", { name, exact: true });
+      await toggle.click();
+      await page.waitForFunction((label) => document.querySelector(`.usage-accounts-visibility[aria-label="${label}"]`)?.getAttribute("aria-checked") === "true", name);
+    }
     await page.getByRole("button", { name: "Close settings" }).click();
     await page.locator(".dashboard-usage-account").first().waitFor();
-    results.hiddenUsage = { hiddenProviderExcluded: true, allHiddenMessage: true, accountsRestored: total };
+    results.hiddenUsage = { hiddenProviderExcluded: true, allHiddenMessage: true, accountsRestored: names.length };
   });
   if (process.env.DASHBOARD_REPRO !== "machine" && process.env.DASHBOARD_REPRO !== "usage") await act("show restore errors on single, mixed and offline cards without blocking selection", async () => {
     assert.ok((await cards.first().locator(".dashboard-card-meta").innerText()).includes("NOT RESTORED"));
