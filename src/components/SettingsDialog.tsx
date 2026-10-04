@@ -221,6 +221,10 @@ export function SettingsDialog({ open, onClose, updates, auth, onEnableNotificat
           <section className="settings-section">
             <h3>{t("Appearance")}</h3>
             <div className="settings-row">
+              <div><span className="settings-label">{t("Project dashboard sidebar")}</span><span className="settings-description">{t("Show usage, attention, and project cards in the sidebar")}</span></div>
+              <Toggle label={t("Project dashboard sidebar")} checked={settings.dashboardSidebar} onChange={(dashboardSidebar) => update({ dashboardSidebar })} />
+            </div>
+            <div className="settings-row">
               <div><span className="settings-label">{t("Theme")}</span><span className="settings-description">{t("Choose the app color scheme")}</span></div>
               <div className="segmented" aria-label={t("Theme")}>
                 {(["dark", "light", "system"] as const).map((theme, index) => (

@@ -285,6 +285,53 @@ export function UsagePanel() {
   );
 }
 
+/** A compact dashboard summary; the dashboard opt-in independently authorizes usage fetching. */
+export function DashboardUsage() {
+  const t = useT();
+  const { settings } = useSettings();
+  const { report, loading, error, refresh } = useUsage(settings.dashboardSidebar);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!settings.dashboardSidebar) return;
+    const tick = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(tick);
+  }, [settings.dashboardSidebar]);
+
+  if (!settings.dashboardSidebar) return null;
+  const shown = report ? orderProviders(report.providers, settings.usageOrder) : [];
+  const count = settings.usageCount;
+  return (
+    <section className="dashboard-usage" aria-label={t("Subscription usage")}>
+      <header className="dashboard-usage-head">
+        <span>{t("Subscription usage")}</span>
+        <button type="button" className="icon-button" aria-label={t("Refresh")} title={t("Refresh")} aria-busy={loading} onClick={() => { if (!loading) refresh(); }}>
+          <RefreshCw aria-hidden="true" className={loading ? "is-spinning" : undefined} />
+        </button>
+      </header>
+      {shown.length === 0 && <p className="dashboard-usage-empty">{!report ? (loading ? t("Loading") : error ? t("Usage unavailable") : t("Loading")) : t("No limits reported")}</p>}
+      {error && shown.length > 0 && <p className="dashboard-usage-empty">{t("Usage unavailable")} · {t("Last known values")}</p>}
+      {shown.map((usage) => {
+        const window = glanceWindow(usage, settings.usageGlance);
+        const reset = window ? formatResetShort(window.resets_at, now) : null;
+        const problem = problemText(t, usage);
+        return (
+          <details key={usage.key} className="dashboard-usage-account">
+            <summary className="dashboard-usage-summary">
+              <AgentMark agent={PROVIDER_MARK[usage.id]} size={16} />
+              <span className="dashboard-usage-name" title={usageName(usage)}>{usageName(usage)}</span>
+              <span className="dashboard-usage-percent">{window ? meterText(window, count) : "—"}</span>
+              {window && <span className={`dashboard-usage-bar is-left-${leftLevel(window)}`} role="meter" aria-label={windowLabel(window)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={meterPercent(window, count)} aria-valuetext={meterText(window, count)}><span style={{ width: `${meterPercent(window, count)}%` }} /></span>}
+              {window && <span className="dashboard-usage-window">{windowLabel(window)}{reset ? ` · ${reset}` : ""}</span>}
+              {problem && <span className={`dashboard-usage-problem${isError(usage) ? " is-problem" : ""}`}>{problem}</span>}
+            </summary>
+            <Provider usage={usage} now={now} count={count} />
+          </details>
+        );
+      })}
+    </section>
+  );
+}
+
 /** The top panel's view: 0 one line of percents, 1 the rows, 2 the rows and every limit. */
 type PanelLevel = 0 | 1 | 2;
 const PANEL_LEVEL_KEY = "herdr-web-ui:usage-panel-level";

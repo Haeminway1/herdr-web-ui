@@ -28,6 +28,14 @@ it("defaults legacy records to workspace grouping and accepts only supported mod
   }
 });
 
+it("never enables the dashboard for new, legacy, or malformed preferences", () => {
+  expect(DEFAULT_SETTINGS.dashboardSidebar).toBe(false);
+  expect(sanitizeSettings({ theme: "dark" }).dashboardSidebar).toBe(false);
+  expect(sanitizeSettings({ dashboardSidebar: "true" }).dashboardSidebar).toBe(false);
+  expect(sanitizeSettings({ dashboardSidebar: true }).dashboardSidebar).toBe(true);
+  expect(sanitizeSettings({ dashboardSidebar: false }).dashboardSidebar).toBe(false);
+});
+
 describe("chat font size", () => {
   it("follows the density until one is chosen, and keeps a chosen one within bounds", () => {
     expect(chatFontSize(DEFAULT_SETTINGS)).toBe(14);

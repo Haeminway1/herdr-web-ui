@@ -1,0 +1,50 @@
+.is-dashboard .dashboard-list { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.is-dashboard .dashboard-attention { flex: none; max-height: min(47%, 185px); overflow-y: auto; padding: 0 var(--space-3) var(--space-2); border-bottom: 1px solid var(--border); }
+.is-dashboard .dashboard-attention h2 { margin: var(--space-1) 0; font-size: var(--fs-sm); }
+.is-dashboard .dashboard-projects > h2 { margin: var(--space-2) 0; font-size: var(--fs-sm); }
+.is-dashboard .dashboard-attention h3 { margin: 0; font-size: var(--fs-xs); }
+.is-dashboard .dashboard-attention h3 button { display: flex; align-items: center; gap: var(--space-1); width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.is-dashboard .dashboard-attention h3 button svg { width: 14px; height: 14px; margin-left: auto; }
+.is-dashboard .dashboard-attention ul, .is-dashboard .dashboard-panes { margin: 0; padding: 0; list-style: none; }
+.is-dashboard .dashboard-attention li button { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 36px; padding: 2px var(--space-1); border: 0; border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--text); text-align: left; cursor: pointer; }
+.is-dashboard .dashboard-attention li button.is-selected { border-left: 3px solid var(--accent); }
+.is-dashboard .dashboard-attention li button > span { display: grid; flex: 1; min-width: 0; }
+.is-dashboard .dashboard-attention li button strong, .is-dashboard .dashboard-attention li button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-dashboard .dashboard-attention li button small { color: var(--text-dim); }
+.is-dashboard .dashboard-attention li button > svg:last-child { width: 14px; height: 14px; }
+.is-dashboard .dashboard-projects { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--space-3) var(--space-3); }
+.is-dashboard .dashboard-projects nav { display: grid; gap: var(--space-2); }
+.is-dashboard .dashboard-machine { min-width: 0; }
+.is-dashboard .dashboard-machine > header { display: flex; align-items: center; gap: var(--space-1); min-height: 24px; font-size: var(--fs-xs); }
+.is-dashboard .dashboard-machine > header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-dashboard .dashboard-machine-state { margin-left: auto; color: var(--text-dim); }
+.is-dashboard .dashboard-machine > .machine-group { border: 0; padding: 0; }
+.is-dashboard .dashboard-machine > .machine-group > .btn { min-height: 28px; font-size: var(--fs-xs); }
+.is-dashboard .dashboard-machine .machine-state { padding: var(--space-1) 0; }
+.is-dashboard .dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+.is-dashboard .dashboard-card { position: relative; min-width: 0; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); }
+.is-dashboard .dashboard-card.is-selected { border-left: 3px solid var(--accent); }
+.is-dashboard .dashboard-card.is-offline { opacity: .7; }
+.is-dashboard .dashboard-card-top { display: flex; align-items: start; min-width: 0; }
+.is-dashboard .dashboard-card-main { flex: 1; min-width: 0; min-height: 32px; padding: 0; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.is-dashboard .dashboard-card-main:disabled { cursor: default; }
+.is-dashboard .dashboard-card-main strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font-size: var(--fs-sm); line-height: var(--lh-tight); }
+.is-dashboard .dashboard-card-menu { flex: none; }
+.is-dashboard .dashboard-card-menu summary { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); color: var(--text-dim); cursor: pointer; list-style: none; }
+.is-dashboard .dashboard-card-menu summary::-webkit-details-marker { display: none; }
+.is-dashboard .dashboard-card-menu summary svg { width: 16px; height: 16px; }
+.is-dashboard .dashboard-card-menu-items { position: absolute; z-index: 5; top: 28px; right: 0; width: max-content; max-width: min(260px, 90vw); max-height: 220px; overflow-y: auto; padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); box-shadow: 0 8px 20px #0008; }
+.is-dashboard .dashboard-card-menu-items button { display: block; width: 100%; padding: var(--space-2); border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.is-dashboard .dashboard-card-meta { display: flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
+.is-dashboard .dashboard-card-meta svg { flex: none; width: 15px; height: 15px; }
+.is-dashboard .dashboard-card-meta > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+.is-dashboard .dashboard-unread, .is-dashboard .dashboard-card .is-armed { color: var(--status-blocked); }
+.is-dashboard .dashboard-card button:hover, .is-dashboard .dashboard-card summary:hover, .is-dashboard .dashboard-attention button:hover { background: var(--bg-hover); }
+.is-dashboard .dashboard-card button:focus-visible, .is-dashboard .dashboard-card summary:focus-visible, .is-dashboard .dashboard-attention button:focus-visible { outline: 2px solid var(--text-strong); outline-offset: 1px; }
+.is-dashboard .dashboard-panes { margin-top: var(--space-2); border-top: 1px solid var(--border); }
+.is-dashboard .dashboard-panes li { display: flex; flex-wrap: wrap; min-width: 0; }
+.is-dashboard .dashboard-panes li > button { display: flex; align-items: center; gap: var(--space-1); width: 100%; min-width: 0; min-height: 32px; padding: var(--space-1); border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.is-dashboard .dashboard-panes li > button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-dashboard .dashboard-panes small { color: var(--text-dim); }
+.is-dashboard .dashboard-card input, .is-dashboard .dashboard-panes input { width: 100%; min-width: 0; }
+@media (max-width: 320px) { .is-dashboard .dashboard-grid { grid-template-columns: minmax(0, 1fr); } }

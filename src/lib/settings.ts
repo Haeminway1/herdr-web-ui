@@ -37,6 +37,8 @@ export interface Settings {
   density: Density;
   /** The sidebar's display grouping; workspaces themselves remain independent. */
   sidebarGrouping: SidebarGrouping;
+  /** Opt-in project dashboard in the sidebar. */
+  dashboardSidebar: boolean;
   /** the chrome color family, keyed as data-palette in src/styles.css */
   palette: Palette;
   /** Claude panes: the Anthropic logo, or the Claude Code mascot */
@@ -99,6 +101,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   density: "comfortable",
   sidebarGrouping: "workspace",
+  dashboardSidebar: false,
   palette: "report", // fork deployment: the report look by default, as before v0.3.4101
   claudeMark: "logo",
   codexMark: "logo",
@@ -185,6 +188,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     theme: theme === "dark" || theme === "light" || theme === "system" ? theme : DEFAULT_SETTINGS.theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarGrouping: record["sidebarGrouping"] === "workspace" || record["sidebarGrouping"] === "directory" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
+    dashboardSidebar: typeof record["dashboardSidebar"] === "boolean" ? record["dashboardSidebar"] : DEFAULT_SETTINGS.dashboardSidebar,
     claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
     codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,
     palette: record["palette"] === "amber" || record["palette"] === "report" || record["palette"] === "charcoal" ? record["palette"] : DEFAULT_SETTINGS.palette,

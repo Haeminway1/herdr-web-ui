@@ -11,6 +11,9 @@ import { AttentionInbox } from "./NeedsInput.tsx";
 import { UsageMeters, UsagePanel } from "./UsageMeters.tsx";
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
+import { useSettings } from "../lib/settings.ts";
+import { DashboardSidebar } from "./DashboardSidebar.tsx";
+import { DashboardUsage } from "./UsageMeters.tsx";
 
 declare const __APP_VERSION__: string;
 
@@ -26,21 +29,22 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
 interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId: string | null; actions: AppActions; version: string | null; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onAdd(): void; onSetup(machine: Machine, update?: boolean): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
+  const { settings } = useSettings();
   const { canInstall, installed, install, help } = useInstallPrompt();
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
   // the new session opens on the selected PC, the same one Mod+Shift+N uses
   const target = props.machines.find((machine) => machine.id === props.selectedMachineId);
-  return <div className="sidebar-shell">
+  return <div className={`sidebar-shell${settings.dashboardSidebar ? " is-dashboard" : ""}`}>
     <div className="sidebar-topbar sidebar-topbar-row">
       <button className="btn sidebar-new-session" disabled={target !== undefined && target.state !== "connected"} title={target ? t("New session on {name}", { name: target.name }) : t("New session")} onClick={props.actions.openNewSession}><Plus aria-hidden="true" />{t("New session")}</button>
       <button className="btn btn-ghost sidebar-add-pc" onClick={props.onAdd}><Monitor aria-hidden="true" />{t("Add PC")}</button>
     </div>
-    <UsagePanel />
-    <div className="machine-list" aria-label={t("PCs and workspaces")}>
+    {settings.dashboardSidebar ? <DashboardUsage /> : <UsagePanel />}
+    {settings.dashboardSidebar ? <DashboardSidebar {...props} renderMachineControls={(machine) => <MachineGroup {...props} machine={machine} dashboard />} /> : <div className="machine-list" aria-label={t("PCs and workspaces")}>
       <AttentionInbox machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} onSelect={props.onSelect} />
       {props.machines.map((machine) => <MachineGroup key={machine.id} {...props} machine={machine} />)}
       {!props.machines.length && <p className="tree-state" role="status">{t("Loading PCs…")}</p>}
-    </div>
+    </div>}
     <footer className="sidebar-footer">
       {/* browsers without an install prompt (iOS, plain HTTP) get the steps instead */}
       {!installed && <button className="btn btn-ghost sidebar-footer-action" aria-expanded={canInstall ? undefined : installHelpOpen} onClick={() => { if (canInstall) void install(); else setInstallHelpOpen(!installHelpOpen); }}><Download aria-hidden="true" />{t("Install app")}</button>}
@@ -57,7 +61,7 @@ export function MachineSidebar(props: Props) {
   </div>;
 }
 
-function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
+function MachineGroup({ machine, dashboard = false, ...props }: Props & { machine: Machine; dashboard?: boolean }) {
   const t = useT();
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(`herdr-web-ui:pc-collapsed:${machine.id}`) === "1"; } catch { return false; } });
   const [editing, setEditing] = useState(false);
@@ -75,7 +79,7 @@ function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
     try { localStorage.setItem(`herdr-web-ui:pc-collapsed:${machine.id}`, collapsed ? "0" : "1"); } catch {}
   };
   return <section className={`machine-group${props.selectedMachineId === machine.id ? " is-current" : ""}`} aria-label={t("PC {name}", { name: machine.name })}>
-    <header className="machine-header">
+    {!dashboard && <header className="machine-header">
       <button className="machine-toggle" aria-expanded={!collapsed} onClick={toggle}>
         {collapsed ? <ChevronRight className="machine-caret" aria-hidden="true" /> : <ChevronDown className="machine-caret" aria-hidden="true" />}
         <Monitor className="machine-icon" aria-hidden="true" />
@@ -86,9 +90,10 @@ function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
       </button>
       <button className="sidebar-row-action" disabled={!online} aria-label={t("New session on {name}", { name: machine.name })} title={t("New session")} onClick={() => props.onNew(machine.id)}><Plus aria-hidden="true" /></button>
       {machine.kind === "ssh" && <button className="sidebar-row-action" aria-label={t("Manage {name}", { name: machine.name })} title={t("Manage PC")} aria-expanded={editing} onClick={() => { setEditing(!editing); setConfirmDelete(false); }}><SlidersHorizontal aria-hidden="true" /></button>}
-    </header>
+    </header>}
+    {dashboard && machine.kind === "ssh" && <button type="button" className="btn btn-ghost" aria-label={t("Manage {name}", { name: machine.name })} aria-expanded={editing} onClick={() => { setEditing(!editing); setConfirmDelete(false); }}>{t("Manage PC")}</button>}
     {/* connected is the norm and says nothing new; every other state is spelled out */}
-    {machine.action_required || machine.updating ? <MachineActionNotice machine={machine} onSetup={props.onSetup} /> : <p className={`machine-state is-${machine.state}${online ? " visually-hidden" : ""}`} role="status" title={machine.error ?? undefined}>
+    {machine.action_required || machine.updating ? <MachineActionNotice machine={machine} onSetup={props.onSetup} /> : (!dashboard || machine.error) && <p className={`machine-state is-${machine.state}${online ? " visually-hidden" : ""}`} role="status" title={machine.error ?? undefined}>
       <span className="machine-state-word">{STATE_WORD[machine.state]}</span>
       {machine.error && <span className="machine-state-detail">{machine.error}</span>}
     </p>}
@@ -98,7 +103,7 @@ function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
       {confirmDelete && <p className="field-hint">{t("Removes this registration. Remote sessions keep running.")}</p>}
     </div>}
     {error && <p className="machine-error" role="alert">{error}</p>}
-    {!collapsed && <div className={online ? "" : "machine-offline"} {...(!online ? { inert: "" } : {})}>
+    {!dashboard && !collapsed && <div className={online ? "" : "machine-offline"} {...(!online ? { inert: "" } : {})}>
       {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}><Sidebar embedded snapshot={machine.snapshot} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} version={null} /></MachineContext.Provider>}
     </div>}
   </section>;

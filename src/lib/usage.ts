@@ -141,6 +141,7 @@ export function moveInOrder(shown: readonly string[], saved: readonly string[], 
 export function useUsage(enabled: boolean) {
   const [report, setReport] = useState<UsageReport | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
   const visible = usePageVisible();
   const generation = useRef(0);
 
@@ -149,13 +150,16 @@ export function useUsage(enabled: boolean) {
     setLoading(true);
     try {
       const next = await fetchUsage(refresh);
-      if (current === generation.current) setReport((previous) => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
-    } catch { /* offline or restarting: the last report stays */ }
+      if (current === generation.current) {
+        setError(false);
+        setReport((previous) => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
+      }
+    } catch { if (current === generation.current) setError(true); /* offline or restarting: the last report stays */ }
     finally { if (current === generation.current) setLoading(false); }
   }, []);
 
   useEffect(() => {
-    if (!enabled) { generation.current++; setReport(null); setLoading(false); return; }
+    if (!enabled) { generation.current++; setReport(null); setLoading(false); setError(false); return; }
     if (!visible) return;
     void load(false);
     const timer = setInterval(() => void load(false), POLL_MS);
@@ -163,5 +167,5 @@ export function useUsage(enabled: boolean) {
   }, [enabled, visible, load]);
 
   const refresh = useCallback(() => void load(true), [load]);
-  return { report, loading, refresh };
+  return { report, loading, error, refresh };
 }
