@@ -687,6 +687,7 @@ export const ZH: Record<string, string> = {
   "{d}d {h}h": "{d} 天 {h} 小时",
   "Resets in {time}": "{time}后重置",
   "No limits reported": "未报告限额",
+  "All accounts hidden": "已隐藏所有账户",
   "Usage unavailable": "无法获取用量",
   "Last known values": "上次读取的数值",
   "Sign-in expired. Open {name} to renew it.": "登录已过期。请打开 {name} 续期。",

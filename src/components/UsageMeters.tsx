@@ -298,7 +298,7 @@ export function DashboardUsage() {
   }, [settings.dashboardSidebar]);
 
   if (!settings.dashboardSidebar) return null;
-  const shown = report ? orderProviders(report.providers, settings.usageOrder) : [];
+  const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
   const count = settings.usageCount;
   return (
     <section className="dashboard-usage" aria-label={t("Subscription usage")}>
@@ -308,7 +308,7 @@ export function DashboardUsage() {
           <RefreshCw aria-hidden="true" className={loading ? "is-spinning" : undefined} />
         </button>
       </header>
-      {shown.length === 0 && <p className="dashboard-usage-empty">{!report ? (loading ? t("Loading") : error ? t("Usage unavailable") : t("Loading")) : t("No limits reported")}</p>}
+      {shown.length === 0 && <p className="dashboard-usage-empty">{!report ? (loading ? t("Loading") : error ? t("Usage unavailable") : t("Loading")) : report.providers.length ? t("All accounts hidden") : t("No limits reported")}</p>}
       {error && shown.length > 0 && <p className="dashboard-usage-empty">{t("Usage unavailable")} · {t("Last known values")}</p>}
       {shown.map((usage) => {
         const window = glanceWindow(usage, settings.usageGlance);

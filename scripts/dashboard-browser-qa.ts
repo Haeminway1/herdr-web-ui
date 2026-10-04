@@ -52,6 +52,7 @@ try {
     second.label = "Second pane";
     second.title = "Second pane";
     second.agent_status = "idle";
+    second.restore_error = "Could not restore second pane";
     local.snapshot.panes.push(second);
     local.snapshot.workspaces[0].pane_count = 2;
     const offline = structuredClone(local);
@@ -61,6 +62,18 @@ try {
     offline.state = "disconnected";
     offline.snapshot = structuredClone(local.snapshot);
     machines.push(offline);
+    const emptyLocal = structuredClone(local);
+    emptyLocal.id = "empty-local";
+    emptyLocal.name = "Empty local PC";
+    emptyLocal.snapshot = { ...structuredClone(local.snapshot), workspaces: [], panes: [], focused_workspace_id: null, focused_pane_id: null };
+    machines.push(emptyLocal);
+    const emptyRemote = structuredClone(emptyLocal);
+    emptyRemote.id = "empty-remote";
+    emptyRemote.name = "Empty remote PC";
+    emptyRemote.kind = "ssh";
+    machines.push(emptyRemote);
+    panes[1].restore_error = "Could not restore single pane";
+    offline.snapshot.panes[0].restore_error = "Cached restore error";
   })();\n` });
   await context.addInitScript(() => {
     if (!localStorage.getItem("herdr-web-ui:settings")) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", dashboardSidebar: false }));
@@ -92,6 +105,70 @@ try {
   const settings = await page.evaluate(() => JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}"));
   assert.equal(settings.dashboardSidebar, true);
   results.initial = { cards: await cards.count(), selectedBefore, settings: settings.dashboardSidebar };
+  if (process.env.DASHBOARD_REPRO !== "usage" && process.env.DASHBOARD_REPRO !== "restore") await act("check per-PC new session actions including empty local and remote", async () => {
+    await page.evaluate(() => sessionStorage.setItem("herdr-web-ui:selection", JSON.stringify({ machine_id: "empty-remote", pane_id: null })));
+    await page.reload();
+    await page.locator(".dashboard-list").waitFor();
+    assert.equal(await page.locator(".sidebar-new-session").getAttribute("title"), "New session on Empty remote PC");
+    for (const [name, id] of [["Empty local PC", "empty-local"], ["Empty remote PC", "empty-remote"]] as const) {
+      const group = page.locator(`.dashboard-machine[aria-label="PC ${name}"]`);
+      assert.equal(await group.locator(".dashboard-card").count(), 0);
+      await group.getByRole("button", { name: `New session on ${name}` }).click();
+      const dialog = page.getByRole("dialog", { name: /New session/ });
+      await dialog.waitFor();
+      assert.match(await dialog.innerText(), new RegExp(name));
+      await dialog.getByRole("button", { name: /Cancel|Close/ }).first().click();
+      results[`new-${id}`] = name;
+    }
+    const offlineGroup = page.locator('.dashboard-machine[aria-label="PC Offline sample PC"]');
+    assert.equal(await offlineGroup.getByRole("button", { name: "New session on Offline sample PC" }).isDisabled(), true);
+    await page.evaluate((selection) => sessionStorage.setItem("herdr-web-ui:selection", selection!), selectedBefore);
+    await page.reload();
+    await page.locator(".dashboard-list").waitFor();
+  });
+  if (process.env.DASHBOARD_REPRO !== "machine" && process.env.DASHBOARD_REPRO !== "restore") await act("hide one account in Settings without hiding another provider", async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const visibility = page.getByRole("switch", { name: "Show Codex · Account 2" });
+    await visibility.waitFor();
+    await visibility.click();
+    assert.equal(await visibility.getAttribute("aria-checked"), "false");
+    await page.getByRole("button", { name: "Close settings" }).click();
+    assert.equal(await page.locator(".dashboard-usage").getByText("Account 2").count(), 0);
+    assert.ok(await page.locator(".dashboard-usage").getByText("Account 1").count() > 0);
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const switches = page.locator(".usage-accounts-visibility");
+    const total = await switches.count();
+    for (let index = 0; index < total; index++) {
+      if (await switches.nth(index).getAttribute("aria-checked") === "true") await switches.nth(index).click();
+    }
+    assert.equal(await page.locator('.usage-accounts-visibility[aria-checked="true"]').count(), 0, "all account visibility switches must be off");
+    await page.getByRole("button", { name: "Close settings" }).click();
+    await page.waitForFunction(() => document.querySelector(".dashboard-usage-empty")?.textContent === "All accounts hidden", null, { timeout: 5000 });
+    assert.equal(await page.locator(".dashboard-usage-empty").innerText(), "All accounts hidden", JSON.stringify(await page.evaluate(() => ({ settings: localStorage.getItem("herdr-web-ui:settings"), usage: document.querySelector(".dashboard-usage")?.textContent }))));
+    assert.equal(await page.locator(".dashboard-usage-account").count(), 0);
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    for (let index = 0; index < total; index++) await switches.nth(index).click();
+    await page.getByRole("button", { name: "Close settings" }).click();
+    await page.locator(".dashboard-usage-account").first().waitFor();
+    results.hiddenUsage = { hiddenProviderExcluded: true, allHiddenMessage: true, accountsRestored: total };
+  });
+  if (process.env.DASHBOARD_REPRO !== "machine" && process.env.DASHBOARD_REPRO !== "usage") await act("show restore errors on single, mixed and offline cards without blocking selection", async () => {
+    assert.ok((await cards.first().locator(".dashboard-card-meta").innerText()).includes("NOT RESTORED"));
+    await cards.first().locator(".dashboard-card-main").click();
+    const errored = cards.first().locator(".dashboard-panes li").nth(1);
+    assert.equal(await errored.getByText("NOT RESTORED").getAttribute("title"), "Could not restore second pane");
+    await errored.locator("button").click();
+    assert.equal(JSON.parse((await page.evaluate(() => sessionStorage.getItem("herdr-web-ui:selection"))) ?? "{}").pane_id, "w1:p2");
+    assert.ok((await cards.nth(1).locator(".dashboard-card-meta").innerText()).includes("NOT RESTORED"));
+    const offlineCard = page.locator('.dashboard-machine[aria-label="PC Offline sample PC"] .dashboard-card').first();
+    assert.ok((await offlineCard.locator(".dashboard-card-meta").innerText()).includes("Disconnected"));
+    await offlineCard.locator(".dashboard-card-main").click();
+    assert.equal(await offlineCard.locator(".dashboard-panes li").nth(1).getByText("NOT RESTORED").getAttribute("title"), "Could not restore second pane");
+    assert.equal(await offlineCard.locator(".dashboard-panes li").nth(1).locator("button").isDisabled(), true);
+    await cards.first().locator(".dashboard-panes li").first().locator("button").click();
+    assert.equal(await page.evaluate(() => sessionStorage.getItem("herdr-web-ui:selection")), selectedBefore);
+    results.restoreErrors = true;
+  });
   await act("reload with persisted dashboard preference", () => page.reload());
   await page.locator(".dashboard-list").waitFor();
   assert.equal(await page.locator(".dashboard-machine").first().locator(".dashboard-card").count(), 11);

@@ -168,6 +168,8 @@ running llama.cpp server that this app cannot ask. The model and reasoning effor
 | **Watch your plan limits** | Beside Settings, how much of each AI subscription signed in on the PC is used, or what is left: the limit closest to running out per account, and every limit with its reset time on a tap. See [Subscription usage](#subscription-usage). |
 | **Make it yours** | English, Korean, Japanese or Simplified Chinese, following the browser or chosen in Settings. Dark, light or system theme, compact density, terminal and chat font sizes, a resizable composer, Enter behavior and thinking visibility. |
 
+**Project dashboard sidebar** is an optional layout in Settings, off by default. It groups attention and projects by PC; the plus beside each connected PC starts a session on that exact PC, even when it has no projects. Its plan-limit summary follows the accounts hidden under Settings → Subscription usage. A pane that could not be restored is marked with its reason on hover; selecting it still shows the failure notice.
+
 ## Subscription usage
 
 The strip beside **Settings** shows the plan limits of the AI tools signed in on the PC the app's server runs on: for each account its provider's logo and the limit closest to running out (red from 80%). Tap it for every limit (5-hour session, week, month, per model where a plan has them) and when each starts over. It is off until you turn it on in **Settings → Subscription usage**: turning it on sends the sign-ins on the server's PC to each provider's usage endpoint.

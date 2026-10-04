@@ -683,6 +683,7 @@ export const KO: Record<string, string> = {
   "{d}d {h}h": "{d}일 {h}시간",
   "Resets in {time}": "{time} 후 초기화",
   "No limits reported": "보고된 한도 없음",
+  "All accounts hidden": "모든 계정 숨김",
   "Usage unavailable": "사용량을 불러올 수 없음",
   "Last known values": "마지막으로 읽은 값",
   "Sign-in expired. Open {name} to renew it.": "로그인이 만료되었습니다. {name}을(를) 열어 갱신하세요.",

@@ -685,6 +685,7 @@ export const JA: Record<string, string> = {
   "{d}d {h}h": "{d}日 {h}時間",
   "Resets in {time}": "{time}後にリセット",
   "No limits reported": "上限の報告なし",
+  "All accounts hidden": "すべてのアカウントを非表示中",
   "Usage unavailable": "使用量を取得できません",
   "Last known values": "最後に取得した値",
   "Sign-in expired. Open {name} to renew it.": "サインインの有効期限が切れました。{name} を開いて更新してください。",
