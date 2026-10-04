@@ -798,7 +798,10 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
 
   if ((pane.agent ?? pane.agent_session?.agent) === "devin") {
     const cwd = pane.foreground_cwd || pane.cwd;
-    const sessions = listDevinSessions(cwd);
+    let sessions: string[];
+    try { sessions = listDevinSessions(cwd); }
+    catch { throw new ConversationUnavailable("transcript_missing"); }
+    if (sessions.length === 0) throw new ConversationUnavailable("no_session_id");
     const reported = pane.agent_session?.agent === "devin" && pane.agent_session.kind === "id" ? pane.agent_session.value : null;
     const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid?: number; argv?: string[] }[] } }>(
       "pane.process_info", { pane_id: paneId },
@@ -810,6 +813,7 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     const argv = processes[0]!.argv ?? [];
     const resume = argv.findIndex((arg) => arg === "--resume" || arg === "-r");
     const named = resume >= 0 && argv[resume + 1] && !argv[resume + 1]!.startsWith("-") ? argv[resume + 1] : null;
+    if (reported && named && reported !== named) throw new ConversationUnavailable("devin_identity_ambiguous");
     const explicit = reported ?? named;
     if (explicit && !sessions.includes(explicit)) throw new ConversationUnavailable("devin_identity_ambiguous");
     const peers = snapshot.panes.filter((other) => other.pane_id !== paneId && (other.agent ?? other.agent_session?.agent) === "devin" &&

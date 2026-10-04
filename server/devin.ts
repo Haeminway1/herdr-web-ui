@@ -148,8 +148,8 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
       && (since === null || positions.get(node)! >= positions.get(since)!)
       && (from === null || positions.get(node)! >= positions.get(from)!)).slice(-limit);
     const first = page[0]?.node;
-    const origin = ids[0];
-    const pageCursor = first === undefined || (from === null && first === origin) ? null
+    const firstTurn = turns[0]?.node;
+    const pageCursor = first === undefined || (from === null && first === firstTurn) ? null
       : from !== null && first === from ? options.from! : cursor(sessionId, revision, first);
     return { source: "devin-transcript", turns: page.map(({ turn }) => turn), metadata, cursor: pageCursor, history_id, version };
   } finally { db.close(); }

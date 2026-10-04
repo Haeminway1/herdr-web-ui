@@ -90,3 +90,11 @@ test("skips malformed, unknown and incomplete nodes", () => {
   expect(f.page().turns).toEqual([]);
   f.db.close();
 });
+
+test("system nodes before the first user do not create an empty earlier page", () => {
+  const f = fixture();
+  f.node(1, null, { role: "system", content: "synthetic setup" });
+  f.node(2, 1, { role: "user", content: "synthetic prompt" });
+  expect(f.page().cursor).toBeNull();
+  f.db.close();
+});
