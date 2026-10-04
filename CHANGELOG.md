@@ -7,6 +7,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Added
+- Devin CLI panes with an unambiguously identified native session show their active conversation
+  branch and tool activity in Chat from a read-only SQLite database. When identity is ambiguous,
+  Terminal remains available.
+
 ### Fixed
 - Switching to another pane no longer shows the previous pane's chat for a moment before the
   new one loads.

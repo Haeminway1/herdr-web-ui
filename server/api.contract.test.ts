@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
+import { Database } from "bun:sqlite";
 import { chmodSync, mkdtempSync, existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -35,6 +36,38 @@ afterAll(() => {
 });
 
 const base = () => `http://localhost:${server.port}`;
+
+describe("Devin conversation API", () => {
+  it("returns a structured conflict rather than guessing a shell pane's session", async () => {
+    const state = mkdtempSync(join(tmpdir(), "herdr-web-ui-devin-contract-"));
+    const created = await workspaceCreate({ cwd: state, label: "herdr-web-ui-test-devin-identity" });
+    const dbPath = join(state, "sessions.db");
+    let bridge: ReturnType<typeof createServer> | undefined;
+    try {
+      const paneId = created.root_pane.pane_id;
+      const snapshot = await sessionSnapshot();
+      const pane = snapshot.panes.find((entry) => entry.pane_id === paneId)!;
+      const cwd = pane.foreground_cwd || pane.cwd;
+      if (!cwd) throw new Error("test pane has no working directory");
+      const db = new Database(dbPath);
+      try {
+        db.exec("CREATE TABLE sessions(id TEXT, working_directory TEXT, main_chain_id INTEGER, hidden INTEGER, model TEXT)");
+        db.query("INSERT INTO sessions VALUES ('synthetic', ?, NULL, 0, NULL)").run(cwd);
+      } finally { db.close(); }
+      await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "devin", state: "idle" });
+      bridge = createServer({ port: 0, stateDir: state, devinDbPath: dbPath });
+      const response = await fetch(`http://localhost:${bridge.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
+      expect(response.status).toBe(409);
+      expect(await response.json() as ApiError).toEqual({ error: {
+        code: "devin_identity_ambiguous", message: "Cannot identify this pane's Devin session without risking another conversation",
+      } });
+    } finally {
+      bridge?.stop();
+      await workspaceClose(created.workspace.workspace_id);
+      rmSync(state, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("usage API", () => {
   it("answers the report and keeps it behind the token gate", async () => {

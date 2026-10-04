@@ -41,6 +41,7 @@ import { forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, s
 import { isOmoProcess, omoSessionForPane } from "./omo.ts";
 import { piTranscriptPath } from "./pi.ts";
 import { piAbandonedTurns, piBranchSegments } from "./pi-tree.ts";
+import { devinConversation, listDevinSessions } from "./devin.ts";
 import { trimOutput } from "./tool-output.ts";
 import { parseConversationMetadata } from "./conversation-metadata.ts";
 
@@ -252,7 +253,7 @@ export class HistoryChanged extends Error {
 
 /** What paneConversation resolved: which store the turns came from, and where they start. */
 export type RecognizedConversation = {
-  source: "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "codex-transcript";
+  source: "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "codex-transcript" | "devin-transcript";
   turns: ConversationTurn[];
   metadata: ConversationMetadata;
   /** the first turn's position, for the page before it; null at the conversation's beginning */
@@ -426,6 +427,7 @@ const TURN_MARK: Record<RecognizedConversation["source"], Buffer> = {
   "omo-transcript": Buffer.from('"user"'),
   "gjc-transcript": Buffer.from('"user"'),
   "pi-transcript": Buffer.from('"user"'),
+  "devin-transcript": Buffer.alloc(0), // SQLite sessions use their own pager.
 };
 
 /**
@@ -756,7 +758,7 @@ async function ompTranscriptPath(paneId: string): Promise<string> {
  * label: omo's own store is read only when omo is really running
  * in that pane, never on a matching cwd alone.
  */
-async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: string, panes?: HerdrPane[]): Promise<{ source: RecognizedConversation["source"]; path: string }> {
+async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: string, panes?: HerdrPane[]): Promise<{ source: Exclude<RecognizedConversation["source"], "devin-transcript">; path: string }> {
   const paneId = pane.pane_id;
   let agent = pane.agent ?? pane.agent_session?.agent ?? "";
   // herdr names no agent for this pane: a session report an earlier agent left behind says
@@ -809,6 +811,25 @@ async function omoTranscriptPath(paneId: string, cwd: string, panes?: HerdrPane[
   return session.path;
 }
 
+/** A cwd alone identifies a Devin session only when no other pane could own it. */
+export function devinSessionForPane(pane: HerdrPane, panes: HerdrPane[], sessions: string[], argv: string[]): string {
+  const cwd = pane.foreground_cwd || pane.cwd;
+  const reported = pane.agent_session?.agent === "devin" && pane.agent_session.kind === "id" ? pane.agent_session.value : null;
+  const resume = argv.findIndex((arg) => arg === "--resume" || arg === "-r");
+  const inline = argv.find((arg) => arg.startsWith("--resume="));
+  const named = inline ? inline.slice("--resume=".length) : resume >= 0 ? argv[resume + 1] : null;
+  if ((inline || resume >= 0) && (!named || named.startsWith("-"))) throw new ConversationUnavailable("devin_identity_ambiguous");
+  if (reported && named && reported !== named) throw new ConversationUnavailable("devin_identity_ambiguous");
+  const explicit = reported ?? named;
+  if (explicit && !sessions.includes(explicit)) throw new ConversationUnavailable("devin_identity_ambiguous");
+  const peers = panes.filter((other) => other.pane_id !== pane.pane_id && (other.foreground_cwd || other.cwd) === cwd);
+  if (!explicit && (sessions.length !== 1 || peers.length !== 0)) throw new ConversationUnavailable("devin_identity_ambiguous");
+  if (explicit && peers.some((other) => other.agent_session?.agent === "devin" && other.agent_session.kind === "id" && other.agent_session.value === explicit)) {
+    throw new ConversationUnavailable("devin_identity_ambiguous");
+  }
+  return explicit ?? sessions[0]!;
+}
+
 /**
  * pane -> agent session -> transcript turns. Read-only, same-user files only.
  * Claude sessions are looked up by id under ~/.claude/projects; omp sessions
@@ -822,13 +843,31 @@ async function omoTranscriptPath(paneId: string, cwd: string, panes?: HerdrPane[
  * returned cursor; `from` is every turn after one, for a chat that already
  * shows the pages before it. A cursor from another file throws HistoryChanged.
  */
-export async function paneConversation(paneId: string, codexHome?: string, page: ConversationPage = {}): Promise<RecognizedConversation> {
+export async function paneConversation(paneId: string, codexHome?: string, page: ConversationPage = {}, devinDbPath?: string): Promise<RecognizedConversation> {
   const snapshot = await sessionSnapshot();
   const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined) throw new ConversationUnavailable("pane_not_found");
   if (typeof pane.cwd !== "string" || pane.cwd.length === 0) throw new ConversationUnavailable("no_recognized_transcript");
 
-  let resolved: { source: RecognizedConversation["source"]; path: string };
+  if ((pane.agent ?? pane.agent_session?.agent) === "devin") {
+    const cwd = pane.foreground_cwd || pane.cwd;
+    let sessions: string[];
+    try { sessions = listDevinSessions(cwd, devinDbPath); }
+    catch { throw new ConversationUnavailable("transcript_missing"); }
+    if (sessions.length === 0) throw new ConversationUnavailable("no_session_id");
+    const info = await herdrRpc<{ process_info?: { foreground_processes?: { argv?: unknown }[] } }>(
+      "pane.process_info", { pane_id: paneId },
+    ).catch(() => null);
+    const processes = (info?.process_info?.foreground_processes ?? []).filter((process) =>
+      Array.isArray(process.argv) && process.argv.every((arg) => typeof arg === "string") &&
+      process.argv.some((arg) => /(?:^|[/\\])devin(?:\.exe)?$/.test(arg)) && !process.argv.includes("acp"),
+    );
+    if (processes.length !== 1) throw new ConversationUnavailable("devin_identity_ambiguous");
+    const sessionId = devinSessionForPane(pane, snapshot.panes, sessions, processes[0]!.argv as string[]);
+    return devinConversation(sessionId, cwd, page, devinDbPath);
+  }
+
+  let resolved: { source: Exclude<RecognizedConversation["source"], "devin-transcript">; path: string };
   try {
     resolved = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes);
   } catch (error) {
@@ -844,7 +883,7 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
 }
 
 /** One page of a resolved transcript (paneConversation's `page`). */
-export function transcriptPage(source: RecognizedConversation["source"], path: string, page: ConversationPage = {}, codexHome?: string): RecognizedConversation {
+export function transcriptPage(source: Exclude<RecognizedConversation["source"], "devin-transcript">, path: string, page: ConversationPage = {}, codexHome?: string): RecognizedConversation {
   let stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
   try {
     stat = statSync(path);

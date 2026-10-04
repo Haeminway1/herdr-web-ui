@@ -2,10 +2,32 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
+import type { HerdrPane } from "../shared/protocol.ts";
 
 import { forgetHistoryChains } from "./codex.ts";
-import { ConversationUnavailable, gjcTranscriptPath, HistoryChanged, isOmoProcess, ompSessionPath, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
+import { ConversationUnavailable, devinSessionForPane, gjcTranscriptPath, HistoryChanged, isOmoProcess, ompSessionPath, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 import { MAX_TURNS, parseOmpTranscript } from "./transcript-records.ts";
+
+describe("Devin pane identity", () => {
+  const pane = { pane_id: "pane-a", cwd: "/synthetic/work", agent: "devin" } as HerdrPane;
+  const peer = { pane_id: "pane-b", cwd: pane.cwd, agent: "devin" } as HerdrPane;
+  const reported = { ...pane, agent_session: { agent: "devin", kind: "id", value: "one" } } as HerdrPane;
+  const argv = ["/bin/devin"];
+  it("accepts only a unique cwd and visible session without an explicit identity", () => {
+    expect(devinSessionForPane(pane, [pane], ["one"], argv)).toBe("one");
+    expect(() => devinSessionForPane(pane, [pane], ["one", "two"], argv)).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(pane, [pane, peer], ["one"], argv)).toThrow(ConversationUnavailable);
+  });
+  it("uses an exact explicit session, never a mismatched cwd, conflicting resume or shared session", () => {
+    expect(devinSessionForPane(reported, [reported, peer], ["one", "two"], argv)).toBe("one");
+    expect(devinSessionForPane(pane, [pane, peer], ["one", "two"], [...argv, "--resume=two"])).toBe("two");
+    expect(() => devinSessionForPane(reported, [reported], ["two"], argv)).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(reported, [reported], ["one", "two"], [...argv, "--resume", "two"])).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(reported, [reported, { ...peer, agent_session: reported.agent_session }], ["one"], argv)).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(pane, [pane], ["one"], [...argv, "--resume", "../other"])).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(pane, [pane], ["one"], [...argv, "--resume"])).toThrow(ConversationUnavailable);
+  });
+});
 
 /** Minimal but shape-true slices of a Claude Code session jsonl. */
 const lines = [
