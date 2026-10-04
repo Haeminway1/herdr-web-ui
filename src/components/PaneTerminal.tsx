@@ -50,6 +50,8 @@ export interface PaneTerminalProps {
   restoreError?: string | null;
   /** the pane's agent name — the chat lens labels the assistant's voice with it */
   agent?: string | null;
+  /** The active agent session, when herdr knows it; restarting an agent may reuse its pane. */
+  sessionIdentity?: string | null;
   /** the pane's live agent status: `working` turns composer sends into the queue */
   agentStatus?: AgentStatus;
   /** an OmO pane's running background tasks: the composer's status line offers their list */
@@ -103,6 +105,7 @@ export function PaneTerminal({
   paneId,
   restoreError = null,
   agent = null,
+  sessionIdentity = null,
   agentStatus,
   backgroundTasks = 0,
   view,
@@ -1332,6 +1335,7 @@ export function PaneTerminal({
             </div></div>
           )}>
           <ChatView
+            key={`${paneId}:${sessionIdentity ?? ""}`}
             paneId={paneId}
             refreshKey={chatRefresh}
             sentKey={chatSent}

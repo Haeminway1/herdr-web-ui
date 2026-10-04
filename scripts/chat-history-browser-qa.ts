@@ -23,9 +23,34 @@ try {
   page.on("pageerror", (error) => { errors.push(error.message); console.error(error.message); });
   let epoch = "one", newest = "old newest", before: string | null = "one:100";
   let holdOlder = false, olderRequested = false;
+  type HeldReply = { key: string; reply: (status: number, body: object) => Promise<void> };
+  const held: HeldReply[] = [];
+  const hold = new Set<string>();
+  const waitHeld = async (key: string) => {
+    await page.waitForFunction((name) => (window as unknown as { heldRequests: string[] }).heldRequests?.includes(name), key);
+    assert.ok(held.some((item) => item.key === key), `missing held request ${key}`);
+    return { reply: async (status: number, body: object) => {
+      hold.delete(key);
+      const requests = held.filter((item) => item.key === key);
+      for (const request of requests) await request.reply(status, body);
+      for (const request of requests) held.splice(held.indexOf(request), 1);
+    } };
+  };
+  await page.addInitScript(() => { (window as unknown as { heldRequests: string[] }).heldRequests = []; });
+  await page.route("**/api/**/pane/read?*", async (route) => {
+    if (!hold.has("scrollback")) return route.fulfill({ json: { read: { text: "CURRENT SCROLLBACK", truncated: false } } });
+    held.push({ key: "scrollback", reply: async (status, body) => { await route.fulfill({ status, json: body }); } });
+    await page.evaluate(() => (window as unknown as { heldRequests: string[] }).heldRequests.push("scrollback"));
+  });
   const user = (text: string) => ({ role: "user", ts: text, parts: [{ kind: "text", text }] });
   await page.route("**/api/**/conversation?*", async (route) => {
     const url = new URL(route.request().url());
+    const key = `${url.pathname.includes("/machines/") ? "remote" : "local"}:${url.searchParams.get("pane_id")}`;
+    if (hold.has(key)) {
+      held.push({ key, reply: async (status, body) => { await route.fulfill({ status, json: body }); } });
+      await page.evaluate((name) => (window as unknown as { heldRequests: string[] }).heldRequests.push(name), key);
+      return;
+    }
     const captured = epoch;
     const cursor = url.searchParams.get("before") ?? url.searchParams.get("from");
     if (cursor && !cursor.startsWith(`${epoch}:`)) {
@@ -119,6 +144,74 @@ try {
   await page.getByText(newest, { exact: true }).waitFor();
   assert.equal(await page.locator(".chat-older").count(), 0);
   console.log("PASS held-cursor and older-page 409 recovery discard history and immediately reload");
+  await page.evaluate(() => window.qa.chat("a"));
+  await page.locator('.chat-view[aria-label="conversation of a"]').waitFor();
+  await page.getByText(newest, { exact: true }).waitFor();
+  await page.evaluate(() => { window.qa.frames.length = 0; });
+  // The first render after a switch must not expose the previous pane's transcript,
+  // even when a previous request answers late or the new pane has not answered yet.
+  const assertLoadingOnly = async (previous: string) => {
+    assert.equal(await page.getByText(previous, { exact: true }).count(), 0);
+    assert.equal(await page.locator(".chat-turn, .chat-terminal-fallback, .chat-empty, .chat-inline-error").count(), 0);
+    assert.equal(await page.getByText("Loading conversation…", { exact: true }).count(), 1);
+  };
+  hold.add("local:b");
+  await page.evaluate(() => window.qa.chat("b", "local", "claude"));
+  const staleB = await waitHeld("local:b");
+  await assertLoadingOnly(newest);
+  assert.deepEqual(await page.evaluate((old) => window.qa.frames.filter((frame) => frame.pane === "conversation of b" && frame.text.includes(old)), newest), [], "no committed B frame may contain A's turn");
+  hold.add("local:a");
+  await page.evaluate(() => window.qa.chat("a", "local", "codex"));
+  const freshA = await waitHeld("local:a");
+  await assertLoadingOnly(newest);
+  await staleB.reply(503, { error: { code: "unavailable", message: "STALE PANE B ERROR" } });
+  await assertLoadingOnly("STALE PANE B TURN");
+  assert.equal(await page.getByText("STALE PANE B ERROR", { exact: false }).count(), 0);
+  await freshA.reply(200, { source: "omp-transcript", history_id: "fresh-a", cursor: null, turns: [user("FRESH PANE A TURN")] });
+  await page.getByText("FRESH PANE A TURN", { exact: true }).waitFor();
+  assert.equal(await page.getByText("STALE PANE B TURN", { exact: true }).count(), 0);
+
+  hold.add("local:a");
+  await refresh();
+  const staleA = await waitHeld("local:a");
+  hold.add("remote:a");
+  await page.evaluate(() => window.qa.chat("a", "remote-pc", "claude"));
+  const remoteA = await waitHeld("remote:a");
+  await assertLoadingOnly("FRESH PANE A TURN");
+  await staleA.reply(200, { source: "omp-transcript", history_id: "stale-a", cursor: null, turns: [user("STALE LOCAL MACHINE TURN")] });
+  await assertLoadingOnly("STALE LOCAL MACHINE TURN");
+  await remoteA.reply(503, { error: { code: "unavailable", message: "REMOTE HISTORY UNAVAILABLE" } });
+  await page.getByRole("alert").waitFor();
+  assert.equal(await page.getByText("FRESH PANE A TURN", { exact: true }).count(), 0);
+  assert.equal(await page.locator(".chat-turn, .chat-terminal-fallback").count(), 0);
+  // A real scrollback response is delayed separately from the conversation response.
+  hold.add("local:b");
+  await page.evaluate(() => window.qa.chat("b"));
+  const fallback = await waitHeld("local:b");
+  hold.add("scrollback");
+  await fallback.reply(200, { source: "scrollback", history_id: "fallback-b", turns: [] });
+  const transcript = await waitHeld("scrollback");
+  await assertLoadingOnly("FRESH PANE A TURN");
+  await transcript.reply(200, { read: { text: "CURRENT SCROLLBACK", truncated: false } });
+  await page.getByText("CURRENT SCROLLBACK", { exact: false }).waitFor();
+  assert.equal(await page.getByText("FRESH PANE A TURN", { exact: true }).count(), 0);
+  await page.evaluate(() => { window.qa.frames.length = 0; });
+  hold.add("local:a");
+  await page.evaluate(() => window.qa.chat("a", "local", "codex"));
+  const afterFallback = await waitHeld("local:a");
+  await assertLoadingOnly("Conversation unavailable — show terminal output");
+  assert.deepEqual(await page.evaluate(() => window.qa.frames.filter((frame) => frame.pane === "conversation of a" && frame.text.includes("Conversation unavailable — show terminal output"))), [], "no committed A frame may contain B's fallback");
+  await afterFallback.reply(200, { source: "omp-transcript", history_id: "after-fallback", cursor: null, turns: [user("AFTER FALLBACK A TURN")] });
+  await page.getByText("AFTER FALLBACK A TURN", { exact: true }).waitFor();
+  await page.evaluate(() => { window.qa.frames.length = 0; });
+  hold.add("local:a");
+  await page.evaluate(() => window.qa.chat("a", "local", "codex", "new-session"));
+  const newSession = await waitHeld("local:a");
+  await assertLoadingOnly("AFTER FALLBACK A TURN");
+  assert.deepEqual(await page.evaluate(() => window.qa.frames.filter((frame) => frame.pane === "conversation of a" && frame.text.includes("AFTER FALLBACK A TURN"))), [], "new agent session on the same pane cannot paint the old session");
+  await newSession.reply(200, { source: "omp-transcript", history_id: "new-session", cursor: null, turns: [user("NEW SESSION A TURN")] });
+  await page.getByText("NEW SESSION A TURN", { exact: true }).waitFor();
+  console.log("PASS rapid A→B→A, same-pane machine/session switch, stale error, delayed scrollback and genuine unavailable error");
   assert.deepEqual(errors, []);
   console.log("PASS reused tool ids after clear, machine switch and unmount cancellation; no browser errors");
 } finally {

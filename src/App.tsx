@@ -183,7 +183,7 @@ export function App() {
   // on a phone the drawer follows a swipe in from the left edge, and a swipe back (lib/edgeSwipe.ts)
   useEffect(() => watchDrawerSwipe(() => drawerOpenRef.current, setDrawerOpen), []);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [view, setViewState] = useState<PaneView>("terminal");
+  const [viewState, setViewState] = useState<{ owner: string; value: PaneView }>({ owner: "", value: "terminal" });
   const [paletteOpen, setPaletteOpen] = useState(false);
   // the Files dialog, and the file open in the viewer (a path as the chat or the dialog gave it)
   const [filesOpen, setFilesOpen] = useState(false);
@@ -587,15 +587,16 @@ export function App() {
   // a server that repaints the pane's screen instead (terminal_mirror) has a terminal lens too
   const terminalAttach = targetHerdr?.terminal_attach !== false || targetHerdr?.terminal_mirror === true;
 
-  // the lens follows the selected pane: each pane remembers its own
-  useEffect(() => {
-    if (selectedPaneId === null) return;
-    setViewState(storedView(selectedPaneId, selectedMachineId, selectedPane ? selectedAgent !== null : null, terminalAttach, settings.defaultView));
-  }, [selectedPaneId, selectedMachineId, selectedPane !== null, selectedAgent !== null, terminalAttach, settings.defaultView]);
+  // Resolve the lens for the selected target in the same render as the selection. A passive
+  // effect would paint the previous pane's lens (and composer) for one frame first.
+  const viewOwner = selectedPaneId === null ? "" : JSON.stringify([selectedMachineId, selectedPaneId, selectedPane ? selectedAgent !== null : null, terminalAttach, settings.defaultView]);
+  const view = viewState.owner === viewOwner ? viewState.value
+    : selectedPaneId === null ? "terminal"
+      : storedView(selectedPaneId, selectedMachineId, selectedPane ? selectedAgent !== null : null, terminalAttach, settings.defaultView);
 
   const setView = useCallback(
     (next: PaneView) => {
-      setViewState(next);
+      setViewState({ owner: viewOwner, value: next });
       setAutoSelected(false);
       if (selectedPaneId === null) return;
       try {
@@ -604,7 +605,7 @@ export function App() {
         /* private mode: the lens just stops being remembered */
       }
     },
-    [selectedPaneId, selectedMachineId],
+    [selectedPaneId, selectedMachineId, viewOwner],
   );
 
   const bell: { label: string; title: string; on: boolean; run: () => Promise<unknown> } =
@@ -797,6 +798,7 @@ export function App() {
             paneId={selectedPane?.restore_error ? null : selectedPaneId}
             restoreError={selectedPane?.restore_error ?? null}
             agent={selectedAgent}
+            sessionIdentity={selectedPane?.agent_session ? JSON.stringify([selectedPane.agent_session.agent, selectedPane.agent_session.kind, selectedPane.agent_session.value]) : null}
             agentStatus={selectedPane?.agent_status}
             backgroundTasks={(selectedPane as HerdrPane | null)?.background_tasks ?? 0}
             view={view}
