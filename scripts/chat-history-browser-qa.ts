@@ -14,18 +14,34 @@ try {
   assert.ok(build.success, String(build.logs));
   server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
     const path = new URL(request.url).pathname;
+    if (path === "/ws") return new Response(null, { status: 404 });
+    if (path.endsWith("/pane/commands")) return Response.json({ commands: [] });
     return path === "/" ? new Response('<html><head><link rel="stylesheet" href="/chat-history-fixture.css"></head><body><div id="root"></div><script type="module" src="/chat-history-fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } }) : new Response(Bun.file(join(root, path.slice(1))));
   } });
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
   const page = await browser.newPage();
   page.setDefaultTimeout(10_000);
   const errors: string[] = [];
-  page.on("pageerror", (error) => { errors.push(error.message); console.error(error.message); });
+  page.on("pageerror", (error) => { errors.push(error.message); console.error(error.stack); });
   let epoch = "one", newest = "old newest", before: string | null = "one:100";
   let holdOlder = false, olderRequested = false;
+  let product = false, productSession = "one";
+  const pending: Array<{ pane: string; machine: string; session: string; answer: (status?: number) => Promise<void> }> = [];
   const user = (text: string) => ({ role: "user", ts: text, parts: [{ kind: "text", text }] });
   await page.route("**/api/**/conversation?*", async (route) => {
     const url = new URL(route.request().url());
+    if (product) {
+      const pane = url.searchParams.get("pane_id") ?? url.searchParams.get("pane") ?? "";
+      const machine = /\/api\/machines\/([^/]+)\//.exec(url.pathname)?.[1] ?? "local";
+      const session = productSession;
+      await new Promise<void>((resolve) => pending.push({ pane, machine, session, answer: async (status = 200) => {
+        try {
+          if (status !== 200) await route.fulfill({ status, json: { error: { code: "unavailable", message: "conversation unavailable" } } });
+          else await route.fulfill({ json: { source: "omp-transcript", history_id: session, cursor: null, turns: [user(`history ${machine}/${pane}/${session}`)] } });
+        } finally { resolve(); }
+      } }));
+      return;
+    }
     const captured = epoch;
     const cursor = url.searchParams.get("before") ?? url.searchParams.get("from");
     if (cursor && !cursor.startsWith(`${epoch}:`)) {
@@ -121,6 +137,72 @@ try {
   console.log("PASS held-cursor and older-page 409 recovery discard history and immediately reload");
   assert.deepEqual(errors, []);
   console.log("PASS reused tool ids after clear, machine switch and unmount cancellation; no browser errors");
+
+  // Exercise the actual product owner. A profiler observes every committed DOM, not just the final frame.
+  const select = async (pane: string, machine: string, session: string) => {
+    productSession = session;
+    await page.evaluate(([p, m, s]) => window.qa.select(p, m, s), [pane, machine, session]);
+    product = true;
+  };
+  const answer = async (pane: string, machine: string, session: string, status = 200) => {
+    const started = Date.now();
+    while (!pending.some((request) => request.pane === pane && request.machine === machine && request.session === session)) {
+      assert.ok(Date.now() - started < 10_000, `missing conversation request ${machine}/${pane}/${session}`);
+      await Bun.sleep(20);
+    }
+    const matching = pending.filter((request) => request.pane === pane && request.machine === machine && request.session === session);
+    for (const request of matching) {
+      pending.splice(pending.indexOf(request), 1);
+      await request.answer(status);
+    }
+  };
+  const assertNoStaleCommits = async (expected: string, forbidden: string) => {
+    const commits = await page.evaluate(() => window.qa.commits);
+    assert.ok(commits.length > 0, "profiler recorded product commits");
+    assert.ok(commits.every((turns) => !turns.some((turn) => turn.includes(forbidden))), `stale ${forbidden} in intermediate commits: ${JSON.stringify(commits)}`);
+    await page.getByText(expected, { exact: true }).waitFor();
+  };
+  await select("a", "local", "first");
+  await answer("a", "local", "first");
+  await page.getByText("history local/a/first", { exact: true }).waitFor();
+  await page.evaluate(() => { window.qa.commits.length = 0; });
+  await select("b", "local", "first");
+  await answer("b", "local", "first");
+  await assertNoStaleCommits("history local/b/first", "history local/a/first");
+  await page.evaluate(() => { window.qa.commits.length = 0; });
+  await select("a", "local", "first");
+  await answer("a", "local", "first");
+  await assertNoStaleCommits("history local/a/first", "history local/b/first");
+  await page.evaluate(() => { window.qa.commits.length = 0; });
+  await select("a", "remote-pc", "first");
+  await answer("a", "remote-pc", "first");
+  await assertNoStaleCommits("history remote-pc/a/first", "history local/a/first");
+  await page.evaluate(() => { window.qa.commits.length = 0; });
+  await select("a", "remote-pc", "restart");
+  await answer("a", "remote-pc", "restart");
+  await assertNoStaleCommits("history remote-pc/a/restart", "history remote-pc/a/first");
+  // A late success and a late error from B must neither replace nor erase A's chat.
+  for (const status of [200, 503]) {
+    await page.evaluate(() => { window.qa.commits.length = 0; });
+    await select("b", "remote-pc", "restart");
+    const started = Date.now();
+    while (!pending.some((request) => request.pane === "b" && request.machine === "remote-pc")) {
+      assert.ok(Date.now() - started < 10_000, "missing delayed B request");
+      await Bun.sleep(20);
+    }
+    await select("a", "remote-pc", "restart");
+    await answer("a", "remote-pc", "restart");
+    await answer("b", "remote-pc", "restart", status);
+    await assertNoStaleCommits("history remote-pc/a/restart", "history remote-pc/b/restart");
+    assert.equal(await page.getByText("history remote-pc/a/restart", { exact: true }).count(), 1, "late response preserves active chat");
+    assert.equal(await page.locator(".chat-inline-error").count(), 0, "late error belongs to the abandoned pane");
+  }
+  await select("b", "remote-pc", "unavailable");
+  await answer("b", "remote-pc", "unavailable", 503);
+  await page.locator(".chat-inline-error").waitFor();
+  assert.equal(await page.getByText("history remote-pc/a/restart", { exact: true }).count(), 0, "unavailable chat cannot show another pane's history");
+  assert.deepEqual(errors, []);
+  console.log("PASS product pane identity commits across A→B→A, machine and session restart");
 } finally {
   releases.forEach((release) => release());
   await browser?.close();

@@ -47,6 +47,8 @@ export interface PaneTerminalProps {
   restoreError?: string | null;
   /** the pane's agent name — the chat lens labels the assistant's voice with it */
   agent?: string | null;
+  /** Stable identity of the selected agent session, independent of discovery source. */
+  sessionIdentity: string | null;
   /** the pane's live agent status: `working` turns composer sends into the queue */
   agentStatus?: AgentStatus;
   /** an OmO pane's running background tasks: the composer's status line offers their list */
@@ -100,6 +102,7 @@ export function PaneTerminal({
   paneId,
   restoreError = null,
   agent = null,
+  sessionIdentity,
   agentStatus,
   backgroundTasks = 0,
   view,
@@ -1343,13 +1346,14 @@ export function PaneTerminal({
       <div className="terminal-surface">
         <div className={`pane-terminal${paneId === null ? " is-idle" : ""}`} ref={hostRef} />
         {paneId !== null && chatView && (
-          <RenderBoundary resetKey={paneId} fallback={(retry) => (
+          <RenderBoundary resetKey={JSON.stringify([paneId, sessionIdentity])} fallback={(retry) => (
             <div className="chat-view"><div className="chat-empty" role="alert">
               <p>{t("The chat can't be shown. The terminal still works.")}</p>
               <button type="button" className="btn" onClick={retry}>{t("Try again")}</button>
             </div></div>
           )}>
           <ChatView
+            key={JSON.stringify([paneId, sessionIdentity])}
             paneId={paneId}
             refreshKey={chatRefresh}
             sentKey={chatSent}
