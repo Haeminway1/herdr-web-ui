@@ -47,8 +47,6 @@ export interface PaneTerminalProps {
   restoreError?: string | null;
   /** the pane's agent name — the chat lens labels the assistant's voice with it */
   agent?: string | null;
-  /** Stable identity of the selected agent session, independent of discovery source. */
-  sessionIdentity: string | null;
   /** the pane's live agent status: `working` turns composer sends into the queue */
   agentStatus?: AgentStatus;
   /** an OmO pane's running background tasks: the composer's status line offers their list */
@@ -102,7 +100,6 @@ export function PaneTerminal({
   paneId,
   restoreError = null,
   agent = null,
-  sessionIdentity,
   agentStatus,
   backgroundTasks = 0,
   view,
@@ -1346,14 +1343,17 @@ export function PaneTerminal({
       <div className="terminal-surface">
         <div className={`pane-terminal${paneId === null ? " is-idle" : ""}`} ref={hostRef} />
         {paneId !== null && chatView && (
-          <RenderBoundary resetKey={JSON.stringify([paneId, sessionIdentity])} fallback={(retry) => (
+          <RenderBoundary resetKey={paneId} fallback={(retry) => (
             <div className="chat-view"><div className="chat-empty" role="alert">
               <p>{t("The chat can't be shown. The terminal still works.")}</p>
               <button type="button" className="btn" onClick={retry}>{t("Try again")}</button>
             </div></div>
           )}>
+          {/* a pane's chat never commits another pane's turns: a new pane is a new ChatView.
+              The session herdr reports is left out of the key: it can change while the
+              conversation stays (a shared Codex daemon), and the chat follows history_id itself */}
           <ChatView
-            key={JSON.stringify([paneId, sessionIdentity])}
+            key={paneId}
             paneId={paneId}
             refreshKey={chatRefresh}
             sentKey={chatSent}

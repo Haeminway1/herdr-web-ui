@@ -528,8 +528,6 @@ export function App() {
   const targetHerdr = selectedMachineId === "local" ? health?.herdr : selectedMachine?.herdr;
   const selectedTitle = selectedPane ? displayPaneTitle(selectedPane) : null;
   const selectedAgent = selectedPane?.agent ?? null;
-  const session = selectedPane?.agent_session;
-  const sessionIdentity = session ? JSON.stringify([session.agent, session.kind, session.value]) : null;
   // unknown herdr (offline, or a server that predates the flag) counts as attach-capable
   // a server that repaints the pane's screen instead (terminal_mirror) has a terminal lens too
   const terminalAttach = targetHerdr?.terminal_attach !== false || targetHerdr?.terminal_mirror === true;
@@ -804,7 +802,6 @@ export function App() {
             paneId={selectedPane?.restore_error ? null : selectedPaneId}
             restoreError={selectedPane?.restore_error ?? null}
             agent={selectedAgent}
-            sessionIdentity={sessionIdentity}
             agentStatus={selectedPane?.agent_status}
             backgroundTasks={(selectedPane as HerdrPane | null)?.background_tasks ?? 0}
             view={view}
