@@ -7,6 +7,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Fixed
+- Switching to another pane no longer shows the previous pane's chat for a moment before the
+  new one loads.
+  ([#422](https://github.com/devswha/herdr-web-ui/pull/422) by @Haeminway1)
+
 ## [0.3.49] - 2026-10-04
 
 ### Added
