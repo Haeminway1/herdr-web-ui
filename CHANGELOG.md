@@ -41,6 +41,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   **Conversation unavailable**: the session's file seemed to lie outside Codex's store, and none of
   the threads matched the pane's directory as herdr reports it.
   ([#582](https://github.com/devswha/herdr-web-ui/pull/582) by @David-Sousa-Web)
+- In a Claude Code pane, the chat shows what a slash command answered, so a `/goal` that Claude
+  Code refuses says why in the chat instead of only in the terminal. `/goal` is also among the
+  commands the message box suggests.
+  ([#583](https://github.com/devswha/herdr-web-ui/pull/583))
 
 ## [0.4.0] - 2026-10-08
 
