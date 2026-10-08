@@ -11,6 +11,14 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - Devin CLI panes with an explicitly identified native session show their active conversation
   branch and tool activity in Chat. Unresolved or unreadable sessions keep the terminal-text
   fallback. ([#438](https://github.com/devswha/herdr-web-ui/pull/438) by @Haeminway1)
+- An OpenCode pane reads as a conversation. The chat shows the session herdr's OpenCode
+  integration reports, read from OpenCode 2's own database: prompts with their pasted images and
+  the skills they mention, each answer's steps folded into one block with their thinking, tool
+  calls, outputs and pictures, commands run with `!`, background and subagent results, and
+  compactions. Turns an `/undo` took back leave the chat with it. The ring by the message box
+  shows the context the last step filled, as OpenCode's own footer counts it. A pane on OpenCode's
+  home screen, or on a 1.x store, keeps the terminal's text.
+  ([#543](https://github.com/devswha/herdr-web-ui/pull/543) by @Ploppy3)
 - The app sends an anonymous count when it is installed and each time it is updated: the version,
   the OS, how it was installed and a random ID, nothing about your terminals or files, and no IP
   address is stored. A line says so the first time you open the app, and

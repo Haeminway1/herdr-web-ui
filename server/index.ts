@@ -17,6 +17,7 @@ import { badRequest, errorResponse, isCount, isJsonObject, jsonResponse } from "
 import { serveStatic } from "./static.ts";
 import { startStatusCollector } from "./collector.ts";
 import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneRunsOmo, toolOutput } from "./conversation.ts";
+import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import { omoPanes } from "./omo.ts";
 import { OMO_ALIASES, OmoStatus, processAlive } from "./omo-status.ts";
@@ -327,6 +328,8 @@ export function createServer(
     tailnet?: TailnetIdentitySource;
     /** Native Codex store; defaults to CODEX_HOME. Tests use an isolated store. */
     codexHome?: string;
+    /** OpenCode's database; defaults to where OpenCode finds it (OPENCODE_DB, XDG_DATA_HOME). Tests use an isolated store. */
+    opencodeDb?: string;
     /** Native Devin store; tests pass an isolated SQLite database. */
     devinDbPath?: string;
     updates?: UpdateService;
@@ -1749,9 +1752,11 @@ export function createServer(
         const ref = url.searchParams.get("ref");
         if (!paneId || !ref) return badRequest("missing_parameter", "pane_id and ref query parameters are required");
         try {
-          const output = await toolOutput(paneId, ref, options.codexHome);
+          const output = await toolOutput(paneId, ref, options.codexHome, options.opencodeDb);
           if (output === null) return jsonResponse({ error: { code: "output_not_found", message: "no such tool call in this pane's conversation" } }, 404);
-          return new Response(output, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "private, max-age=86400, immutable", "x-content-type-options": "nosniff" } });
+          // a tool call's id names its output for good; OpenCode's ref names a place in a row it rewrites in place
+          const cacheControl = OPENCODE_TOOL_REF.test(ref) ? "private, no-store" : "private, max-age=86400, immutable";
+          return new Response(output, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
         } catch (error) {
           return errorResponse(error);
         }
@@ -1762,10 +1767,11 @@ export function createServer(
         const ref = url.searchParams.get("ref");
         if (!paneId || !ref) return badRequest("missing_parameter", "pane_id and ref query parameters are required");
         try {
-          const image = await conversationImage(paneId, ref, options.codexHome);
+          const image = await conversationImage(paneId, ref, options.codexHome, options.opencodeDb);
           if (image === null) return jsonResponse({ error: { code: "image_not_found", message: "no such image in this pane's conversation" } }, 404);
-          // Claude embeds immutable bytes; a Codex attachment may name a local file that changes.
-          return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": ref.startsWith("codex-") ? "private, no-store" : "private, max-age=86400, immutable", "x-content-type-options": "nosniff" } });
+          // Claude embeds immutable bytes; Codex files and OpenCode tool-image ordinals can change.
+          const cacheControl = ref.startsWith("codex-") || ref.startsWith("opencode:") ? "private, no-store" : "private, max-age=86400, immutable";
+          return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
         } catch (error) {
           return errorResponse(error);
         }
@@ -1780,7 +1786,7 @@ export function createServer(
           from: url.searchParams.get("from") ?? undefined,
         };
         try {
-          const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath);
+          const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb);
           // The chat polls every 2s: an unchanged conversation answers 304 with no body.
           // no-store keeps the browser's own cache out of it, so the chat sees the 304.
           const etag = `"${version}"`;

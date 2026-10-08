@@ -393,13 +393,14 @@
           <div class="n">01</div>
           <div>
             <h3>聊天与终端，共用一个窗格。<span class="arw" aria-hidden="true">→</span></h3>
-            <p>阅读 Claude Code、Codex、omp、omo、gjc 和 pi 的原生会话记录，一键切换到实时终端。聊天内容来自智能体自己的会话文件，而不是屏幕文字，每一轮的命令和编辑会折叠成一个块。智能体工作时可以先写好下一条消息：它会在下一轮发出，也可以用 Send now 立即发送。</p>
+            <p>阅读 Claude Code、Codex、omp、omo、gjc 和 pi 的原生会话记录，以及 herdr 识别出的 OpenCode 2 会话，一键切换到实时终端。聊天内容来自智能体自己的会话数据，而不是屏幕文字，每一轮的命令和编辑会折叠成一个块。智能体工作时可以先写好下一条消息：它会在下一轮发出，也可以用 Send now 立即发送。</p>
           </div>
           <div class="ev" aria-hidden="true">
             <div class="seg"><span class="on">聊天</span><span>终端</span></div>
             <div class="ev-row"><span>claude</span><b>原生会话记录</b></div>
             <div class="ev-row"><span>codex</span><b>原生 rollout</b></div>
             <div class="ev-row"><span>omp · omo · gjc · pi</span><b>会话文件</b></div>
+            <div class="ev-row"><span>OpenCode 2</span><b>会话数据库</b></div>
             <div class="ev-row"><span>其他程序</span><b>终端文字</b></div>
           </div>
         </a>
@@ -607,7 +608,7 @@
           </div>
           <div class="qa">
             <dt>聊天视图支持哪些智能体？</dt>
-            <dd>Claude Code、Codex、omp、omo、gjc 和 pi 直接从各自的会话文件读取。herdr 窗格里的其他程序则显示实时终端和状态。 <a href="https://github.com/devswha/herdr-web-ui/blob/main/docs/guide.md#supported-agents">支持的智能体 →</a></dd>
+            <dd>Claude Code、Codex、omp、omo、gjc 和 pi 直接从各自的会话文件读取。OpenCode 2 会从 OpenCode 自己的数据库读取 herdr 报告的会话；处于主屏幕或使用 1.x 数据库时则显示实时终端。其他程序显示实时终端和状态。 <a href="https://github.com/devswha/herdr-web-ui/blob/main/docs/guide.md#supported-agents">支持的智能体 →</a></dd>
           </div>
           <div class="qa">
             <dt>它会取代 herdr 自带的 TUI 吗？</dt>
