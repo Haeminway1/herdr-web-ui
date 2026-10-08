@@ -22,3 +22,35 @@ This branch runs beside the canonical `devswha.herdr-web-ui` plugin as a second 
   top by default, and the two tests that assume upstream's usage defaults adjusted to match.
 - The plugin picks a release up within five minutes; every open app shows its reload banner.
 - Retire: once the PRs are merged upstream, uninstall this plugin and use the canonical app.
+
+## Fork features (keep working through every sync)
+
+What this build has that upstream does not, or does differently. A sync keeps each one's
+user-visible behavior; when upstream reimplements one, its code is taken only if this survives.
+
+- Chat: native Devin CLI conversations; instant send (the bubble shows at once, beside upstream's
+  pending follow-ups); the work-progress line in the composer status row (elapsed time and current
+  tool); a prompt answer refused only because the card's id moved is retried on the same card;
+  OmO's lead line as a `.chat-intent` chip and runtime notices as chrome.
+- Sidebar: the attention inbox above the PCs (Needs you / To read / Working; read state on the
+  server, `attention.json`, `pane/seen` proxied for remote PCs; `NeedsInput.tsx`, which upstream
+  deleted in #521); the opt-in project dashboard sidebar (`dashboardSidebar`).
+- Usage: the plan-meter panel at the top of the sidebar (`usagePlacement: "top"`, the fork default,
+  with `showUsage` on and palette `report`), folded to one line on a phone.
+- Alerts: the Dynamic Island on touch screens and toasts with a mouse (`Droplet.tsx`,
+  `AlertToasts`), the connected keyline bloom, the alert-history bell, native push taps routed to
+  app windows only.
+- Appearance: Claude and Codex mark choices (`claudeMark`, `codexMark`).
+- Desktop shell (`desktop/`), identity overlay above.
+- Tests that encode the above: `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
+  the top-panel part of `usage-regression.ts`, `alert-sound-regression.ts` waiting for the toast.
+
+## Automatic sync on each upstream release
+
+`herdr-web-ui-fork-sync.timer` runs `scripts/fork-sync.sh` every five minutes: one `git ls-remote`
+of upstream's tags. Only a release tag `deploy/haemin` does not contain starts work: a worktree
+`../sync-<tag>` on `sync/upstream-<tag>` with the merge begun, and a herdr workspace
+"Web UI 동기화 <tag>" where Claude finishes it from `scripts/fork-sync-prompt.md` (conflicts
+resolved keeping the list above, gates, `fork-release.sh`) or asks there when a choice is the
+user's. A tag is started once: its state is in `~/.local/state/herdr-web-ui-fork-sync/<tag>`;
+delete that file to start it again. `scripts/fork-sync.sh --dry-run` says what a check would do.

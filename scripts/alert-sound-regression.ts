@@ -116,12 +116,14 @@ export async function checkAlertSound(browser: Browser, origin: string): Promise
     }
     // no tap yet: the page may not play, and nothing is kept to sound later
     await block(otherPane);
-    await page.locator(".droplet-card").waitFor({ state: "visible" });
+    // fork: with a mouse the alert is a toast (AlertToasts); the Dynamic Island is for touch screens
+    const card = page.locator(".alert-toast");
+    await card.first().waitFor({ state: "visible" });
     assert.deepEqual(await chimes(), [], "no chime before a gesture");
     console.log("PASS no alert sound before the page was tapped");
 
-    await page.locator(".droplet-card").click();
-    await page.locator(".droplet").waitFor({ state: "detached" });
+    await card.first().click();
+    await page.waitForFunction(() => document.querySelector(".alert-toast") === null);
     // the tap opened the other pane: it is the one in front now
     await report(otherPane, "idle");
     await report(openPane, "idle");
@@ -130,7 +132,7 @@ export async function checkAlertSound(browser: Browser, origin: string): Promise
     // the pane in front was seen waiting before the other was reported, and the card drops in
     // with the chime: by the time the card for the pane behind shows, a chime for the pane in
     // front would have sounded already
-    await page.locator(".droplet-card").waitFor({ state: "visible" });
+    await card.first().waitFor({ state: "visible" });
     assert.deepEqual(await chimes(), [660, 880], "one rising chime, for the pane not in front");
     console.log("PASS a pane that waits chimes, the one in front does not");
 

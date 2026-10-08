@@ -188,8 +188,8 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     await panel.getByRole("button", { name: "Show plan limits" }).click();
     const rows = panel.locator(".usage-panel-row");
     assert.equal(await rows.count(), 7);
-    assert.match(await rows.nth(0).textContent() ?? "", /me@work\.example/, "two Codex accounts are told apart");
-    assert.match(await rows.nth(2).textContent() ?? "", /me@example\.com/);
+    assert.match(await rows.nth(1).textContent() ?? "", /Codex.*me@work\.example/, "two Codex accounts are told apart, in the server's order (#408)");
+    assert.match(await rows.nth(2).textContent() ?? "", /Codex.*me@example\.com/);
     assert.equal(await rows.evaluateAll((all) => all.every((row) => row.scrollWidth <= row.clientWidth)), true, "each row fits the phone");
     // a slowed-down or signed-out account says so in its row, as the footer chip dims: not only once opened
     assert.equal(await panel.locator(".usage-panel-row.has-problem").count(), 2);
