@@ -162,6 +162,8 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
         const call = record(rawCall);
         if (!text(call.name)) continue;
         const id = text(call.id);
+        // one id is one call: listed again, it would copy that call's stored output into every listing
+        if (id && pending.has(id)) continue;
         const state = updates.get(id);
         const update = parse(state?.tool_call_update_json ?? null);
         const saved = parse(state?.tool_call_json ?? null);

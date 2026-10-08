@@ -265,3 +265,13 @@ test("replacing history after an LRU touch keeps its original generation until r
   f.node(2, null, { role: "user", content: "replacement branch" });
   expect(f.page().history_id).not.toBe(original.history_id);
 });
+
+test("renders a tool call id listed many times once, so one stored output is not multiplied", () => {
+  const f = fixture();
+  f.node(1, null, { role: "user", content: "synthetic question" });
+  f.node(2, 1, { role: "assistant", content: "", tool_calls: Array.from({ length: 2000 }, () => ({ id: "call-1", name: "synthetic_tool", arguments: {} })) });
+  f.db.query("INSERT INTO tool_call_state VALUES ('one', 'call-1', '{}', ?)").run(JSON.stringify({ content: "x".repeat(64 * 1024) }));
+  const page = f.page();
+  expect(page.turns[1]!.parts.length).toBe(1);
+  expect(JSON.stringify(page).length).toBeLessThan(128 * 1024);
+});
