@@ -17,6 +17,8 @@ export type ResolvedTheme = "dark" | "light";
 export type Density = "compact" | "comfortable";
 /** One line names the workspace; two lines say what its pane is doing, with the workspace under it. */
 export type SidebarRows = "one" | "two";
+/** the Agents list's order: herdr's workspace order, or a waiting agent first and then the latest change */
+export type AgentOrder = "workspace" | "activity";
 /** what the plan meters count: the share of a limit used, or what is left of it */
 export type UsageCount = "used" | "left";
 /** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
@@ -55,6 +57,10 @@ export interface Settings {
   sidebarRows: SidebarRows;
   /** Opt-in project dashboard in the sidebar. */
   dashboardSidebar: boolean;
+  /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
+  agentOrder: AgentOrder;
+  /** a DONE opened here since it finished reads as ready, as herdr's own view would make it (per browser and PC) */
+  quietOpenedDone: boolean;
   /** the chrome color family, keyed as data-palette in src/styles.css */
   palette: Palette;
   /** Claude panes: the Anthropic logo, or the Claude Code mascot */
@@ -67,6 +73,9 @@ export interface Settings {
   terminalWheelSpeed: number;
   /** fonts tried before the built-in terminal stack, as a CSS font-family list; "" keeps the built-in one */
   terminalFontFamily: string;
+  /** let a pane's OSC 52 sequence write the clipboard (lib/osc52.ts); off until chosen: any process
+   *  in the pane could otherwise plant text the user pastes into a password field elsewhere */
+  terminalOsc52: boolean;
   /** chat text size in px (its body text; the rest scales with it); null follows the density */
   chatFontSize: number | null;
   /** fonts tried before the UI font in the chat's prose (code stays mono), as a CSS font-family list; "" keeps the UI font */
@@ -129,9 +138,12 @@ export const DEFAULT_SETTINGS: Settings = {
   palette: "report", // fork deployment: the report look by default, as before v0.3.4101
   claudeMark: "logo",
   codexMark: "logo",
+  agentOrder: "workspace",
+  quietOpenedDone: false,
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
+  terminalOsc52: false,
   chatFontSize: null,
   chatFontFamily: "",
   chatWidth: "default",
@@ -275,6 +287,8 @@ export function sanitizeSettings(raw: unknown): Settings {
     dashboardSidebar: typeof record["dashboardSidebar"] === "boolean" ? record["dashboardSidebar"] : DEFAULT_SETTINGS.dashboardSidebar,
     claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
     codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,
+    agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
+    quietOpenedDone: record["quietOpenedDone"] === true,
     palette: record["palette"] === "amber" || record["palette"] === "report" || record["palette"] === "charcoal" || record["palette"] === "catppuccin" || record["palette"] === "lilac" ? record["palette"] : DEFAULT_SETTINGS.palette,
     terminalFontSize: typeof font === "number" && Number.isFinite(font) ? clampFont(font) : DEFAULT_SETTINGS.terminalFontSize,
     terminalWheelSpeed: typeof record["terminalWheelSpeed"] === "number" && Number.isFinite(record["terminalWheelSpeed"])
@@ -284,6 +298,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       ? Math.min(CHAT_FONT_MAX, Math.max(CHAT_FONT_MIN, Math.round(chatFont)))
       : DEFAULT_SETTINGS.chatFontSize,
     terminalFontFamily: sanitizeFontFamily(record["terminalFontFamily"]),
+    terminalOsc52: typeof record["terminalOsc52"] === "boolean" ? record["terminalOsc52"] : DEFAULT_SETTINGS.terminalOsc52,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,

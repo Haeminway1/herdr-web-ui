@@ -954,8 +954,8 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
         <div className="chat-bubble"><Markdown>{item.text}</Markdown></div>
         <div className="chat-turn-meta">{t(item.sent ? "Sent" : "Sending…")}</div>
       </article>)}
-      {!ended && !connected && <p className="chat-inline-state">{t("reconnecting…")}</p>}
-      {error !== null && <p className="chat-inline-state chat-inline-error" role="alert">{errorStatus === 401 ? "locked — the token gate is asking again" : error}</p>}
+      {!ended && !connected && <p className="chat-inline-state" role="status">{t("Reconnecting…")}</p>}
+      {error !== null && <p className="chat-inline-state chat-inline-error" role="alert">{errorStatus === 401 ? t("locked — the token gate is asking again") : error}</p>}
       {!loaded && error === null && <p className="chat-inline-state" role="status">{t("Loading conversation…")}</p>}
       {loaded && empty && error === null && prompt === null && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}

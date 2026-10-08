@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Download, Monitor, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
 import type { Machine, MachineState, MachineUpdate } from "../../shared/machines.ts";
 import { MachineContext } from "../lib/machineContext.tsx";
@@ -11,6 +11,7 @@ import { Sidebar } from "./Sidebar.tsx";
 import { AgentSidebar } from "./AgentSidebar.tsx";
 import { AttentionInbox } from "./NeedsInput.tsx";
 import { DashboardUsage, UsageMeters, UsagePanel } from "./UsageMeters.tsx";
+import { SidebarActivityProvider, useSidebarActivityState } from "../lib/sidebarActivity.tsx";
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
@@ -29,20 +30,22 @@ interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId
 export function MachineSidebar(props: Props) {
   const t = useT();
   const { settings } = useSettings();
+  // both lists draw from it: live counters per PC and the finishes looked at here (lib/sidebarActivity.tsx)
+  const activity = useSidebarActivityState(props.machines, props.selectedMachineId, props.selectedPaneId);
   // no top bar: a workspace starts from its PC's header, and Add PC lives in Settings → Remote PCs.
   // The fork's opt-in project dashboard keeps its own New session bar (the session opens on the
   // selected PC, the same one Mod+Shift+N uses), and the fork keeps the attention inbox and the
   // plan-limit panel at the top of the list.
   const target = props.machines.find((machine) => machine.id === props.selectedMachineId);
-  if (settings.dashboardSidebar) return <div className="sidebar-shell is-dashboard">
+  if (settings.dashboardSidebar) return <SidebarActivityProvider value={activity}><div className="sidebar-shell is-dashboard">
     <div className="sidebar-topbar sidebar-topbar-row">
       <button className="btn sidebar-new-session" disabled={target !== undefined && target.state !== "connected"} title={target ? t("New session on {name}", { name: target.name }) : t("New session")} onClick={props.actions.openNewSession}><Plus aria-hidden="true" />{t("New session")}</button>
     </div>
     <DashboardUsage />
     <DashboardSidebar {...props} renderMachineControls={(machine) => <MachineGroup {...props} machine={machine} dashboard />} />
     <SidebarFooter actions={props.actions} />
-  </div>;
-  return <div className="sidebar-shell">
+  </div></SidebarActivityProvider>;
+  return <SidebarActivityProvider value={activity}><div className="sidebar-shell">
     <UsagePanel />
     <div className="machine-list" aria-label={t("PCs and workspaces")}>
       <AttentionInbox machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} onSelect={props.onSelect} />
@@ -51,7 +54,7 @@ export function MachineSidebar(props: Props) {
     </div>
     <AgentSidebar machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} stateWord={(machine) => t(STATE_WORD[machine.state])} onSelect={props.onSelect} />
     <SidebarFooter actions={props.actions} />
-  </div>;
+  </div></SidebarActivityProvider>;
 }
 
 function SidebarFooter({ actions }: { actions: AppActions }) {
@@ -77,9 +80,18 @@ function MachineGroup({ machine, dashboard = false, ...props }: Props & { machin
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const online = machine.state === "connected";
+  // one request at a time: a double-clicked Disconnect/Connect can otherwise race and leave this
+  // UI's idea of the state opposite the server's until the next refetch
+  const [busy, setBusy] = useState(false);
+  // the state disables the buttons; the ref refuses a second click that lands before that render
+  const inFlight = useRef(false);
   const mutate = async (method: string, body?: unknown) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     try { await machineRequest(`/${machine.id}`, method, body); setError(null); if (method === "DELETE" && props.selectedMachineId === machine.id) props.onSelect("local", null); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { inFlight.current = false; setBusy(false); }
   };
   const actions: AppActions = { ...props.actions, selectPane: (id) => props.onSelect(machine.id, id), openNewSession: () => props.onNew(machine.id) };
   const toggle = () => {
@@ -105,12 +117,14 @@ function MachineGroup({ machine, dashboard = false, ...props }: Props & { machin
     {dashboard && machine.kind === "ssh" && <button type="button" className="btn btn-ghost" aria-label={t("Manage {name}", { name: machine.name })} aria-expanded={editing} onClick={() => { setEditing(!editing); setConfirmDelete(false); }}>{t("Manage PC")}</button>}
     {/* connected is the norm and says nothing new; every other state is spelled out */}
     {machine.action_required || machine.updating ? <MachineActionNotice machine={machine} onSetup={props.onSetup} /> : (!dashboard || machine.error) && <p className={`machine-state is-${machine.state}${online ? " visually-hidden" : ""}`} role="status" title={machine.error ?? undefined}>
-      <span className="machine-state-word">{STATE_WORD[machine.state]}</span>
+      <span className="machine-state-word">{t(STATE_WORD[machine.state])}</span>
       {machine.error && <span className="machine-state-detail">{machine.error}</span>}
     </p>}
     {editing && <div className="machine-controls">
-      <form onSubmit={(e) => { e.preventDefault(); void mutate("PATCH", { name }); }}><label className="field"><span className="field-label">{t("PC name")}</span><input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></label><button className="btn" type="submit">{t("Rename")}</button></form>
-      <div className="machine-control-buttons"><button className="btn" onClick={() => void mutate("PATCH", { enabled: !machine.enabled })}>{t(machine.enabled ? "Disconnect" : "Connect")}</button><button className="btn" onClick={() => props.onSetup(machine)}>{t("Reconnect / setup")}</button><button className="btn" onClick={() => props.onSetup(machine, true)}>{t("Update bridge…")}</button><button className="btn btn-danger" onClick={() => { if (confirmDelete) void mutate("DELETE"); else setConfirmDelete(true); }}>{t(confirmDelete ? "Confirm remove PC" : "Remove PC")}</button></div>
+      <form onSubmit={(e) => { e.preventDefault(); void mutate("PATCH", { name }); }}><label className="field"><span className="field-label">{t("PC name")}</span><input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></label><button className="btn" type="submit" disabled={busy}>{t("Rename")}</button></form>
+      {/* the first click only arms the removal, so it does not look destructive; the second one
+          is, as in DevicesPanel's revoke */}
+      <div className="machine-control-buttons"><button className="btn" disabled={busy} onClick={() => void mutate("PATCH", { enabled: !machine.enabled })}>{t(machine.enabled ? "Disconnect" : "Connect")}</button><button className="btn" onClick={() => props.onSetup(machine)}>{t("Reconnect / setup")}</button><button className="btn" onClick={() => props.onSetup(machine, true)}>{t("Update bridge…")}</button><button className={confirmDelete ? "btn btn-danger" : "btn btn-ghost"} disabled={busy} onClick={() => { if (confirmDelete) void mutate("DELETE"); else setConfirmDelete(true); }}>{t(confirmDelete ? "Confirm remove PC" : "Remove PC")}</button></div>
       {confirmDelete && <p className="field-hint">{t("Removes this registration. Remote sessions keep running.")}</p>}
     </div>}
     {error && <p className="machine-error" role="alert">{error}</p>}

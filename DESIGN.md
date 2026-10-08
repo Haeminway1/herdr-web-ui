@@ -64,6 +64,11 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 | Drawer shadow | `--shadow-drawer` | `0 0 40px rgba(0, 0, 0, 0.6)` | `0 0 40px rgba(40, 32, 22, 0.22)` |
 | Popover shadow | `--shadow-pop` | `0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border)` | `0 16px 48px rgba(40, 32, 22, 0.16), 0 0 0 1px var(--border)` |
 | Card shadow | `--shadow-card` | `0 4px 16px rgba(0, 0, 0, 0.35)` | `0 4px 16px rgba(40, 32, 22, 0.07)` |
+| Document surface | `--pdf-page` | `#ffffff` | `#ffffff` |
+
+`--pdf-page` is the one color with the same value in both columns, on purpose: a PDF page is
+paper, not UI, and the viewer (`.file-viewer-pdf`) must not tint it for the theme. It is named in
+`src/styles.css` under the same note and no theme or palette block overrides it.
 
 ### Opt-in palettes
 
@@ -154,6 +159,7 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 | Title | `--fs-xl` | `18px` | `17px` | Markdown h1 |
 | Display | `--fs-display` | `22px` | `21px` | The empty chat's greeting |
 | Input | `--fs-input` | `16px` | `16px` | Mobile-safe text input |
+| Pairing | `--fs-pairing` | `32px` | `26px` | The pairing code in Settings → Devices |
 
 | Token | Value | Usage |
 |-------|-------|-------|
@@ -264,6 +270,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--chat-w` | `--content-w`, then the pane's lane as one length | — | Chat lane: transcript, composer column, held list. Settings → Chat width: Narrow `--content-w`; Default follows the pane (min 820px, max `60rem` = 960px, 71% of the pane between; the px floor wins where 60rem is under it); Wide `72rem` (1152px); Full `100%` |
 | `--palette-w` | `640px` | — | Command palette |
 | `--palette-top` | `12vh` | — | Palette top offset |
+| `--context-line` | `calc(var(--fs-lg) * var(--lh-base))` = `24px` | `21.75px`, through the scale | The selected pane's crumb row, min and max height. Scoped to `.context`, not `:root`, so it follows `--fs-lg`/`--lh-base` in either density |
 
 ### Focus and layers
 
@@ -480,6 +487,22 @@ The Dynamic Island's own colours, the same in every theme.
   then its own workspace name. The folder, the mark, the status cell, the menu and the fold
   count stay where they are, and the menu and rename still act on the workspace. The choice
   is per device and applies at once.
+- Appearance's **Agents order** is **Workspaces** by default: the Agents list in herdr's
+  workspace, tab and pane order. **Activity** pins a blocked agent on top and orders the rest by
+  their most recent state change (herdr's `state_change_seq`, read from the snapshot's `agents`),
+  within each PC, so the agent just worked in stays on top while it runs and after it finishes.
+  It changes only the Agents list; herdr's order and the workspace rows stay as they are.
+- Appearance's **Quiet opened finishes** is off by default. herdr reports DONE until one of its
+  own clients shows the pane, so an agent opened here would keep its finished dot. On, a DONE
+  opened here (selected while the page is visible) since it finished draws as ready in the
+  Agents list and in its workspace's roll-up. "Opened" is kept per PC in this browser
+  (`herdr-web-ui:seen:<pc>`) and dropped with the PC. The first time it is turned on in a
+  browser, everything open on the connected PCs counts as opened, so the lists start quiet; a PC
+  first seen later starts with nothing opened, so its finishes keep their dots until opened.
+  Storage holds herdr's own counters only, so a page reloaded within the poll window after
+  leaving a finish it watched shows that finish's dot again rather than guess. herdr's counter
+  only goes up within a session, so a look recorded above it is from before a herdr restart and
+  is dropped.
 - Each workspace row holds its folder (top-level rows), a leading glyph, the name (on two lines,
   the title over the place) and the compact state at the right. The leading glyph is the brand mark of the agent in the pane the row opens; a row that opens a
   shell shows the terminal glyph, and a linked worktree without an agent the branch glyph. The
