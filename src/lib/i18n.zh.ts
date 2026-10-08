@@ -891,4 +891,5 @@ export const ZH: Record<string, string> = {
   "How the session list is laid out when the dashboard is off": "仪表板关闭时会话列表的布局方式",
   "Open the latest work": "展开最近的工作",
   "The newest answer's tool calls start unfolded": "最新回答的工具调用默认展开",
+  "By repository, a row each": "按仓库，每个一行",
 };

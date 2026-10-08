@@ -19,8 +19,8 @@ export type Density = "compact" | "comfortable";
 export type SidebarRows = "one" | "two";
 /** fork: the classic folder sidebar (ClassicSidebar.tsx), or upstream's workspaces + Agents list */
 export type SidebarLayout = "classic" | "agents";
-/** fork, classic sidebar: panes grouped by their folder, or by herdr workspace */
-export type SidebarGrouping = "directory" | "workspace";
+/** fork, classic sidebar: a row per session under its repository's name, panes grouped by their folder, or by herdr workspace */
+export type SidebarGrouping = "repo" | "directory" | "workspace";
 /**
  * The classic sidebar is the fork's default. A browser driven by automation (Playwright's
  * navigator.webdriver) starts on upstream's, which upstream's UI regressions are written against.
@@ -152,7 +152,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarRows: "two",
   dashboardSidebar: false,
   sidebarLayout: DEFAULT_SIDEBAR_LAYOUT,
-  sidebarGrouping: "directory",
+  sidebarGrouping: "repo",
   openLastWork: !AUTOMATED,
   palette: "report", // fork deployment: the report look by default, as before v0.3.4101
   claudeMark: "logo",
@@ -305,7 +305,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     sidebarRows: record["sidebarRows"] === "one" || record["sidebarRows"] === "two" ? record["sidebarRows"] : DEFAULT_SETTINGS.sidebarRows,
     dashboardSidebar: typeof record["dashboardSidebar"] === "boolean" ? record["dashboardSidebar"] : DEFAULT_SETTINGS.dashboardSidebar,
     sidebarLayout: record["sidebarLayout"] === "classic" || record["sidebarLayout"] === "agents" ? record["sidebarLayout"] : DEFAULT_SETTINGS.sidebarLayout,
-    sidebarGrouping: record["sidebarGrouping"] === "directory" || record["sidebarGrouping"] === "workspace" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
+    sidebarGrouping: record["sidebarGrouping"] === "repo" || record["sidebarGrouping"] === "directory" || record["sidebarGrouping"] === "workspace" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
     openLastWork: typeof record["openLastWork"] === "boolean" ? record["openLastWork"] : DEFAULT_SETTINGS.openLastWork,
     claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
     codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,

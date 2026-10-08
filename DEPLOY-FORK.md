@@ -40,8 +40,9 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   tool); a prompt answer refused only because the card's id moved is retried on the same card;
   OmO's lead line as a `.chat-intent` chip and runtime notices as chrome.
 - Sidebar: the classic sidebar by default (`ClassicSidebar.tsx`, `cl-` classes): New session / Add PC
-  bar, panes grouped by folder (`sidebarGrouping`, `directoryGroups.ts`) or workspace, a row per
-  pane with agent mark and status, rename and close on hover, the version line; upstream's
+  bar; by default a row per session, its repository folder on top and the session under it, no
+  group headers (`sidebarGrouping: "repo"`), or grouped by folder (`directoryGroups.ts`) or workspace;
+  each row with agent mark and status, rename and close on hover, the version line; upstream's
   workspaces + Agents list only as `sidebarLayout: "agents"` (automation browsers default to it
   so upstream's UI tests stay valid). The attention inbox above the PCs (Needs you / To read / Working; read state on the
   server, `attention.json`, `pane/seen` proxied for remote PCs; `NeedsInput.tsx`, which upstream

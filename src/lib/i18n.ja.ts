@@ -889,4 +889,5 @@ export const JA: Record<string, string> = {
   "How the session list is laid out when the dashboard is off": "ダッシュボードがオフのときのセッション一覧の表示方法です",
   "Open the latest work": "最新の作業を開く",
   "The newest answer's tool calls start unfolded": "最新の回答のツール実行を展開して表示します",
+  "By repository, a row each": "リポジトリごとに1行",
 };

@@ -175,7 +175,7 @@ function AppearancePage() {
         <Segmented label={t("Sidebar style")} value={settings.sidebarLayout} onChange={(sidebarLayout) => update({ sidebarLayout })} options={[{ value: "classic", label: t("Folders, a row per session") }, { value: "agents", label: t("Workspaces and agents") }]} />
       </SettingsRow>
       {settings.sidebarLayout === "classic" && <SettingsRow label={t("Sidebar grouping")} wide>
-        <Segmented label={t("Sidebar grouping")} value={settings.sidebarGrouping} onChange={(sidebarGrouping) => update({ sidebarGrouping })} options={[{ value: "directory", label: t("By folder") }, { value: "workspace", label: t("By workspace") }]} />
+        <Segmented label={t("Sidebar grouping")} value={settings.sidebarGrouping} onChange={(sidebarGrouping) => update({ sidebarGrouping })} options={[{ value: "repo", label: t("By repository, a row each") }, { value: "directory", label: t("By folder") }, { value: "workspace", label: t("By workspace") }]} />
       </SettingsRow>}
       {/* fork: the opt-in project dashboard sidebar */}
       <SettingsRow label={t("Project dashboard sidebar")} description={t("Show usage, attention, and project cards in the sidebar")}>

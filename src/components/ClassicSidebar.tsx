@@ -58,6 +58,8 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
   const t = useT();
   const { settings } = useSettings();
   const byFolder = settings.sidebarGrouping === "directory";
+  // a row per session, its repository's folder on top and the session under it, no group headers
+  const byRepo = settings.sidebarGrouping === "repo";
   const machineId = useMachineId();
   const { closePane, moveWorkspace, renamePane, renameWorkspace } = useMachineApi();
   const [armedId, setArmedId] = useState<string | null>(null);
@@ -244,9 +246,9 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
     if (visiblePanes.length === 0) return null;
     // Only folder mode merges a single-pane workspace into its row. Count the
     // whole workspace so one split across folders keeps its rename heading.
-    const merged = byFolder && (workspacePaneCounts.get(workspace.workspace_id) ?? visiblePanes.length) === 1;
+    const merged = byRepo || byFolder && (workspacePaneCounts.get(workspace.workspace_id) ?? visiblePanes.length) === 1;
     const groupKey = `workspace:${workspace.workspace_id}`;
-    const collapsed = !byFolder && collapsedGroups.has(groupKey);
+    const collapsed = !byFolder && !byRepo && collapsedGroups.has(groupKey);
     return (
       <section
         className={`cl-workspace${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${collapsed ? " is-collapsed" : ""}`}
@@ -338,13 +340,13 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
                             }}
                           />
                         ) : (
-                          <span className="cl-pane-title">{displayTitle}</span>
+                          <span className="cl-pane-title">{byRepo ? cwdBasename(pane.cwd) : displayTitle}</span>
                         )}
                       </span>
                       <span className="cl-pane-meta">
                         {pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge status={pane.agent_status} />}
                         <BackgroundBadge count={(pane as HerdrPane).background_tasks} />
-                        <span className="cl-pane-subtitle">{byFolder ? workspace.label : placeLine(workspace.label, cwdBasename(pane.cwd))}</span>
+                        <span className="cl-pane-subtitle">{byRepo ? displayTitle : byFolder ? workspace.label : placeLine(workspace.label, cwdBasename(pane.cwd))}</span>
                       </span>
                     </span>
                   </div>

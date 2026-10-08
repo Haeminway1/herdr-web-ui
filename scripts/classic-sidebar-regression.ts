@@ -10,7 +10,8 @@ import { sessionSnapshot } from "../server/herdr/client.ts";
 export async function checkClassicSidebar(browser: Browser, origin: string, paneId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
   try {
-    await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ sidebarLayout: "classic", sidebarGrouping: "directory" })));
+    // set once: a reload below changes the grouping in storage and keeps it
+    await context.addInitScript(() => { if (!sessionStorage.getItem("qa-classic")) { sessionStorage.setItem("qa-classic", "1"); localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ sidebarLayout: "classic", sidebarGrouping: "directory" })); } });
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -61,7 +62,18 @@ export async function checkClassicSidebar(browser: Browser, origin: string, pane
     assert.equal(await header.getAttribute("aria-expanded"), "true");
     // the attention inbox rows keep the classic row look
     assert.equal(await page.locator(".needs-input .pane-select").count(), 0, "inbox rows use the classic row classes");
+    // the default grouping: a row per session, the repository's folder on top, no group headers
+    await page.evaluate(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ sidebarLayout: "classic", sidebarGrouping: "repo" })));
+    await page.reload();
+    const repoRow = page.locator(".cl-pane-item").filter({ has: page.locator(`.cl-pane-select[title^="${paneId} —"]`) });
+    await repoRow.waitFor();
+    assert.equal(await page.locator(".cl-directory-group, .cl-workspace-header").count(), 0, "no folder or workspace headers");
+    assert.equal(await repoRow.locator(".cl-pane-title").textContent(), pane.cwd.split("/").filter(Boolean).at(-1), "the repository's folder names the row");
+    await repoRow.hover();
+    assert.equal(await repoRow.getByRole("button", { name: /^Rename / }).isVisible(), true, "rename on hover by repository too");
+    // the PC list scrolls under the wheel: the nested list never keeps it
+    assert.equal(await page.locator(".machine-workspaces .cl-sidebar-list").evaluate((el) => getComputedStyle(el).overscrollBehaviorY), "auto");
     assert.deepEqual(errors, []);
-    console.log("PASS classic sidebar: folder groups, a row per pane, hover rename and close, folding");
+    console.log("PASS classic sidebar: folder groups, a row per pane, hover rename and close, folding, a row per repository, scroll");
   } finally { await context.close(); }
 }

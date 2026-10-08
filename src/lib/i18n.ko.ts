@@ -887,4 +887,5 @@ export const KO: Record<string, string> = {
   "How the session list is laid out when the dashboard is off": "대시보드를 끈 상태에서 세션 목록을 보여 주는 방식입니다",
   "Open the latest work": "최근 작업 펼치기",
   "The newest answer's tool calls start unfolded": "가장 최근 답변의 도구 실행 목록을 펼친 채로 보여 줍니다",
+  "By repository, a row each": "레포별 한 줄",
 };
