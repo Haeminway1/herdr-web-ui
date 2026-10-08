@@ -206,7 +206,10 @@ try {
   await select("devin", "local", "devin");
   await page.getByText("Synthetic Devin prompt", { exact: true }).waitFor();
   await page.getByText("Synthetic Devin answer", { exact: true }).waitFor();
+  await page.locator(".work-block-head").click();
   assert.equal(await page.locator(".work-row-name").filter({ hasText: "synthetic_tool" }).count(), 1);
+  await page.locator(".work-row-head").click();
+  await page.getByText("synthetic result", { exact: true }).waitFor();
   await select("claude", "local", "claude");
   await page.getByText("Synthetic Claude prompt", { exact: true }).waitFor();
   assert.equal(await page.getByText("Synthetic Devin answer", { exact: true }).count(), 0);
