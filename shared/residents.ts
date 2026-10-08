@@ -20,12 +20,15 @@ export interface Residents {
   residents: string[];
   /** how a dim row starts its session */
   launch: ResidentLaunch;
+  /** a resident's name in the sidebar, by folder; a folder without one shows its own name */
+  names: Record<string, string>;
 }
 
 export const DEFAULT_RESIDENTS: Residents = {
   top: [],
   residents: [],
   launch: { kind: "claude", model: "claude-opus-5-5", effort: "medium" },
+  names: {},
 };
 
 const EFFORTS = new Set(["", "low", "medium", "high", "xhigh"]);
@@ -48,15 +51,23 @@ export function sanitizeResidents(value: unknown): Residents {
   const record = value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const launch = record["launch"] !== null && typeof record["launch"] === "object" ? record["launch"] as Record<string, unknown> : {};
   const top = paths(record["top"]);
+  const residents = paths(record["residents"]).filter((path) => !top.includes(path));
+  const named = record["names"] !== null && typeof record["names"] === "object" && !Array.isArray(record["names"]) ? record["names"] as Record<string, unknown> : {};
+  const names: Record<string, string> = {};
+  for (const path of [...top, ...residents]) {
+    const name = named[path];
+    if (typeof name === "string" && name.trim()) names[path] = name.trim().replace(/\s+/g, " ").slice(0, 60);
+  }
   return {
     top,
     // a folder on top is not listed twice
-    residents: paths(record["residents"]).filter((path) => !top.includes(path)),
+    residents,
     launch: {
       kind: launch["kind"] === "codex" ? "codex" : "claude",
       model: typeof launch["model"] === "string" && /^[\w.:/-]{0,80}$/.test(launch["model"].trim()) ? launch["model"].trim() : DEFAULT_RESIDENTS.launch.model,
       effort: typeof launch["effort"] === "string" && EFFORTS.has(launch["effort"]) ? launch["effort"] as ResidentLaunch["effort"] : DEFAULT_RESIDENTS.launch.effort,
     },
+    names,
   };
 }
 
@@ -81,4 +92,9 @@ export function launchArgs(launch: ResidentLaunch): string[] {
     if (launch.effort) args.push("-c", `model_reasoning_effort=${launch.effort}`);
   }
   return args;
+}
+
+/** The name a resident folder shows: the one given, else the folder's own. */
+export function residentName(residents: Residents, folder: string): string {
+  return residents.names[folder] ?? folder.split("/").filter(Boolean).at(-1) ?? folder;
 }

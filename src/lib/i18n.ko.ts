@@ -898,7 +898,6 @@ export const KO: Record<string, string> = {
   "Work": "작업",
   "Pin a session to keep its agent here": "세션의 📌을 눌러 상시 에이전트로 두세요",
   "Resident agents": "상시 에이전트",
-  "Pin a session in the sidebar to add its folder. On top stays above the Resident / Work toggle.": "사이드바에서 세션의 📌을 누르면 그 폴더가 추가됩니다. '맨 위'는 상시/작업 토글과 상관없이 항상 위에 보입니다.",
   "None yet": "아직 없음",
   "On top": "맨 위",
   "Remove": "빼기",
@@ -907,4 +906,6 @@ export const KO: Record<string, string> = {
   "Model": "모델",
   "Empty for the agent's own default": "비워 두면 에이전트 기본값",
   "Reasoning": "추론",
+  "Pin a session in the sidebar to add its folder. Rename one here; On top stays above the Resident / Work toggle.": "사이드바에서 세션의 📌을 누르면 그 폴더가 추가됩니다. 여기서 이름을 바꿀 수 있고, '맨 위'는 상시/작업 토글과 상관없이 항상 위에 보입니다.",
+  "Name of {folder}": "{folder} 이름",
 };

@@ -900,7 +900,6 @@ export const JA: Record<string, string> = {
   "Work": "作業",
   "Pin a session to keep its agent here": "セッションの📌で常駐エージェントにできます",
   "Resident agents": "常駐エージェント",
-  "Pin a session in the sidebar to add its folder. On top stays above the Resident / Work toggle.": "サイドバーでセッションの📌を押すとそのフォルダーが追加されます。「一番上」は常駐/作業の切り替えに関係なく常に上に表示されます。",
   "None yet": "まだありません",
   "On top": "一番上",
   "Remove": "外す",
@@ -909,4 +908,6 @@ export const JA: Record<string, string> = {
   "Model": "モデル",
   "Empty for the agent's own default": "空欄でエージェントの既定値",
   "Reasoning": "推論",
+  "Pin a session in the sidebar to add its folder. Rename one here; On top stays above the Resident / Work toggle.": "サイドバーでセッションの📌を押すとそのフォルダーが追加されます。ここで名前を変えられます。「一番上」は常駐/作業の切り替えに関係なく常に上に表示されます。",
+  "Name of {folder}": "{folder}の名前",
 };

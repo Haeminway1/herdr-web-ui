@@ -13,7 +13,7 @@ import { KeyBarSettings } from "./KeyBarSettings.tsx";
 import { onSettingsHistory, recordSettings, settingsEntry, settingsLevels, type SettingsLevel } from "../lib/settingsHistory.ts";
 import { Segmented, SettingsGroup, SettingsRow, Stepper, Toggle } from "./SettingsControls.tsx";
 import { updateResidents, useResidents } from "../lib/residents.ts";
-import type { ResidentLaunch } from "../../shared/residents.ts";
+import { residentName, type ResidentLaunch } from "../../shared/residents.ts";
 import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
 import type { MachineSettings } from "../../shared/machines.ts";
@@ -743,10 +743,20 @@ function ResidentSettings() {
   const name = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path;
   const rows = [...residents.top.map((path) => ({ path, top: true })), ...residents.residents.map((path) => ({ path, top: false }))];
   return <>
-    <SettingsRow label={t("Resident agents")} description={t("Pin a session in the sidebar to add its folder. On top stays above the Resident / Work toggle.")} wide>
+    <SettingsRow label={t("Resident agents")} description={t("Pin a session in the sidebar to add its folder. Rename one here; On top stays above the Resident / Work toggle.")} wide>
       {rows.length === 0 ? <span className="settings-resident-empty">{t("None yet")}</span> : <ul className="settings-residents">
         {rows.map(({ path, top }) => <li key={path} title={path}>
-          <span className="settings-resident-name">{name(path)}</span>
+          <input className="input settings-resident-name" aria-label={t("Name of {folder}", { folder: name(path) })} defaultValue={residentName(residents, path)} key={residentName(residents, path)} placeholder={name(path)}
+            onBlur={(event) => {
+              const given = event.target.value.trim();
+              if (given === residentName(residents, path)) return;
+              void updateResidents((current) => {
+                const names = { ...current.names };
+                if (given && given !== name(path)) names[path] = given; else delete names[path];
+                return { ...current, names };
+              });
+            }}
+            onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
           <Toggle label={t("On top")} checked={top} onChange={(on) => void updateResidents((current) => on
             ? { ...current, top: [...current.top, path], residents: current.residents.filter((other) => other !== path) }
             : { ...current, top: current.top.filter((other) => other !== path), residents: [path, ...current.residents] })} />

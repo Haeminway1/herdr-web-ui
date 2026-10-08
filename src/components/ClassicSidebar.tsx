@@ -21,7 +21,7 @@ import { useT } from "../lib/i18n.ts";
 import { groupDirectories } from "../lib/directoryGroups.ts";
 import { useSettings, type SidebarGrouping } from "../lib/settings.ts";
 import { toggleResident, useResidents } from "../lib/residents.ts";
-import { launchArgs, residentFolder } from "../../shared/residents.ts";
+import { launchArgs, residentFolder, residentName } from "../../shared/residents.ts";
 
 const CLOSE_ARM_MS = 3000;
 const ERROR_NOTE_MS = 5000;
@@ -70,6 +70,11 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
   const [residentTab, setResidentTab] = useState<"resident" | "work">(() => { try { return localStorage.getItem("herdr-web-ui:resident-tab") === "work" ? "work" : "resident"; } catch { return "resident"; } });
   const chooseResidentTab = (tab: "resident" | "work"): void => { setResidentTab(tab); try { localStorage.setItem("herdr-web-ui:resident-tab", tab); } catch { /* storage denied */ } };
   const [starting, setStarting] = useState<string | null>(null);
+  /** a row's name by repository: a resident's given name, else its folder's */
+  const rowName = (pane: PaneInfo): string => {
+    const folder = residentsOn ? residentFolder(pane.cwd, [...residents.top, ...residents.residents]) : null;
+    return folder ? residentName(residents, folder) : cwdBasename(pane.cwd);
+  };
   const { closePane, createWorkspace, moveWorkspace, renamePane, renameWorkspace } = useMachineApi();
   const [armedId, setArmedId] = useState<string | null>(null);
   const [editingPaneId, setEditingPaneId] = useState<string | null>(null);
@@ -349,7 +354,7 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
                             }}
                           />
                         ) : (
-                          <span className="cl-pane-title">{byRepo ? cwdBasename(pane.cwd) : displayTitle}</span>
+                          <span className="cl-pane-title">{byRepo ? rowName(pane) : displayTitle}</span>
                         )}
                       </span>
                       <span className="cl-pane-meta">
@@ -400,7 +405,7 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
   const startResident = async (folder: string): Promise<void> => {
     setStarting(folder);
     try {
-      const created = await createWorkspace({ cwd: folder, label: cwdBasename(folder), agent: { kind: residents.launch.kind, args: launchArgs(residents.launch) } });
+      const created = await createWorkspace({ cwd: folder, label: residentName(residents, folder), agent: { kind: residents.launch.kind, args: launchArgs(residents.launch) } });
       if (created.agent_started === false && created.error) noteError(created.error.message);
       actions.selectPane(created.pane_id);
     } catch (error) {
@@ -416,12 +421,12 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
           <button type="button" className="cl-pane-select" disabled={starting !== null} title={t("Start a session in {path}", { path: folder })} onClick={() => void startResident(folder)}>
             <span className="cl-agent-mark-holder"><AgentMark agent={residents.launch.kind} size={22} /></span>
             <span className="cl-pane-copy">
-              <span className="cl-pane-primary"><span className="cl-pane-title">{cwdBasename(folder)}</span></span>
+              <span className="cl-pane-primary"><span className="cl-pane-title">{residentName(residents, folder)}</span></span>
               <span className="cl-pane-meta"><span className="cl-pane-subtitle">{starting === folder ? t("Starting…") : t("Not open · click to start")}</span></span>
             </span>
           </button>
           <div className="cl-pane-actions">
-            <button type="button" className="cl-sidebar-row-action cl-pane-pin is-pinned" aria-label={t("Take {name} off residents", { name: cwdBasename(folder) })} title={t("Take {name} off residents", { name: cwdBasename(folder) })} onClick={() => void toggleResident(folder)}>
+            <button type="button" className="cl-sidebar-row-action cl-pane-pin is-pinned" aria-label={t("Take {name} off residents", { name: residentName(residents, folder) })} title={t("Take {name} off residents", { name: residentName(residents, folder) })} onClick={() => void toggleResident(folder)}>
               <PinOff aria-hidden="true" />
             </button>
           </div>

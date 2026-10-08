@@ -902,7 +902,6 @@ export const ZH: Record<string, string> = {
   "Work": "工作",
   "Pin a session to keep its agent here": "点击会话的 📌 将其设为常驻智能体",
   "Resident agents": "常驻智能体",
-  "Pin a session in the sidebar to add its folder. On top stays above the Resident / Work toggle.": "在侧边栏点击会话的 📌 即可添加其文件夹。“置顶”始终显示在常驻/工作切换上方。",
   "None yet": "暂无",
   "On top": "置顶",
   "Remove": "移除",
@@ -911,4 +910,6 @@ export const ZH: Record<string, string> = {
   "Model": "模型",
   "Empty for the agent's own default": "留空则使用智能体默认值",
   "Reasoning": "推理",
+  "Pin a session in the sidebar to add its folder. Rename one here; On top stays above the Resident / Work toggle.": "在侧边栏点击会话的 📌 即可添加其文件夹。可在此重命名；“置顶”始终显示在常驻/工作切换上方。",
+  "Name of {folder}": "{folder} 的名称",
 };

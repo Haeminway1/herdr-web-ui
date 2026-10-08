@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { DEFAULT_RESIDENTS, launchArgs, residentFolder, sanitizeResidents } from "./residents.ts";
+import { DEFAULT_RESIDENTS, launchArgs, residentFolder, residentName, sanitizeResidents } from "./residents.ts";
 
 test("a stored or sent list is cleaned: absolute folders once, nothing on top twice, a sane launch", () => {
   expect(sanitizeResidents(null)).toEqual(DEFAULT_RESIDENTS);
@@ -8,7 +8,7 @@ test("a stored or sent list is cleaned: absolute folders once, nothing on top tw
     top: ["/a/top/", "relative", 3],
     residents: ["/a/one", "/a/one", "/a/top", "/a/two"],
     launch: { kind: "codex", model: "gpt-5.5", effort: "high", extra: true },
-  })).toEqual({ top: ["/a/top"], residents: ["/a/one", "/a/two"], launch: { kind: "codex", model: "gpt-5.5", effort: "high" } });
+  })).toEqual({ top: ["/a/top"], residents: ["/a/one", "/a/two"], launch: { kind: "codex", model: "gpt-5.5", effort: "high" }, names: {} });
   expect(sanitizeResidents({ launch: { kind: "x", model: "rm -rf /; echo", effort: "max" } }).launch).toEqual(DEFAULT_RESIDENTS.launch);
 });
 
@@ -24,4 +24,11 @@ test("the launch becomes each agent's own flags", () => {
   expect(launchArgs({ kind: "claude", model: "claude-opus-5-5", effort: "medium" })).toEqual(["--model", "claude-opus-5-5", "--effort", "medium"]);
   expect(launchArgs({ kind: "codex", model: "gpt-5.5", effort: "high" })).toEqual(["-m", "gpt-5.5", "-c", "model_reasoning_effort=high"]);
   expect(launchArgs({ kind: "claude", model: "", effort: "" })).toEqual([]);
+});
+
+test("a resident keeps the name given to it; one not listed loses it", () => {
+  const residents = sanitizeResidents({ top: ["/a/manager"], residents: ["/a/lanes/hls"], names: { "/a/lanes/hls": "  HLS   lane ", "/a/gone": "Gone", "/a/manager": "" } });
+  expect(residents.names).toEqual({ "/a/lanes/hls": "HLS lane" });
+  expect(residentName(residents, "/a/lanes/hls")).toBe("HLS lane");
+  expect(residentName(residents, "/a/manager")).toBe("manager");
 });
