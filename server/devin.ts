@@ -159,7 +159,9 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
       }
       if (role !== "user" && role !== "assistant") continue;
       const parts: ConversationPart[] = [];
-      if (role === "assistant" && text(message.thinking)) parts.push({ kind: "thinking", text: text(message.thinking) });
+      // Devin 3000.11.3 stores reasoning as { thinking, signature }
+      const thinking = text(typeof message.thinking === "string" ? message.thinking : record(message.thinking).thinking);
+      if (role === "assistant" && thinking) parts.push({ kind: "thinking", text: thinking });
       if (text(message.content)) parts.push({ kind: "text", text: text(message.content) });
       if (role === "assistant" && Array.isArray(message.tool_calls)) for (const rawCall of message.tool_calls) {
         const call = record(rawCall);

@@ -318,3 +318,10 @@ test("reads a real Devin CLI session: the resumed main chain, its tool call and 
   expect(tools[0]!.kind === "tool" && tools[0]!.output).toContain("alpha.txt\nbeta.txt");
   expect(page.metadata.model).toBe("swe-1-6-slow");
 });
+
+test("shows a real Devin session's reasoning, which it stores as an object", () => {
+  const page = realSession();
+  expect(page.turns[1]!.parts.map((part) => part.kind)).toEqual(["thinking", "tool", "thinking", "text"]);
+  const first = page.turns[1]!.parts[0]!;
+  expect(first.kind === "thinking" && first.text).toStartWith("The user wants me to run `ls`");
+});
