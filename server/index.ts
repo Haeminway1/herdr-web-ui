@@ -17,6 +17,7 @@ import { badRequest, errorResponse, isCount, isJsonObject, jsonResponse } from "
 import { serveStatic } from "./static.ts";
 import { startStatusCollector } from "./collector.ts";
 import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneRunsOmo, toolOutput } from "./conversation.ts";
+import { DevinHistoryChanged } from "./devin.ts";
 import { omoPanes } from "./omo.ts";
 import { OMO_ALIASES, OmoStatus, processAlive } from "./omo-status.ts";
 import { omoRuns, omoTasks } from "./omo-tasks.ts";
@@ -326,6 +327,8 @@ export function createServer(
     tailnet?: TailnetIdentitySource;
     /** Native Codex store; defaults to CODEX_HOME. Tests use an isolated store. */
     codexHome?: string;
+    /** Native Devin store; tests pass an isolated SQLite database. */
+    devinDbPath?: string;
     updates?: UpdateService;
     /** updates herdr itself (server/herdr-update.ts); unset, the app offers no herdr update. Tests pass one that runs a stand-in herdr. */
     herdrUpdate?: HerdrUpdater;
@@ -1777,7 +1780,7 @@ export function createServer(
           from: url.searchParams.get("from") ?? undefined,
         };
         try {
-          const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page);
+          const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath);
           // The chat polls every 2s: an unchanged conversation answers 304 with no body.
           // no-store keeps the browser's own cache out of it, so the chat sees the 304.
           const etag = `"${version}"`;
@@ -1785,7 +1788,7 @@ export function createServer(
           if (request.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
           return jsonResponse(conversation, 200, headers);
         } catch (error) {
-          if (error instanceof HistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
+          if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
           // an unrecognized pane is not an error: the client falls back to the
           // scrollback transcript, exactly like chatmux's terminal fallback
           if (error instanceof ConversationUnavailable) return jsonResponse({ source: "scrollback", turns: [] });

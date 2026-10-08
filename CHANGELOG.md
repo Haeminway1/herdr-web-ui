@@ -8,6 +8,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Added
+- Devin CLI panes with an explicitly identified native session show their active conversation
+  branch and tool activity in Chat. Unresolved or unreadable sessions keep the terminal-text
+  fallback. ([#438](https://github.com/devswha/herdr-web-ui/pull/438) by @Haeminway1)
 - The app sends an anonymous count when it is installed and each time it is updated: the version,
   the OS, how it was installed and a random ID, nothing about your terminals or files, and no IP
   address is stored. A line says so the first time you open the app, and
