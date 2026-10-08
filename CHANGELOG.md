@@ -12,6 +12,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   pane can no longer put text on your clipboard unless you turn it on. Programs that copy this way
   (vim, tmux, Claude Code) copy again once it is on.
   ([#570](https://github.com/devswha/herdr-web-ui/pull/570) by @radicor)
+- The guide's **Behind a reverse proxy** shows how to give the app a public HTTPS address with
+  [Portal](https://github.com/gosuda/portal-tunnel) v2.6.1 or later, behind a long random token
+  and with a visitor's `Tailscale-User-Login` header dropped.
+  ([#229](https://github.com/devswha/herdr-web-ui/pull/229) by @rabbitson87)
 
 ### Changed
 - A wrong access token is refused with a growing wait after five tries, up to a minute, whether it
