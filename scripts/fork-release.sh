@@ -1,7 +1,9 @@
 #!/bin/bash
 # Fork release (deploy/haemin, DEPLOY-FORK.md): tags and pushes vX.Y.Z only after every check passes.
 #   scripts/fork-release.sh 0.3.4101
-# package.json and herdr-plugin.toml must already carry that version. Checks run with the calling
+# package.json and herdr-plugin.toml must already carry that version. One release runs at a time
+# (flock); its outcome is ~/.local/state/herdr-web-ui-fork-sync/release-<version>.status
+# (running / failed: … / released). Checks run with the calling
 # shell's HERDR_* variables removed (an agent shell inside a herdr pane carries its session's).
 #
 # typecheck must pass outright. A unit, integration or UI failure is accepted only when
@@ -15,7 +17,15 @@ set -uo pipefail
 version="${1:?usage: fork-release.sh X.Y.Z}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 logs="$(mktemp -d)"
-fail() { echo "fork-release: $1 (logs in $logs); nothing tagged" >&2; exit 1; }
+# one release at a time on this PC (a hand release and an automatic sync must not overlap), and
+# its outcome in a file a waiting agent reads, instead of guessing from the process list
+state="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-web-ui-fork-sync"
+mkdir -p "$state"
+exec 9>"$state/release.lock"
+flock -n 9 || { echo "fork-release: another release is running (last started: $(cat "$state/release.current" 2>/dev/null)); nothing tagged" >&2; exit 1; }
+echo "$version $$ $(date -Is)" > "$state/release.current"
+echo "running $(date -Is)" > "$state/release-$version.status"
+fail() { echo "fork-release: $1 (logs in $logs); nothing tagged" >&2; echo "failed $(date -Is): $1 (logs in $logs)" > "$state/release-$version.status"; exit 1; }
 for v in $(env | grep -oE '^HERDR_[A-Z_]+'); do unset "$v"; done
 export CHROME_PATH="${CHROME_PATH:-/opt/google/chrome/chrome}"
 grep -q "\"version\": \"$version\"" "$root/package.json" || fail "package.json is not $version"
@@ -122,3 +132,4 @@ fi
 echo "all checks passed: unit $(grep -oE '^ *[0-9]+ pass' "$logs/unit.log" | tail -1 | tr -d ' '), ui $(grep -c '^PASS' "$logs/ui.log") PASS, integration $(grep -oE '^ *[0-9]+ pass' "$logs/integration.log" | tail -1 | tr -d ' ')$notes"
 git tag "v$version" && git push -q origin HEAD:deploy/haemin "v$version" || fail "tag or push failed"
 echo "tagged and pushed v$version"
+echo "released $(date -Is)" > "$state/release-$version.status"
