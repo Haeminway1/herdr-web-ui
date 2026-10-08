@@ -53,7 +53,8 @@ export async function checkClassicSidebar(browser: Browser, origin: string, pane
     await input.fill(before);
     await input.press("Enter");
     // a folder folds and unfolds
-    const header = group.locator(".cl-directory-header");
+    // found by its folder: folded, the group no longer holds the pane's row
+    const header = page.locator(`.cl-directory-group[data-directory="${pane.cwd}"] .cl-directory-header`);
     await header.click();
     assert.equal(await header.getAttribute("aria-expanded"), "false");
     await header.click();
