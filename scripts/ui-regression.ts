@@ -760,7 +760,8 @@ try {
   await page.reload(); await page.locator(".conn-live").waitFor();
   await until(async () => await page.locator(".composer-queue-text").count() === 3, "legacy held rows restored");
   assert.equal(await composer.inputValue(), "");
-  assert.equal(await page.getByRole("button", { name: "Stop agent", exact: true }).count(), 1);
+  // fork: the reloaded roster can show the pane's earlier finish for a moment before its working status lands
+  await until(async () => await page.getByRole("button", { name: "Stop agent", exact: true }).count() === 1, "working status after reload");
   assert.equal(await page.locator(".composer-action").count(), 1, "one primary action beside legacy recovery");
   // the held rows sit on the input card's column, under one caption that counts them
   const heldBox = await page.locator(".composer-queue").boundingBox();
