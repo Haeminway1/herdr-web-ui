@@ -43,7 +43,7 @@ const base = () => `http://localhost:${server.port}`;
 describe("Devin conversation API", () => {
   it("keeps the terminal fallback rather than guessing a shell pane's session", async () => {
     const state = mkdtempSync(join(tmpdir(), "herdr-web-ui-devin-contract-"));
-    const created = await workspaceCreate({ cwd: state, label: "herdr-web-ui-test-devin-identity", focus: false });
+    const created = await workspaceCreate({ cwd: state, label: "herdr-web-ui-test-devin-identity" });
     const dbPath = join(state, "sessions.db");
     let bridge: ReturnType<typeof createServer> | undefined;
     try {

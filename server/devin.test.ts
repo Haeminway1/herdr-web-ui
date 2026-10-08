@@ -125,7 +125,7 @@ test("groups assistant continuations across tool nodes and ignores unknown conte
   f.node(2, 1, { role: "assistant", tool_calls: [{ id: "call", name: "check", arguments: {} }] });
   f.node(3, 2, { role: "tool", tool_call_id: "call", content: "synthetic output" });
   f.node(4, 3, { role: "assistant", content: "synthetic answer" });
-  expect(f.page()).toMatchObject([{ role: "assistant", parts: [
+  expect(f.page().turns).toMatchObject([{ role: "assistant", parts: [
     { kind: "tool", output: "synthetic output" }, { kind: "text", text: "synthetic answer" },
   ] }]);
 });
