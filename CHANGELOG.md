@@ -48,6 +48,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - Settings opened over a file preview is visible above it; Escape and Back close Settings
   first, preserving the preview and its history entry until the file itself is closed.
   ([#568](https://github.com/devswha/herdr-web-ui/pull/568))
+- Command palette buttons keep their native Enter action; IME commit and cancel keys
+  stay with text input, and arrow navigation keeps the selected result visible.
+  ([#567](https://github.com/devswha/herdr-web-ui/pull/567))
 
 ## [0.4.0] - 2026-10-08
 
