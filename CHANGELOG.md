@@ -38,6 +38,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   notice, as a usage limit reached or reset does. Claude Code 2.1.29x records these as
   informational entries, which the chat left out.
   ([#600](https://github.com/devswha/herdr-web-ui/pull/600) by @Yoonwoo-Ha)
+- A chat message with an invisible character in it (a zero-width space, a joiner, a byte-order
+  mark, often in pasted text) no longer seems lost. Claude Code 2.1.294 takes such characters out
+  and keeps the message in its input for review instead of sending it, while the chat had already
+  cleared its box. The chat now shows a card with the message as Claude holds it: **Send** sends
+  it, **Discard** clears Claude's input.
+  ([#601](https://github.com/devswha/herdr-web-ui/pull/601) by @Yoonwoo-Ha)
 
 ## [0.4.1] - 2026-10-08
 
