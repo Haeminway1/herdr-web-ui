@@ -170,6 +170,13 @@ function AppearancePage() {
       <SettingsRow label={t("Quiet opened finishes")} description={t("A finished agent you have opened here loses its dot, as herdr's own view would clear it; remembered per PC on this browser")}>
         <Toggle label={t("Quiet opened finishes")} checked={settings.quietOpenedDone} onChange={(quietOpenedDone) => update({ quietOpenedDone })} />
       </SettingsRow>
+      {/* fork: the classic folder sidebar, or upstream's workspaces + Agents list */}
+      <SettingsRow label={t("Sidebar style")} description={t("How the session list is laid out when the dashboard is off")} wide>
+        <Segmented label={t("Sidebar style")} value={settings.sidebarLayout} onChange={(sidebarLayout) => update({ sidebarLayout })} options={[{ value: "classic", label: t("Folders, a row per session") }, { value: "agents", label: t("Workspaces and agents") }]} />
+      </SettingsRow>
+      {settings.sidebarLayout === "classic" && <SettingsRow label={t("Sidebar grouping")} wide>
+        <Segmented label={t("Sidebar grouping")} value={settings.sidebarGrouping} onChange={(sidebarGrouping) => update({ sidebarGrouping })} options={[{ value: "directory", label: t("By folder") }, { value: "workspace", label: t("By workspace") }]} />
+      </SettingsRow>}
       {/* fork: the opt-in project dashboard sidebar */}
       <SettingsRow label={t("Project dashboard sidebar")} description={t("Show usage, attention, and project cards in the sidebar")}>
         <Toggle label={t("Project dashboard sidebar")} checked={settings.dashboardSidebar} onChange={(dashboardSidebar) => update({ dashboardSidebar })} />

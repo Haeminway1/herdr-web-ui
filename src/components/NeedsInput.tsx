@@ -6,6 +6,8 @@ import { timeAgo, useT } from "../lib/i18n.ts";
 import { attentionGroups, type AttentionEntry } from "../lib/attention.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { displayPaneTitle, StatusBadge } from "./Sidebar.tsx";
+// fork: the inbox rows are the classic roster rows (ClassicSidebar.css), whatever sidebar is chosen
+import "./ClassicSidebar.css";
 import "./NeedsInput.css";
 
 interface Props {
@@ -41,10 +43,10 @@ export function AttentionInbox(props: Props) {
     <NeedsInput {...props} waiting={needsInput} />
     {toRead.length > 0 && <section className="needs-input attention-to-read" aria-label={t("To read")}>
       <h2 className="needs-input-heading">{t("To read")} <span className="pill">{toRead.length}</span></h2>
-      <ul className="pane-list">
+      <ul className="cl-pane-list">
         {toRead.map((entry) => <InboxRow key={paneStorageId(entry.machine.id, entry.pane.pane_id)} {...props} entry={entry} meta={<>
           <span className="attention-when">{timeAgo(entry.pane.attention!.finished_at!)}</span>
-          <span className="pane-subtitle" title={`${entry.machine.name} · ${entry.workspace.label}`}>{entry.pane.attention!.preview ?? `${entry.machine.name} · ${entry.workspace.label}`}</span>
+          <span className="cl-pane-subtitle" title={`${entry.machine.name} · ${entry.workspace.label}`}>{entry.pane.attention!.preview ?? `${entry.machine.name} · ${entry.workspace.label}`}</span>
         </>} />)}
       </ul>
     </section>}
@@ -55,7 +57,7 @@ export function AttentionInbox(props: Props) {
           {t("Working")} <span className="pill">{working.length}</span>
         </button>
       </h2>
-      {workingOpen && <ul className="pane-list">
+      {workingOpen && <ul className="cl-pane-list">
         {working.map((entry) => <InboxRow key={paneStorageId(entry.machine.id, entry.pane.pane_id)} {...props} entry={entry} />)}
       </ul>}
     </section>}
@@ -69,7 +71,7 @@ function NeedsInput({ waiting: list, ...props }: Props & { waiting: AttentionEnt
     <p className="visually-hidden" role="status">{t("Panes waiting for input: {n}", { n: list.length })}</p>
     {list.length > 0 && <section className="needs-input" aria-label={t("Needs you")}>
     <h2 className="needs-input-heading">{t("Needs you")} <span className="pill">{list.length}</span></h2>
-    <ul className="pane-list">
+    <ul className="cl-pane-list">
       {list.map((entry) => <InboxRow key={paneStorageId(entry.machine.id, entry.pane.pane_id)} {...props} entry={entry} />)}
     </ul>
     </section>}
@@ -80,11 +82,11 @@ function NeedsInput({ waiting: list, ...props }: Props & { waiting: AttentionEnt
 function InboxRow({ entry: { machine, pane, workspace }, selectedMachineId, selectedPaneId, onSelect, meta }: Props & { entry: AttentionEntry; meta?: ReactNode }) {
   const selected = machine.id === selectedMachineId && pane.pane_id === selectedPaneId;
   return <li className={`needs-input-item${selected ? " is-selected" : ""}`}>
-    <button type="button" className="pane-select needs-input-select" aria-current={selected ? "true" : undefined} onClick={() => onSelect(machine.id, pane.pane_id)}>
-      <span className="agent-mark-holder"><AgentMark agent={pane.agent ?? ""} size={22} /></span>
-      <span className="pane-copy">
-        <span className="pane-title">{displayPaneTitle(pane)}</span>
-        <span className="pane-meta">{meta ?? <><StatusBadge status={pane.agent_status} /><span className="pane-subtitle">{machine.name} · {workspace.label}</span></>}</span>
+    <button type="button" className="cl-pane-select needs-input-select" aria-current={selected ? "true" : undefined} onClick={() => onSelect(machine.id, pane.pane_id)}>
+      <span className="cl-agent-mark-holder"><AgentMark agent={pane.agent ?? ""} size={22} /></span>
+      <span className="cl-pane-copy">
+        <span className="cl-pane-title">{displayPaneTitle(pane)}</span>
+        <span className="cl-pane-meta">{meta ?? <><StatusBadge status={pane.agent_status} /><span className="cl-pane-subtitle">{machine.name} · {workspace.label}</span></>}</span>
       </span>
     </button>
   </li>;

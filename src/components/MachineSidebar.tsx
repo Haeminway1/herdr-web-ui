@@ -8,11 +8,14 @@ import { keepDismissed, noticeKey, readDismissed, waitingMachines, writeDismisse
 import type { AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
 import { Sidebar } from "./Sidebar.tsx";
+import { ClassicSidebar } from "./ClassicSidebar.tsx";
 import { AgentSidebar } from "./AgentSidebar.tsx";
 import { AttentionInbox } from "./NeedsInput.tsx";
 import { DashboardUsage, UsageMeters, UsagePanel } from "./UsageMeters.tsx";
 import { SidebarActivityProvider, useSidebarActivityState } from "../lib/sidebarActivity.tsx";
 import "./Machines.css";
+
+declare const __APP_VERSION__: string;
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { DashboardSidebar } from "./DashboardSidebar.tsx";
@@ -45,19 +48,27 @@ export function MachineSidebar(props: Props) {
     <DashboardSidebar {...props} renderMachineControls={(machine) => <MachineGroup {...props} machine={machine} dashboard />} />
     <SidebarFooter actions={props.actions} />
   </div></SidebarActivityProvider>;
-  return <SidebarActivityProvider value={activity}><div className="sidebar-shell">
+  // fork: the classic sidebar (folders, a row per pane) keeps its New session / Add PC bar and
+  // leaves out upstream's Agents list; upstream's layout is a choice in Settings → Appearance
+  const classic = settings.sidebarLayout === "classic";
+  return <SidebarActivityProvider value={activity}><div className={`sidebar-shell${classic ? " is-classic" : ""}`}>
+    {classic && <div className="sidebar-topbar sidebar-topbar-row">
+      <button className="btn sidebar-new-session" disabled={target !== undefined && target.state !== "connected"} title={target ? t("New session on {name}", { name: target.name }) : t("New session")} onClick={props.actions.openNewSession}><Plus aria-hidden="true" />{t("New session")}</button>
+      <button className="btn btn-ghost sidebar-add-pc" onClick={props.actions.openAddPc}><Monitor aria-hidden="true" />{t("Add PC")}</button>
+    </div>}
     <UsagePanel />
     <div className="machine-list" aria-label={t("PCs and workspaces")}>
       <AttentionInbox machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} onSelect={props.onSelect} />
       {props.machines.map((machine) => <MachineGroup key={machine.id} {...props} machine={machine} />)}
       {!props.machines.length && <p className="tree-state" role="status">{t("Loading PCs…")}</p>}
     </div>
-    <AgentSidebar machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} stateWord={(machine) => t(STATE_WORD[machine.state])} onSelect={props.onSelect} />
-    <SidebarFooter actions={props.actions} />
+    {!classic && <AgentSidebar machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} stateWord={(machine) => t(STATE_WORD[machine.state])} onSelect={props.onSelect} />}
+    <SidebarFooter actions={props.actions} herdrVersion={classic ? props.machines.find((machine) => machine.id === "local")?.snapshot?.version ?? null : undefined} />
   </div></SidebarActivityProvider>;
 }
 
-function SidebarFooter({ actions }: { actions: AppActions }) {
+/** `herdrVersion`: the classic sidebar's version line (null: herdr not reached); without it, none */
+function SidebarFooter({ actions, herdrVersion }: { actions: AppActions; herdrVersion?: string | null }) {
   const t = useT();
   const { canInstall, installed, install, help } = useInstallPrompt();
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
@@ -69,11 +80,16 @@ function SidebarFooter({ actions }: { actions: AppActions }) {
         <button className="btn btn-ghost sidebar-footer-action" title={t("Settings (⌘⇧,)")} onClick={actions.openSettings}><Settings aria-hidden="true" />{t("Settings")}</button>
         <UsageMeters />
       </div>
+      {herdrVersion !== undefined && <div className="sidebar-brandline">
+        <span className="sidebar-app-name">herdr web ui v{__APP_VERSION__}</span>
+        {herdrVersion && <span className="pill">herdr {herdrVersion}</span>}
+      </div>}
     </footer>;
 }
 
 function MachineGroup({ machine, dashboard = false, ...props }: Props & { machine: Machine; dashboard?: boolean }) {
   const t = useT();
+  const { settings } = useSettings();
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(`herdr-web-ui:pc-collapsed:${machine.id}`) === "1"; } catch { return false; } });
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(machine.name);
@@ -129,7 +145,9 @@ function MachineGroup({ machine, dashboard = false, ...props }: Props & { machin
     </div>}
     {error && <p className="machine-error" role="alert">{error}</p>}
     {!dashboard && !collapsed && <div className={online ? "" : "machine-offline"} {...(!online ? { inert: "" } : {})}>
-      {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}><Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} /></MachineContext.Provider>}
+      {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}>{settings.sidebarLayout === "classic" && !dashboard
+        ? <ClassicSidebar snapshot={machine.snapshot} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} />
+        : <Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} />}</MachineContext.Provider>}
     </div>}
   </section>;
 }

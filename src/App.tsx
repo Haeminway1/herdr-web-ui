@@ -709,6 +709,8 @@ export function App() {
   // the menu's button carries a dot while alerts are off here: the one state of the menu worth a glance
   const alertsOffDot = bellVisible && !bell.on;
   const connWord = t(connected ? "live" : outputStopped ? "disconnected" : "reconnecting");
+  // fork: the classic sidebar brings the classic header with it
+  const classicLayout = settings.sidebarLayout === "classic";
   const crumb = selectedPane && selectedTitle !== null
     ? headerCrumb({ machine: selectedMachine?.name ?? selectedMachineId, workspace: selectedWorkspace?.label ?? selectedPane.workspace_id, title: selectedTitle, cwd: selectedPane.cwd })
     : null;
@@ -829,7 +831,10 @@ export function App() {
 
   return (
     <MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null ? undefined : { "--sidebar-user-w": `${sidebarWidth}px` } as CSSProperties}>
-      <header className={`app-header is-zoned${chatShown ? " is-chat" : ""}`}>
+      {/* fork: the classic layout keeps the v0.3.4320 header (one bar: title over the sidebar's
+          column, the connection chip, files and palette on the right); upstream's zoned header
+          comes with its sidebar (settings.sidebarLayout) */}
+      <header className={classicLayout ? "app-header is-classic" : `app-header is-zoned${chatShown ? " is-chat" : ""}`}>
         {/* is-zoned tells this header from the connecting shell's, which has no zones to draw.
             .header-side is the sidebar's own top row from 769px (styles.css); below that its
             buttons sit in the bar */}
@@ -854,9 +859,9 @@ export function App() {
           >
             <PanelLeft />
           </button>
-          <button type="button" className="icon-button palette-button" aria-label={t("Command palette")} title={t("Command palette (⌘⇧K)")} onClick={() => setPaletteOpen(true)}>
+          {!classicLayout && <button type="button" className="icon-button palette-button" aria-label={t("Command palette")} title={t("Command palette (⌘⇧K)")} onClick={() => setPaletteOpen(true)}>
             <Search />
-          </button>
+          </button>}
         </div>
         {selectedPane && crumb ? (
           <div className="context" title={crumb.tooltip}>
@@ -867,10 +872,11 @@ export function App() {
             <div className="context-sub">
               <span className="machine-context-name">{crumb.machine}</span><span className="context-sep" aria-hidden="true">›</span>
               <span>{crumb.workspace}</span>
-              {crumb.folder !== null && (
+              {(classicLayout ? selectedPane.cwd ?? null : crumb.folder) !== null && (
                 <>
                   <span className="context-sep" aria-hidden="true">›</span>
-                  <span>{crumb.folder}</span>
+                  {/* fork: the classic header names the whole folder path, as it did */}
+                  <span>{classicLayout ? selectedPane.cwd : crumb.folder}</span>
                 </>
               )}
             </div>
@@ -903,6 +909,14 @@ export function App() {
             <span className="conn-text">{connWord}</span>
           </span>
           {!targetHerdr && <span className="pill pill-offline">{t("herdr offline")}</span>}
+          {classicLayout && selectedPane && (
+            <button type="button" className="icon-button files-button" aria-label={t("Browse files")} title={t("Browse files")} onClick={() => setFilesOpen(true)}>
+              <FolderOpen />
+            </button>
+          )}
+          {classicLayout && <button type="button" className="icon-button palette-button" aria-label={t("Command palette")} title={t("Command palette (⌘⇧K)")} onClick={() => setPaletteOpen(true)}>
+            <Search />
+          </button>}
           {/* the alerts this device heard, with their switch (components/AlertBell.tsx); the More
               menu keeps its Alerts item too */}
           <AlertBell bell={{ label: bell.state, title: bell.title, on: bell.on, run: bell.run }} canToggle={bellVisible} onOpen={openAlertPane} />

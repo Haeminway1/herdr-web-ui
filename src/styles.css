@@ -1560,3 +1560,47 @@ button {
 button, a, [role="button"] {
   -webkit-tap-highlight-color: transparent;
 }
+
+/* ---------- fork: the classic header (App.tsx, settings.sidebarLayout "classic") ---------- */
+/* one bar as in v0.3.4320: the toggles stay in the bar, the title starts over the sidebar's column */
+.app .app-header.is-classic .header-side {
+  display: contents;
+}
+
+/* the live chip is drawn, as it was: "live" beside the files and palette buttons */
+.app-header.is-classic .conn-live {
+  position: relative;
+  width: auto;
+  height: var(--chip-h);
+  margin: 0;
+  padding: 0 var(--space-2);
+  overflow: visible;
+  clip: auto;
+}
+
+/* the title over its place, two lines, as in v0.3.4320 */
+.app-header.is-classic .context {
+  flex-flow: column nowrap;
+  align-items: stretch;
+  justify-content: center;
+  row-gap: 0;
+  max-height: none;
+  overflow: visible;
+}
+
+.app-header.is-classic .context-title {
+  min-height: 0;
+  font-size: var(--fs-lg);
+}
+
+.app-header.is-classic .context-sub {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.app-header.is-classic .context-sub > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

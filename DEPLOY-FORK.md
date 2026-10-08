@@ -28,11 +28,22 @@ This branch runs beside the canonical `devswha.herdr-web-ui` plugin as a second 
 What this build has that upstream does not, or does differently. A sync keeps each one's
 user-visible behavior; when upstream reimplements one, its code is taken only if this survives.
 
+Seamless UX is the rule, not a preference: after a sync the user's screens look and work as
+before. An upstream redesign of something the user already has (layout, rows, controls, defaults)
+is never taken as the new default; it becomes a Settings choice, off by default, and the fork's
+look stays. Deleted upstream code the fork's UI still needs is restored, not dropped.
+(2026-10-08: v0.4.1 took upstream #521/#556 — workspaces + Agents list, By folder removed — as the
+default; the user lost the folder sidebar and the hover rename/close, and v0.4.2 put them back.)
+
 - Chat: native Devin CLI conversations; instant send (the bubble shows at once, beside upstream's
   pending follow-ups); the work-progress line in the composer status row (elapsed time and current
   tool); a prompt answer refused only because the card's id moved is retried on the same card;
   OmO's lead line as a `.chat-intent` chip and runtime notices as chrome.
-- Sidebar: the attention inbox above the PCs (Needs you / To read / Working; read state on the
+- Sidebar: the classic sidebar by default (`ClassicSidebar.tsx`, `cl-` classes): New session / Add PC
+  bar, panes grouped by folder (`sidebarGrouping`, `directoryGroups.ts`) or workspace, a row per
+  pane with agent mark and status, rename and close on hover, the version line; upstream's
+  workspaces + Agents list only as `sidebarLayout: "agents"` (automation browsers default to it
+  so upstream's UI tests stay valid). The attention inbox above the PCs (Needs you / To read / Working; read state on the
   server, `attention.json`, `pane/seen` proxied for remote PCs; `NeedsInput.tsx`, which upstream
   deleted in #521); the opt-in project dashboard sidebar (`dashboardSidebar`).
 - Usage: the plan-meter panel at the top of the sidebar (`usagePlacement: "top"`, the fork default,
@@ -42,7 +53,7 @@ user-visible behavior; when upstream reimplements one, its code is taken only if
   app windows only.
 - Appearance: Claude and Codex mark choices (`claudeMark`, `codexMark`).
 - Desktop shell (`desktop/`), identity overlay above.
-- Tests that encode the above: `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
+- Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
   the top-panel part of `usage-regression.ts`, `alert-sound-regression.ts` waiting for the toast.
 
 ## Automatic sync on each upstream release

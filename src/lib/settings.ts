@@ -17,6 +17,15 @@ export type ResolvedTheme = "dark" | "light";
 export type Density = "compact" | "comfortable";
 /** One line names the workspace; two lines say what its pane is doing, with the workspace under it. */
 export type SidebarRows = "one" | "two";
+/** fork: the classic folder sidebar (ClassicSidebar.tsx), or upstream's workspaces + Agents list */
+export type SidebarLayout = "classic" | "agents";
+/** fork, classic sidebar: panes grouped by their folder, or by herdr workspace */
+export type SidebarGrouping = "directory" | "workspace";
+/**
+ * The classic sidebar is the fork's default. A browser driven by automation (Playwright's
+ * navigator.webdriver) starts on upstream's, which upstream's UI regressions are written against.
+ */
+const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = typeof navigator !== "undefined" && navigator.webdriver === true ? "agents" : "classic";
 /** the Agents list's order: herdr's workspace order, or a waiting agent first and then the latest change */
 export type AgentOrder = "workspace" | "activity";
 /** what the plan meters count: the share of a limit used, or what is left of it */
@@ -57,6 +66,10 @@ export interface Settings {
   sidebarRows: SidebarRows;
   /** Opt-in project dashboard in the sidebar. */
   dashboardSidebar: boolean;
+  /** fork: which sidebar lists the panes when the dashboard is off */
+  sidebarLayout: SidebarLayout;
+  /** fork: how the classic sidebar groups its panes */
+  sidebarGrouping: SidebarGrouping;
   /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
   agentOrder: AgentOrder;
   /** a DONE opened here since it finished reads as ready, as herdr's own view would make it (per browser and PC) */
@@ -135,6 +148,8 @@ export const DEFAULT_SETTINGS: Settings = {
   density: "comfortable",
   sidebarRows: "two",
   dashboardSidebar: false,
+  sidebarLayout: DEFAULT_SIDEBAR_LAYOUT,
+  sidebarGrouping: "directory",
   palette: "report", // fork deployment: the report look by default, as before v0.3.4101
   claudeMark: "logo",
   codexMark: "logo",
@@ -285,6 +300,8 @@ export function sanitizeSettings(raw: unknown): Settings {
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarRows: record["sidebarRows"] === "one" || record["sidebarRows"] === "two" ? record["sidebarRows"] : DEFAULT_SETTINGS.sidebarRows,
     dashboardSidebar: typeof record["dashboardSidebar"] === "boolean" ? record["dashboardSidebar"] : DEFAULT_SETTINGS.dashboardSidebar,
+    sidebarLayout: record["sidebarLayout"] === "classic" || record["sidebarLayout"] === "agents" ? record["sidebarLayout"] : DEFAULT_SETTINGS.sidebarLayout,
+    sidebarGrouping: record["sidebarGrouping"] === "directory" || record["sidebarGrouping"] === "workspace" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
     claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
     codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,
     agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
