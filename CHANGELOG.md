@@ -11,6 +11,13 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - Devin CLI panes with an explicitly identified native session show their active conversation
   branch and tool activity in Chat. Unresolved or unreadable sessions keep the terminal-text
   fallback. ([#438](https://github.com/devswha/herdr-web-ui/pull/438) by @Haeminway1)
+- The app sends an anonymous count when it is installed and each time it is updated: the version,
+  the OS, how it was installed and a random ID, nothing about your terminals or files, and no IP
+  address is stored. A line says so the first time you open the app, and
+  **Settings → About → Anonymous usage counts** shows what is sent and turns it off;
+  `HERDR_WEB_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off on the server.
+  ([Anonymous usage counts](docs/guide.md#anonymous-usage-counts),
+  [#599](https://github.com/devswha/herdr-web-ui/pull/599))
 
 ### Changed
 - **Settings → Terminal → Clipboard from a pane** is on again: vim, tmux and Claude Code copy to
