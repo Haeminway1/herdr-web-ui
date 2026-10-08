@@ -74,8 +74,8 @@ export async function checkNotificationStartup(browser: Browser, upstream: strin
     const headers = new Headers(request.headers);
     headers.delete("host");
     // the server gzips for a browser that asks; fetch would unzip the body and keep the header,
-    // so this pass-through asks for the plain body it hands on
-    headers.delete("accept-encoding");
+    // so this pass-through asks for the plain body it hands on (fetch adds gzip to a missing header)
+    headers.set("accept-encoding", "identity");
     return fetch(`${upstream}${url.pathname}${url.search}`, { method: request.method, headers,
       body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body });
   } });
