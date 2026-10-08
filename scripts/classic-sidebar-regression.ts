@@ -76,4 +76,20 @@ export async function checkClassicSidebar(browser: Browser, origin: string, pane
     assert.deepEqual(errors, []);
     console.log("PASS classic sidebar: folder groups, a row per pane, hover rename and close, folding, a row per repository, scroll");
   } finally { await context.close(); }
+  // a phone: the classic header keeps the pane's title beside its mark, and the alert panel
+  // stays on screen wherever the bell sits
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" });
+  try {
+    await phone.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ sidebarLayout: "classic" })));
+    const page = await phone.newPage();
+    await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
+    const title = page.locator(".app-header.is-classic .context-title-text");
+    await title.waitFor();
+    assert.ok((await title.boundingBox())!.width > 40, "the title keeps room beside the mark");
+    assert.equal(await page.locator(".app-header.is-classic .header-more").isVisible(), false, "no More button in the classic phone header");
+    await page.locator(".alert-bell-button").first().click();
+    const panel = await page.locator(".alert-bell-panel").boundingBox();
+    assert.ok(panel && panel.x >= 0 && panel.x + panel.width <= 390, `the alert panel stays on screen: ${JSON.stringify(panel)}`);
+    console.log("PASS classic phone header: title beside the mark, alert panel on screen");
+  } finally { await phone.close(); }
 }

@@ -1604,3 +1604,33 @@ button, a, [role="button"] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* the classic header on a phone, as in v0.3.4320: the mark, the title over the PC's name, the
+   lens switch, the live dot, the palette and the bell. Files and New tab are the palette's. */
+@media (max-width: 480px) {
+  .app-header.is-classic .conn-live .conn-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .app-header.is-classic .files-button,
+  .app-header.is-classic .header-more {
+    display: none;
+  }
+
+  .app-header.is-classic .palette-button {
+    display: inline-flex;
+  }
+
+  .app-header.is-classic .context-title {
+    font-size: var(--fs-md);
+  }
+
+  .app-header.is-classic .context-sub > span:not(.machine-context-name) {
+    display: none;
+  }
+}
