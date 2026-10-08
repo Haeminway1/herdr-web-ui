@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DevinHistoryChanged, DevinHistoryUnavailable, devinConversation, forgetDevinState } from "./devin.ts";
@@ -283,4 +283,38 @@ test("refuses node ids SQLite holds exactly and JavaScript would round to a sibl
   insert.run("9007199254740993", JSON.stringify({ role: "user", content: "selected branch" }));
   f.db.exec("UPDATE sessions SET main_chain_id = 9007199254740993 WHERE id = 'one'");
   expect(() => f.page()).toThrow(DevinHistoryUnavailable);
+});
+
+/** The rows a real Devin CLI 3000.11.3 session wrote, in its own column layout (server/fixtures). */
+function realSession() {
+  const rows = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "devin-3000.11.3-session.json"), "utf8")) as Record<"sessions" | "message_nodes" | "tool_call_state", Record<string, unknown>[]>;
+  const dir = mkdtempSync(join(tmpdir(), "devin-real-"));
+  dirs.push(dir);
+  const dbPath = join(dir, "sessions.db");
+  const db = new Database(dbPath);
+  databases.push(db);
+  db.exec("PRAGMA journal_mode=WAL");
+  for (const table of ["sessions", "message_nodes", "tool_call_state"] as const) {
+    const columns = Object.keys(rows[table][0]!);
+    db.exec(`CREATE TABLE ${table}(${columns.join(",")})`);
+    const insert = db.query(`INSERT INTO ${table} VALUES (${columns.map(() => "?").join(",")})`);
+    for (const row of rows[table]) insert.run(...columns.map((column) => row[column] as string | number | null));
+  }
+  return devinConversation("rift-gallimimus", "/work/project", {}, dbPath);
+}
+
+test("reads a real Devin CLI session: the resumed main chain, its tool call and output, no abandoned copies", () => {
+  const page = realSession();
+  expect(page.turns.map((turn) => turn.role)).toEqual(["user", "assistant", "user", "assistant", "user", "assistant"]);
+  const texts = page.turns.map((turn) => turn.parts.filter((part) => part.kind === "text").map((part) => part.kind === "text" ? part.text : ""));
+  expect(texts).toEqual([
+    ["Run ls in this directory and tell me the file names, nothing else."], ["alpha.txt\nbeta.txt"],
+    ["Thanks. Now reply with just the word done."], ["done"],
+    ["Reply with just ok."], ["ok"],
+  ]);
+  const tools = page.turns.flatMap((turn) => turn.parts.filter((part) => part.kind === "tool"));
+  expect(tools).toHaveLength(1);
+  expect(tools[0]).toMatchObject({ kind: "tool", name: "exec", input: "{\"command\":\"ls\"}" });
+  expect(tools[0]!.kind === "tool" && tools[0]!.output).toContain("alpha.txt\nbeta.txt");
+  expect(page.metadata.model).toBe("swe-1-6-slow");
 });
