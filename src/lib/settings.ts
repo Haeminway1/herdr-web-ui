@@ -25,7 +25,8 @@ export type SidebarGrouping = "directory" | "workspace";
  * The classic sidebar is the fork's default. A browser driven by automation (Playwright's
  * navigator.webdriver) starts on upstream's, which upstream's UI regressions are written against.
  */
-const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = typeof navigator !== "undefined" && navigator.webdriver === true ? "agents" : "classic";
+const AUTOMATED = typeof navigator !== "undefined" && navigator.webdriver === true;
+const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = AUTOMATED ? "agents" : "classic";
 /** the Agents list's order: herdr's workspace order, or a waiting agent first and then the latest change */
 export type AgentOrder = "workspace" | "activity";
 /** what the plan meters count: the share of a limit used, or what is left of it */
@@ -70,6 +71,8 @@ export interface Settings {
   sidebarLayout: SidebarLayout;
   /** fork: how the classic sidebar groups its panes */
   sidebarGrouping: SidebarGrouping;
+  /** fork: the newest turn's work block starts open, as before upstream #458 folded settled work */
+  openLastWork: boolean;
   /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
   agentOrder: AgentOrder;
   /** a DONE opened here since it finished reads as ready, as herdr's own view would make it (per browser and PC) */
@@ -150,6 +153,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dashboardSidebar: false,
   sidebarLayout: DEFAULT_SIDEBAR_LAYOUT,
   sidebarGrouping: "directory",
+  openLastWork: !AUTOMATED,
   palette: "report", // fork deployment: the report look by default, as before v0.3.4101
   claudeMark: "logo",
   codexMark: "logo",
@@ -302,6 +306,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     dashboardSidebar: typeof record["dashboardSidebar"] === "boolean" ? record["dashboardSidebar"] : DEFAULT_SETTINGS.dashboardSidebar,
     sidebarLayout: record["sidebarLayout"] === "classic" || record["sidebarLayout"] === "agents" ? record["sidebarLayout"] : DEFAULT_SETTINGS.sidebarLayout,
     sidebarGrouping: record["sidebarGrouping"] === "directory" || record["sidebarGrouping"] === "workspace" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
+    openLastWork: typeof record["openLastWork"] === "boolean" ? record["openLastWork"] : DEFAULT_SETTINGS.openLastWork,
     claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
     codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,
     agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
