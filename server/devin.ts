@@ -176,7 +176,7 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
         const saved = parse(state?.tool_call_json ?? null);
         const args = call.arguments ?? saved.rawInput;
         const input = typeof args === "string" ? text(args) : args === undefined ? "" : JSON.stringify(args).slice(0, MAX_TEXT);
-        const part: Extract<ConversationPart, { kind: "tool" }> = { kind: "tool", name: text(call.name), summary: text(call.name), input, output: toolContent(update.content), ...(update.status === "error" || update.status === "failed" ? { error: true } : {}) };
+        const part: Extract<ConversationPart, { kind: "tool" }> = { kind: "tool", name: text(call.name), summary: text(update.title) || text(saved.title) || text(call.name), input, output: toolContent(update.content), ...(update.status === "error" || update.status === "failed" ? { error: true } : {}) };
         parts.push(part);
         if (id) pending.set(id, part);
       }

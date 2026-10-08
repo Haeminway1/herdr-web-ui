@@ -326,6 +326,11 @@ test("shows a real Devin session's reasoning, which it stores as an object", () 
   expect(first.kind === "thinking" && first.text).toStartWith("The user wants me to run `ls`");
 });
 
+test("labels a real Devin tool call with the title Devin shows for it", () => {
+  const tool = realSession().turns[1]!.parts.find((part) => part.kind === "tool");
+  expect(tool).toMatchObject({ name: "exec", summary: "Listed ./" });
+});
+
 test("dates a real Devin turn by its message, not by the save that rewrote every row", () => {
   const page = realSession();
   expect(page.turns.map((turn) => [turn.ts, turn.end_ts ?? null])).toEqual([
