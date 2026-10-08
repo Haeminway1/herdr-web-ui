@@ -4,7 +4,7 @@
  * upstream's Sidebar.css, loaded beside it, never restyles it. Chosen in Settings → Appearance.
  */
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
-import { ChevronDown, ChevronRight, Download, Folder, GripVertical, Pencil, Plus, Settings, Terminal, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Folder, GripVertical, Pencil, Pin, PinOff, Plus, Settings, Terminal, X } from "lucide-react";
 
 import "./ClassicSidebar.css";
 import { BackgroundBadge, displayPaneTitle, RestoreErrorBadge, StatusBadge } from "./Sidebar.tsx";
@@ -20,6 +20,8 @@ import { folderName, placeLine } from "../lib/paneName.ts";
 import { useT } from "../lib/i18n.ts";
 import { groupDirectories } from "../lib/directoryGroups.ts";
 import { useSettings, type SidebarGrouping } from "../lib/settings.ts";
+import { toggleResident, useResidents } from "../lib/residents.ts";
+import { launchArgs, residentFolder } from "../../shared/residents.ts";
 
 const CLOSE_ARM_MS = 3000;
 const ERROR_NOTE_MS = 5000;
@@ -57,11 +59,18 @@ export interface ClassicSidebarProps {
 export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = null, embedded = true }: ClassicSidebarProps) {
   const t = useT();
   const { settings } = useSettings();
+  const machineId = useMachineId();
   const byFolder = settings.sidebarGrouping === "directory";
   // a row per session, its repository's folder on top and the session under it, no group headers
   const byRepo = settings.sidebarGrouping === "repo";
-  const machineId = useMachineId();
-  const { closePane, moveWorkspace, renamePane, renameWorkspace } = useMachineApi();
+  // fork: resident agents (lib/residents.ts) on this PC's own list: the top ones, then a
+  // Resident / Work toggle over the rest
+  const { residents } = useResidents();
+  const residentsOn = byRepo && machineId === "local";
+  const [residentTab, setResidentTab] = useState<"resident" | "work">(() => { try { return localStorage.getItem("herdr-web-ui:resident-tab") === "work" ? "work" : "resident"; } catch { return "resident"; } });
+  const chooseResidentTab = (tab: "resident" | "work"): void => { setResidentTab(tab); try { localStorage.setItem("herdr-web-ui:resident-tab", tab); } catch { /* storage denied */ } };
+  const [starting, setStarting] = useState<string | null>(null);
+  const { closePane, createWorkspace, moveWorkspace, renamePane, renameWorkspace } = useMachineApi();
   const [armedId, setArmedId] = useState<string | null>(null);
   const [editingPaneId, setEditingPaneId] = useState<string | null>(null);
   const [paneLabel, setPaneLabel] = useState("");
@@ -351,6 +360,13 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
                     </span>
                   </div>
                   <div className="cl-pane-actions">
+                    {residentsOn && pane.cwd && (() => {
+                      const folder = residentFolder(pane.cwd, [...residents.top, ...residents.residents]);
+                      const name = cwdBasename(folder ?? pane.cwd);
+                      return <button type="button" className={`cl-sidebar-row-action cl-pane-pin${folder ? " is-pinned" : ""}`} aria-label={folder ? t("Take {name} off residents", { name }) : t("Keep {name} resident", { name })} title={folder ? t("Take {name} off residents", { name }) : t("Keep {name} resident", { name })} onClick={() => void toggleResident(folder ?? pane.cwd!)}>
+                        {folder ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+                      </button>;
+                    })()}
                     <button type="button" className="cl-sidebar-row-action" aria-label={t("Rename {title}", { title: displayTitle })} title={t("Rename pane")} onClick={() => beginPaneRename(pane)}>
                       <Pencil aria-hidden="true" />
                     </button>
@@ -372,6 +388,73 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
         </ul>}
       </section>
     );
+  };
+
+  /** the workspaces holding these panes, in the roster's order, each with its own of them */
+  const workspacesOf = (panes: PaneInfo[], scope: string) => orderedWorkspaces.flatMap((workspace) => {
+    const own = panes.filter((pane) => pane.workspace_id === workspace.workspace_id);
+    return own.length > 0 ? [renderWorkspace(workspace, own, scope)] : [];
+  });
+
+  /** a resident folder with no session open: dim, and a click starts one there */
+  const startResident = async (folder: string): Promise<void> => {
+    setStarting(folder);
+    try {
+      const created = await createWorkspace({ cwd: folder, label: cwdBasename(folder), agent: { kind: residents.launch.kind, args: launchArgs(residents.launch) } });
+      if (created.agent_started === false && created.error) noteError(created.error.message);
+      actions.selectPane(created.pane_id);
+    } catch (error) {
+      noteError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStarting(null);
+    }
+  };
+  const renderGhost = (folder: string) => (
+    <ul className="cl-pane-list" key={`ghost:${folder}`}>
+      <li className="cl-pane-item is-ghost" data-folder={folder}>
+        <div className="cl-pane-row">
+          <button type="button" className="cl-pane-select" disabled={starting !== null} title={t("Start a session in {path}", { path: folder })} onClick={() => void startResident(folder)}>
+            <span className="cl-agent-mark-holder"><AgentMark agent={residents.launch.kind} size={22} /></span>
+            <span className="cl-pane-copy">
+              <span className="cl-pane-primary"><span className="cl-pane-title">{cwdBasename(folder)}</span></span>
+              <span className="cl-pane-meta"><span className="cl-pane-subtitle">{starting === folder ? t("Starting…") : t("Not open · click to start")}</span></span>
+            </span>
+          </button>
+          <div className="cl-pane-actions">
+            <button type="button" className="cl-sidebar-row-action cl-pane-pin is-pinned" aria-label={t("Take {name} off residents", { name: cwdBasename(folder) })} title={t("Take {name} off residents", { name: cwdBasename(folder) })} onClick={() => void toggleResident(folder)}>
+              <PinOff aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </li>
+    </ul>
+  );
+
+  /** the top folders, then the Resident / Work toggle and the tab it shows */
+  const renderResidents = () => {
+    const panes = snapshot?.panes ?? [];
+    // nothing pinned yet: the plain list, no toggle to hide it behind
+    if (residents.top.length === 0 && residents.residents.length === 0) return workspacesOf(panes, "all");
+    const topOf = (pane: PaneInfo) => residentFolder(pane.cwd, residents.top);
+    const residentOf = (pane: PaneInfo) => topOf(pane) === null ? residentFolder(pane.cwd, residents.residents) : null;
+    const folderRows = (folders: string[], of: (pane: PaneInfo) => string | null, scope: string) => folders.flatMap((folder) => {
+      const own = panes.filter((pane) => of(pane) === folder);
+      return own.length > 0 ? workspacesOf(own, `${scope}:${folder}`) : [renderGhost(folder)];
+    });
+    const work = panes.filter((pane) => topOf(pane) === null && residentOf(pane) === null);
+    const residentCount = residents.residents.reduce((count, folder) => count + Math.max(1, panes.filter((pane) => residentOf(pane) === folder).length), 0);
+    return <>
+      {residents.top.length > 0 && <div className="cl-resident-top">{folderRows(residents.top, topOf, "top")}</div>}
+      <div className="segmented cl-resident-tabs" role="group" aria-label={t("Sessions")}>
+        <button type="button" aria-pressed={residentTab === "resident"} onClick={() => chooseResidentTab("resident")}>{t("Resident")} <span className="cl-resident-count">{residentCount}</span></button>
+        <button type="button" aria-pressed={residentTab === "work"} onClick={() => chooseResidentTab("work")}>{t("Work")} <span className="cl-resident-count">{work.length}</span></button>
+      </div>
+      <div className="cl-resident-tab">
+        {residentTab === "resident"
+          ? residents.residents.length === 0 ? <p className="cl-tree-state cl-tree-state-empty">{t("Pin a session to keep its agent here")}</p> : folderRows(residents.residents, residentOf, "resident")
+          : workspacesOf(work, "work")}
+      </div>
+    </>;
   };
 
   return (
@@ -402,7 +485,7 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
               return renderWorkspace(workspace, visiblePanes, directory.key);
         })}</div>}
           </section>;
-        }) : orderedWorkspaces.map((workspace) => renderWorkspace(workspace, snapshot?.panes.filter((pane) => pane.workspace_id === workspace.workspace_id) ?? []))}
+        }) : residentsOn ? renderResidents() : orderedWorkspaces.map((workspace) => renderWorkspace(workspace, snapshot?.panes.filter((pane) => pane.workspace_id === workspace.workspace_id) ?? []))}
         {inlineError && inlineError.paneId === undefined && (
           <p className="cl-sidebar-inline-error" role="alert">{inlineError.message}</p>
         )}

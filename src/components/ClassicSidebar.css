@@ -642,3 +642,50 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* fork: resident agents (ClassicSidebar renderResidents) */
+.cl-resident-top {
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-2);
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.cl-resident-tabs {
+  display: flex;
+  margin: 0 0 var(--space-2);
+}
+
+.cl-resident-tabs > button {
+  flex: 1 1 0;
+  justify-content: center;
+  gap: var(--space-1);
+}
+
+.cl-resident-count {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.cl-pane-item.is-ghost {
+  opacity: 0.55;
+}
+
+.cl-pane-item.is-ghost:hover,
+.cl-pane-item.is-ghost:focus-within {
+  opacity: 0.85;
+}
+
+.cl-pane-item.is-ghost .cl-pane-select {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cl-pane-pin.is-pinned {
+  color: var(--accent);
+}

@@ -12,6 +12,8 @@ import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { KeyBarSettings } from "./KeyBarSettings.tsx";
 import { onSettingsHistory, recordSettings, settingsEntry, settingsLevels, type SettingsLevel } from "../lib/settingsHistory.ts";
 import { Segmented, SettingsGroup, SettingsRow, Stepper, Toggle } from "./SettingsControls.tsx";
+import { updateResidents, useResidents } from "../lib/residents.ts";
+import type { ResidentLaunch } from "../../shared/residents.ts";
 import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
 import type { MachineSettings } from "../../shared/machines.ts";
@@ -177,6 +179,7 @@ function AppearancePage() {
       {settings.sidebarLayout === "classic" && <SettingsRow label={t("Sidebar grouping")} wide>
         <Segmented label={t("Sidebar grouping")} value={settings.sidebarGrouping} onChange={(sidebarGrouping) => update({ sidebarGrouping })} options={[{ value: "repo", label: t("By repository, a row each") }, { value: "directory", label: t("By folder") }, { value: "workspace", label: t("By workspace") }]} />
       </SettingsRow>}
+      {settings.sidebarLayout === "classic" && settings.sidebarGrouping === "repo" && <ResidentSettings />}
       {/* fork: the opt-in project dashboard sidebar */}
       <SettingsRow label={t("Project dashboard sidebar")} description={t("Show usage, attention, and project cards in the sidebar")}>
         <Toggle label={t("Project dashboard sidebar")} checked={settings.dashboardSidebar} onChange={(dashboardSidebar) => update({ dashboardSidebar })} />
@@ -730,4 +733,36 @@ function OpenSettingsDialog({ section = null, onClose, actions, updates, auth, h
       </section>
     </div>
   );
+}
+
+/** fork: the resident agents of the sidebar's Resident tab and how a dim row starts one (lib/residents.ts) */
+function ResidentSettings() {
+  const t = useT();
+  const { residents } = useResidents();
+  const launch = (change: Partial<ResidentLaunch>) => void updateResidents((current) => ({ ...current, launch: { ...current.launch, ...change } }));
+  const name = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path;
+  const rows = [...residents.top.map((path) => ({ path, top: true })), ...residents.residents.map((path) => ({ path, top: false }))];
+  return <>
+    <SettingsRow label={t("Resident agents")} description={t("Pin a session in the sidebar to add its folder. On top stays above the Resident / Work toggle.")} wide>
+      {rows.length === 0 ? <span className="settings-resident-empty">{t("None yet")}</span> : <ul className="settings-residents">
+        {rows.map(({ path, top }) => <li key={path} title={path}>
+          <span className="settings-resident-name">{name(path)}</span>
+          <Toggle label={t("On top")} checked={top} onChange={(on) => void updateResidents((current) => on
+            ? { ...current, top: [...current.top, path], residents: current.residents.filter((other) => other !== path) }
+            : { ...current, top: current.top.filter((other) => other !== path), residents: [path, ...current.residents] })} />
+          <span className="settings-resident-top">{t("On top")}</span>
+          <button type="button" className="btn btn-ghost" onClick={() => void updateResidents((current) => ({ ...current, top: current.top.filter((other) => other !== path), residents: current.residents.filter((other) => other !== path) }))}>{t("Remove")}</button>
+        </li>)}
+      </ul>}
+    </SettingsRow>
+    <SettingsRow label={t("Start resident agents with")} description={t("A dim resident row starts this agent in its folder")} wide>
+      <Segmented label={t("Agent")} value={residents.launch.kind} onChange={(kind) => launch({ kind, model: kind === "claude" ? "claude-opus-5-5" : "" })} options={[{ value: "claude", label: "Claude Code" }, { value: "codex", label: "Codex" }]} />
+    </SettingsRow>
+    <SettingsRow label={t("Model")} description={t("Empty for the agent's own default")}>
+      <input className="input settings-resident-model" aria-label={t("Model")} defaultValue={residents.launch.model} key={residents.launch.model} placeholder={residents.launch.kind === "claude" ? "claude-opus-5-5" : "gpt-5.5"} onBlur={(event) => { if (event.target.value.trim() !== residents.launch.model) launch({ model: event.target.value.trim() }); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+    </SettingsRow>
+    <SettingsRow label={t("Reasoning")} wide>
+      <Segmented label={t("Reasoning")} value={residents.launch.effort} onChange={(effort) => launch({ effort })} options={[{ value: "", label: t("Default") }, { value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }, { value: "xhigh", label: "xHigh" }]} />
+    </SettingsRow>
+  </>;
 }

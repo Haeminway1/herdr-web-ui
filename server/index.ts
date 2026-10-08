@@ -24,6 +24,7 @@ import { OMO_ALIASES, OmoStatus, processAlive } from "./omo-status.ts";
 import { omoRuns, omoTasks } from "./omo-tasks.ts";
 import { CompletionTracker } from "./completion.ts";
 import { AttentionStore, answerPreview } from "./attention.ts";
+import { handleResidentsRequest, ResidentStore } from "./residents.ts";
 import { freeAgentName } from "./agent-name.ts";
 import { SHELL_AGENTS, isShellAgentKind, shellAgentExecutable, startShellAgent } from "./shell-agent.ts";
 import { listDirectories } from "./directories.ts";
@@ -401,6 +402,8 @@ export function createServer(
   const token = options.token ?? process.env["HERDR_WEB_TOKEN"] ?? "";
   /** paired devices (server/devices.ts) and the PC's Tailscale login: the two ways in besides the token and this PC itself */
   const devices = new DeviceStore(options.stateDir ?? defaultStateDir());
+  // fork: the sidebar's resident agents, shared by every device of this PC
+  const residents = new ResidentStore(join(options.stateDir ?? defaultStateDir(), "residents.json"));
   const usage = options.usage ?? new UsageService();
   const voice = options.voice ?? new VoiceService({ stateDir: options.stateDir ?? defaultStateDir(), env: process.env, fetch });
   /** a login named here is taken as it is: a tagged node has none of its own to read (HERDR_WEB_TAILSCALE_OWNER) */
@@ -1678,6 +1681,8 @@ export function createServer(
           return errorResponse(error);
         }
       }
+
+      if (pathname === "/api/residents") return handleResidentsRequest(request, residents);
 
       if (pathname === "/api/pane/seen") {
         if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");

@@ -71,6 +71,22 @@ export async function checkClassicSidebar(browser: Browser, origin: string, pane
     assert.equal(await repoRow.locator(".cl-pane-title").textContent(), pane.cwd.split("/").filter(Boolean).at(-1), "the repository's folder names the row");
     await repoRow.hover();
     assert.equal(await repoRow.getByRole("button", { name: /^Rename / }).isVisible(), true, "rename on hover by repository too");
+    // resident agents: the pane's folder on the Resident tab, a folder with no session as a dim row
+    // that starts one, the rest under Work
+    const residents = (body: unknown) => page.evaluate(async (body) => (await fetch("/api/residents", { method: "PUT", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify(body) })).status, body);
+    assert.equal(await residents({ top: [], residents: [pane.cwd, "/tmp/qa-resident-nowhere"] }), 200);
+    await page.reload();
+    const tabs = page.locator(".cl-resident-tabs");
+    await tabs.waitFor();
+    await tabs.getByRole("button", { name: /^Resident/ }).click();
+    await page.locator(".cl-pane-item.is-ghost[data-folder='/tmp/qa-resident-nowhere']").waitFor();
+    assert.equal(await page.locator(".cl-resident-tab .cl-pane-item").filter({ has: page.locator(`.cl-pane-select[title^="${paneId} —"]`) }).count(), 1, "the pinned folder's session is resident");
+    await tabs.getByRole("button", { name: /^Work/ }).click();
+    assert.equal(await page.locator(".cl-resident-tab .cl-pane-item").filter({ has: page.locator(`.cl-pane-select[title^="${paneId} —"]`) }).count(), 0, "and not under Work");
+    assert.equal(await residents({ top: [], residents: [] }), 200);
+    await page.reload();
+    await repoRow.waitFor();
+    assert.equal(await tabs.count(), 0, "no toggle while nothing is pinned");
     // the PC list scrolls under the wheel: the nested list never keeps it
     assert.equal(await page.locator(".machine-workspaces .cl-sidebar-list").evaluate((el) => getComputedStyle(el).overscrollBehaviorY), "auto");
     assert.deepEqual(errors, []);
