@@ -346,6 +346,8 @@ export function createServer(
     pendingStartTimeoutMs?: number;
     /** how long a push alert waits for the pane to change first (server/push.ts); tests send at once */
     alertTiming?: Partial<AlertTiming>;
+    /** accept plain-http loopback push endpoints (server/push.ts); only tests delivering to push.fake.ts set it */
+    pushLoopbackHttp?: boolean;
     /** ATTACH_RETRY_FOR_MS; tests shorten it */
     attachRetryForMs?: number;
     /** ATTACH_HELD_RETRY_MS; tests shorten it */
@@ -664,6 +666,7 @@ export function createServer(
   const push = createPushService({
     stateDir: options.stateDir ?? defaultStateDir(),
     timing: options.alertTiming,
+    loopbackHttp: options.pushLoopbackHttp === true,
     canDeliver: (id) => id === null || (id === undefined ? !devices.gated : devices.has(id)),
     lookupTitle: async (paneId) => {
       const pane = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
