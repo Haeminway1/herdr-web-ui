@@ -36,8 +36,13 @@ it("never enables the dashboard for new, legacy, or malformed preferences", () =
   expect(sanitizeSettings({ dashboardSidebar: false }).dashboardSidebar).toBe(false);
 });
 
-it("drops the folder grouping an older version stored", () => {
-  expect(sanitizeSettings({ sidebarGrouping: "directory" })).not.toHaveProperty("sidebarGrouping");
+// fork: upstream #556 dropped the folder grouping; the fork keeps it, with the classic sidebar, by default
+it("keeps the classic sidebar and its folder grouping by default, and a stored choice", () => {
+  expect(DEFAULT_SETTINGS.sidebarLayout).toBe("classic");
+  expect(DEFAULT_SETTINGS.sidebarGrouping).toBe("directory");
+  expect(sanitizeSettings({ sidebarGrouping: "workspace" }).sidebarGrouping).toBe("workspace");
+  expect(sanitizeSettings({ sidebarLayout: "agents" }).sidebarLayout).toBe("agents");
+  expect(sanitizeSettings({ sidebarLayout: "elsewhere", sidebarGrouping: 1 })).toMatchObject({ sidebarLayout: "classic", sidebarGrouping: "directory" });
 });
 
 describe("chat font size", () => {
