@@ -141,7 +141,10 @@ Every agent herdr runs shows up with its live status, terminal and alerts. The c
 | **Devin CLI** | Native SQLite session, showing the active branch when herdr or the live process explicitly identifies the session; otherwise terminal text | — use Terminal |
 | **Anything else** | The terminal's text | — use Terminal |
 
-Devin sessions are never selected by directory or recency alone. Missing, ambiguous or
+Devin sessions are never selected by directory or recency alone. A plain `devin` shows the
+terminal text, since herdr does not report its session without its Devin integration; a session
+started with `devin --resume <id>` (or `-r <id>`, as Devin suggests when it exits) is a chat.
+Missing, ambiguous or
 unreadable history uses the terminal-text fallback, including histories beyond the reader's
 5,000-node or 8 MiB bounds. Long tool output is shortened with a truncation marker; use
 Terminal for the rest. The database is opened read-only, though SQLite may create its
