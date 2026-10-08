@@ -85,7 +85,9 @@ export async function checkClassicSidebar(browser: Browser, origin: string, pane
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
     const title = page.locator(".app-header.is-classic .context-title-text");
     await title.waitFor();
-    assert.ok((await title.boundingBox())!.width > 40, "the title keeps room beside the mark");
+    // the room the title gets, not its text: a test pane's title can be one letter
+    const room = await page.locator(".app-header.is-classic .context").boundingBox();
+    assert.ok(room && room.width > 100, `the title keeps room beside the mark: ${JSON.stringify(room)}`);
     assert.equal(await page.locator(".app-header.is-classic .header-more").isVisible(), false, "no More button in the classic phone header");
     await page.locator(".alert-bell-button").first().click();
     const panel = await page.locator(".alert-bell-panel").boundingBox();
