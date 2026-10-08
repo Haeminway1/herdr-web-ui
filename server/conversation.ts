@@ -1144,15 +1144,19 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
       Array.isArray(process.argv) && process.argv.every((arg) => typeof arg === "string") &&
       isDevinProcess(process.argv as string[]) && process.argv[1] !== "acp",
     );
-    if (processes.length !== 1) throw new ConversationUnavailable("transcript_missing");
-    const sessionId = devinSessionForPane(pane, snapshot.panes, processes[0]!.argv as string[]);
-    try {
-      const answer = devinConversation(sessionId, cwd, page, storePath);
-      rememberPaneDevin(paneId, sessionId, cwd, storePath);
-      return answer;
-    } catch (error) {
-      if (error instanceof DevinHistoryUnavailable) throw new ConversationUnavailable("transcript_missing");
-      throw error;
+    if (processes.length > 1) throw new ConversationUnavailable("transcript_missing");
+    // No Devin runs under the label: what does run is resolved below, as it was before this
+    // reader (an omo is found by its process tree, whatever herdr calls the pane).
+    if (processes.length === 1) {
+      const sessionId = devinSessionForPane(pane, snapshot.panes, processes[0]!.argv as string[]);
+      try {
+        const answer = devinConversation(sessionId, cwd, page, storePath);
+        rememberPaneDevin(paneId, sessionId, cwd, storePath);
+        return answer;
+      } catch (error) {
+        if (error instanceof DevinHistoryUnavailable) throw new ConversationUnavailable("transcript_missing");
+        throw error;
+      }
     }
   }
 

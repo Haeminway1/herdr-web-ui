@@ -10,6 +10,7 @@ import type { ConversationTurn } from "../shared/protocol.ts";
 import * as herdr from "./herdr/client.ts";
 import { forgetHistoryChains } from "./codex.ts";
 import { DevinHistoryChanged } from "./devin.ts";
+import * as omo from "./omo.ts";
 import { ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionPath, paneConversation, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 
 let mockedPanes: HerdrPane[] = [];
@@ -127,6 +128,19 @@ describe("Devin pane identity", () => {
       mockedPanes = [];
       mockedProcesses = [];
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("reads an omo that runs in a pane herdr still labels devin", async () => {
+    const pane = { pane_id: "pane-a", cwd: "/synthetic/work", agent: "devin" } as HerdrPane;
+    const session = spyOn(omo, "omoSessionForPane").mockImplementation(async () => ({ path: null, pending: "synthetic-id" }));
+    mockedPanes = [pane];
+    mockedProcesses = [{ argv: ["node", "/home/u/.nvm/versions/node/v24.18.0/bin/omo"] }];
+    try {
+      expect(await paneConversation(pane.pane_id, undefined, {}, "/missing/sessions.db")).toMatchObject({ source: "omo-transcript", turns: [], history_id: "unwritten:synthetic-id" });
+    } finally {
+      session.mockRestore();
+      mockedPanes = [];
+      mockedProcesses = [];
     }
   });
   it("forgets a pane's Devin history cache on pane teardown and test-suite reset", async () => {
