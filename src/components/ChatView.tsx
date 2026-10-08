@@ -418,6 +418,8 @@ interface TurnProps {
   live: boolean;
   /** ...and "Needs you" while the agent is blocked */
   waiting: boolean;
+  /** fork: the newest turn, whose work block starts open as it did before upstream #458 */
+  last?: boolean;
   showThinking: boolean;
 }
 
@@ -461,7 +463,7 @@ function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPar
 }
 
 // a turn that did not change keeps its object across polls: skip re-rendering it
-const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking }: TurnProps) {
+const Turn = memo(function Turn({ paneId, turn, live, waiting, last = false, showThinking }: TurnProps) {
   const t = useT();
   const time = formatTime(turn.ts);
   const compact = turn.parts.find((part): part is Extract<ConversationPart, { kind: "compact" }> => part.kind === "compact");
@@ -510,7 +512,7 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking }: T
   return <article className="chat-turn chat-turn-agent">
     <SkillActivityList parts={turn.parts} />
     {goal !== null && <GoalActivity goal={goal} />}
-    {work.length > 0 && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} />}
+    {work.length > 0 && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={last || workStartsOpen(live, turn.parts)} showThinking={showThinking} />}
     {intent.length > 0 && <p className="chat-intent">{intent.join(" · ")}</p>}
     {answer.map((text, index) => <Markdown key={index}>{text}</Markdown>)}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
@@ -944,7 +946,7 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
             const last = index === turns.length - 1;
             const live = isLiveWorkTurn(turn, last, agentStatus, finishedBeforeSend);
             return <RenderBoundary key={`${paneId}:${historyId ?? ""}:${turn.role}:${turn.ts ?? index}`} resetKey={turnRevision(turn)} fallback={() => <p className="chat-inline-state chat-inline-error">{t("This message can't be shown here. The terminal has it.")}</p>}>
-              <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} />
+              <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} last={last && settings.openLastWork} showThinking={settings.showThinking} />
             </RenderBoundary>;
           })
         : agent !== null
