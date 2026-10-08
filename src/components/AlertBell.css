@@ -170,3 +170,14 @@
   background: var(--accent);
   vertical-align: middle;
 }
+
+/* a phone: the panel keeps to the screen's right edge, wherever the bell sits in the header
+   (an anchor-relative right edge put it off the left of the screen once the header gained a button) */
+@media (max-width: 480px) {
+  .alert-bell-panel {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + var(--header-h) + var(--space-1));
+    right: calc(var(--space-3) + env(safe-area-inset-right, 0px));
+    left: auto;
+  }
+}
