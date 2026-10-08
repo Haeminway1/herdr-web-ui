@@ -39,9 +39,22 @@ The current server keeps one status-only WebSocket per remote PC without attachi
 
 Legacy HTTP paths, `/ws` without a machine, and old stored preferences/notification links mean **local**. Machine mutations require `X-Herdr-Machine: 1`, the existing token gate and same-origin browser requests. The proxy passes a bridge credential read through SSH; browser cookies, bearer tokens, forwarded headers and remote cookies are not forwarded. Authentication, push devices, VAPID keys and app updates belong to the current connection server.
 
-Remote credentials are registered in `~/.config/herdr-web-ui/bridges/` on that PC (mode `0600`). A compatible bridge for the same socket is reused, including a normally started server from this version. Independently managed bridges are never stopped by remote setup. Older unregistered bridges can still hold an exclusive terminal attach; release their browser attachment or restart them with registration support. No path uses `--takeover`.
+Remote credentials are registered in `~/.config/herdr-web-ui/bridges/` on that PC (mode `0600`). A compatible bridge for the same socket is reused, including a normally started server from this version. Independently managed bridges are never stopped by remote setup. Older unregistered bridges can still hold an exclusive terminal attach; release their browser attachment or restart them with registration support. Automatic attaches and reconnects never use `--takeover`. With a bridge that advertises support,
+**Open here** on a pane's waiting notice explicitly takes its terminal. The displaced web bridge
+waits; a standalone `herdr terminal attach` exits. The herdr TUI stays connected (verified on
+herdr 0.9.3). Older bridge bundles keep waiting until updated, and observe connections cannot take a pane.
 
 ## Disconnects and updates
+
+**Update bridge** also reuses a bridge whose live identity verifies as current; it does not
+download, install or restart the same version again.
+
+**Multiple apps connecting to one PC.** Keep those apps on the same version. An older app
+with this protection refuses to downgrade a newer bridge and asks you to update the app itself.
+Apps from before this version can still replace a newer bridge. If another app
+starts an incompatible bridge during an update, setup reports a **Bridge connection conflict**
+instead of offering an automatic update loop. Update or disconnect the other app before retrying.
+The update path never takes over a terminal or stops herdr sessions.
 
 PC registrations and last snapshots persist in `<stateDir>/machines.json`; `HERDR_WEB_STATE_DIR` chooses the state directory. A disconnected PC retains its last roster with controls disabled. Retries back off from 1 second to 60 seconds. Other PCs keep working. Reconnection never changes a non-empty selection or sends held input. Composer drafts, held messages, terminal drafts, lenses, recent panes and notification identities include both machine and pane. Held messages have an explicit **Send now** action.
 
@@ -49,9 +62,11 @@ PC registrations and last snapshots persist in `<stateDir>/machines.json`; `HERD
 
 **Updating a bridge.** A bridge from another bundle version is refused, and the PC waits instead of retrying. With **Settings → Remote PCs → Update PC bridges automatically** on (the default), the connection server then updates it in the background: installing the app update was the approval, and SSH uses the PC's saved key only (`BatchMode`). A PC that needs a password or passphrase fails with the reason and waits; its **Sign in and update…** button opens the dialog. With the setting off, the PC's **Update bridge** button starts the same background update, and the tap is the approval. A first install still asks for approval in the dialog.
 
+The dialog offers the update itself: a connect or reconnect that is refused on the version check turns its **Retry connection** into **Update bridge and connect**, which re-runs the setup with the bridge update included — through the same approval list a first install shows, so a PC that was never registered (and has no sidebar row) can be updated and connected in one go.
+
 The update runs on the server, not in a dialog: closing the dialog after approval, or never opening one, does not stop it, and **Cancel update** does. The sidebar and the header show the step (download, upload to the PC, verify and install, restart), the bytes, and roughly how long is left. The connection server keeps the verified bundle under `<stateDir>/bundles/<sha256>.tgz` (the newest four), downloads each checksum once even for PCs updating together, and streams the file to the PC instead of holding it in memory.
 
-A verified runtime is installed into a checksum-addressed directory before the selected managed bridge is restarted. Existing runtime directories remain available to other running bridges. The updater authenticates the old bridge and checks its PID before stopping it; herdr itself is left running. A separately managed server must use its own update controls. The connection server's own app update (Settings → Updates) is separate from these bridge updates.
+A verified runtime is installed into a checksum-addressed directory before the selected managed bridge is restarted. Existing runtime directories remain available to other running bridges. The updater authenticates the old bridge and checks its socket, managed ownership and PID before stopping it. An approved replacement may have a different bridge protocol, but the new bridge must match the current protocol and bundle version before connecting; herdr itself is left running. A separately managed server must use its own update controls. The connection server's own app update (Settings → Updates) is separate from these bridge updates.
 
 An independently managed server is detected before downloading or installing a remote bundle and
 does not enter the automatic bridge-update queue. Update its app through its own Settings, then

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
+import { VOICE_DEFAULTS, type VoiceStatus } from "../shared/voice.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-history-browser-"));
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -16,10 +17,13 @@ try {
     const path = new URL(request.url).pathname;
     if (path === "/ws") return new Response(null, { status: 404 });
     if (path.endsWith("/pane/commands")) return Response.json({ commands: [] });
+    // a desktop's composer asks whether dictation can work here before it shows the mic
+    if (path === "/api/voice") return Response.json({ configured: false, source: null, ...VOICE_DEFAULTS } satisfies VoiceStatus);
     return path === "/" ? new Response('<html><head><link rel="stylesheet" href="/chat-history-fixture.css"></head><body><div id="root"></div><script type="module" src="/chat-history-fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } }) : new Response(Bun.file(join(root, path.slice(1))));
   } });
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox"] });
-  const page = await browser.newPage();
+  // The fixture follows the browser's language; its text assertions below use English.
+  const page = await browser.newPage({ locale: "en-US" });
   page.setDefaultTimeout(10_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => { errors.push(error.message); console.error(error.stack); });
@@ -103,6 +107,8 @@ try {
   newest = "new newest";
   await refresh();
   await page.getByText(newest, { exact: true }).waitFor();
+  // a settled turn's work is folded: open the block, then its row
+  await page.locator(".work-block-head").click();
   await page.locator(".work-row-head").click();
   await page.locator(".chat-tool-more").click();
   const requestIndex = await page.evaluate(() => window.qa.requests.length - 1);
@@ -111,6 +117,9 @@ try {
   await page.getByText(newest, { exact: true }).waitFor();
   await page.waitForFunction((i) => window.qa.requests[i].signal.aborted, requestIndex);
   await page.evaluate((i) => window.qa.requests[i].resolve("STALE TOOL OUTPUT"), requestIndex);
+  // the cleared history brought a new turn, folded like any settled one
+  assert.equal(await page.locator(".work-block-head").getAttribute("aria-expanded"), "false");
+  await page.locator(".work-block-head").click();
   await page.locator(".work-row-head").click();
   assert.equal(await page.getByText("STALE TOOL OUTPUT", { exact: true }).count(), 0);
   assert.equal(await page.locator(".chat-tool-more").count(), 1);

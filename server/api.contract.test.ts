@@ -6,14 +6,15 @@ import { basename, join } from "node:path";
 import { createServer } from "./index.ts";
 import type { AgentKind, AgentStatus, ApiError, HealthAuth, PushKey, RemoteAccess, SessionSnapshot, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
-import type { HerdrUpdateStatus } from "../shared/update.ts";
-import { UsageService } from "./usage.ts";
+import { noInstalledNotes, unmanagedUpdateStatus, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes } from "../shared/update.ts";
+import { USAGE_PROVIDERS, UsageService } from "./usage.ts";
 import { VoiceService } from "./voice.ts";
 import { herdrRpc, ping, sessionSnapshot, tabCreate, workspaceCreate, workspaceClose } from "./herdr/client.ts";
 import { startFakePushService, type FakePushService } from "./push.fake.ts";
 import { descriptorPath, type BridgeDescriptor } from "./bridge.ts";
 import { handleMachineRequest } from "./machine-api.ts";
 import type { MachineManager } from "./machines.ts";
+import { TailnetIdentitySource } from "./tailscale.ts";
 
 /**
  * Contract test for herdr-web-ui's HTTP + WS surface.
@@ -27,7 +28,7 @@ let server: { port: number; stop: () => void };
 const stateDir = mkdtempSync(join(tmpdir(), "herdr-web-ui-contract-"));
 
 beforeAll(() => {
-  server = createServer({ port: 0, stateDir, alertTiming: { short: 0, long: 0, longTurn: 0 } });
+  server = createServer({ port: 0, stateDir, alertTiming: { short: 0, long: 0, longTurn: 0 }, pushLoopbackHttp: true });
 });
 
 afterAll(() => {
@@ -38,9 +39,9 @@ afterAll(() => {
 const base = () => `http://localhost:${server.port}`;
 
 describe("Devin conversation API", () => {
-  it("returns a structured conflict rather than guessing a shell pane's session", async () => {
+  it("keeps the terminal fallback rather than guessing a shell pane's session", async () => {
     const state = mkdtempSync(join(tmpdir(), "herdr-web-ui-devin-contract-"));
-    const created = await workspaceCreate({ cwd: state, label: "herdr-web-ui-test-devin-identity" });
+    const created = await workspaceCreate({ cwd: state, label: "herdr-web-ui-test-devin-identity", focus: false });
     const dbPath = join(state, "sessions.db");
     let bridge: ReturnType<typeof createServer> | undefined;
     try {
@@ -57,10 +58,8 @@ describe("Devin conversation API", () => {
       await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "devin", state: "idle" });
       bridge = createServer({ port: 0, stateDir: state, devinDbPath: dbPath });
       const response = await fetch(`http://localhost:${bridge.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
-      expect(response.status).toBe(409);
-      expect(await response.json() as ApiError).toEqual({ error: {
-        code: "devin_identity_ambiguous", message: "Cannot identify this pane's Devin session without risking another conversation",
-      } });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ source: "scrollback", turns: [] });
     } finally {
       bridge?.stop();
       await workspaceClose(created.workspace.workspace_id);
@@ -70,6 +69,40 @@ describe("Devin conversation API", () => {
 });
 
 describe("usage API", () => {
+  it("returns OpenCode Go windows without exposing its credential", async () => {
+    const usageState = mkdtempSync(join(tmpdir(), "herdr-opencode-contract-"));
+    const token = "oc_sk_contract_only";
+    const usage = new UsageService({
+      home: usageState, env: { OPENCODE_API_KEY: token }, platform: "linux", now: () => Date.parse("2026-10-06T00:00:00Z"),
+      keychain: async () => ({ status: "missing" }), run: async () => null,
+      fetch: async (url, init) => {
+        expect(url).toBe("https://opencode.ai/zen/go/v1/usage");
+        expect(new Headers(init.headers).get("authorization")).toBe(`Bearer ${token}`);
+        return Response.json({ usage: {
+          rolling: { percent: 12, resetsAt: "2026-10-06T01:00:00Z" },
+          weekly: { percent: 34 }, monthly: { percent: 56 },
+        } });
+      },
+    }, USAGE_PROVIDERS.filter((provider) => provider.id === "opencode"));
+    const app = createServer({ port: 0, stateDir: usageState, usage, token: "report-token" });
+    try {
+      const url = `http://localhost:${app.port}/api/usage`;
+      expect((await fetch(url)).status).toBe(401);
+      const response = await fetch(url, { headers: { authorization: "Bearer report-token" } });
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).not.toContain(token);
+      expect(body).not.toContain(usageState);
+      expect((JSON.parse(body) as UsageReport).providers).toMatchObject([{
+        id: "opencode", account: null, plan: "Go", problem: null,
+        windows: [
+          { kind: "session", used_percent: 12, resets_at: "2026-10-06T01:00:00.000Z" },
+          { kind: "week", used_percent: 34 }, { kind: "month", used_percent: 56 },
+        ],
+      }]);
+    } finally { app.stop(); rmSync(usageState, { recursive: true, force: true }); }
+  });
+
   it("answers the report and keeps it behind the token gate", async () => {
     const usageState = mkdtempSync(join(tmpdir(), "herdr-usage-auth-"));
     const usage = new UsageService(undefined, []);
@@ -138,6 +171,39 @@ describe("update API", () => {
     expect((await response.json() as { managed: boolean }).managed).toBe(false);
   });
 
+  it("answers what the available update brings, and nothing where no supervisor told it", async () => {
+    const none = await fetch(`${base()}/api/updates/notes`);
+    expect(none.status).toBe(200);
+    expect(none.headers.get("cache-control")).toBe("no-store");
+    expect(await none.json()).toEqual({ revision: null, releases: [], omitted: 0 });
+    expect((await fetch(`${base()}/api/updates/notes`, { method: "POST", headers: { "x-herdr-update": "1" } })).status).toBe(405);
+
+    const notes: UpdateNotes = { revision: "b".repeat(40), releases: [{ version: "9.9.9", date: "2026-10-07", notes: "### Added\n- A thing." }], omitted: 2 };
+    const managedState = mkdtempSync(join(tmpdir(), "herdr-update-notes-"));
+    const managed = createServer({ port: 0, stateDir: managedState,
+      updates: { status: () => ({ ...unmanagedUpdateStatus(), managed: true, available: true }), notes: () => notes, installed: noInstalledNotes, request() {} } });
+    try {
+      expect(await (await fetch(`http://localhost:${managed.port}/api/updates/notes`)).json()).toEqual(notes);
+    } finally { managed.stop(); rmSync(managedState, { recursive: true, force: true }); }
+  });
+
+  it("answers what the last update brought, and nothing where no update was installed", async () => {
+    const none = await fetch(`${base()}/api/updates/installed`);
+    expect(none.status).toBe(200);
+    expect(none.headers.get("cache-control")).toBe("no-store");
+    expect(await none.json()).toEqual({ revision: null, version: null, previous_version: null, installed_at: null, releases: [], omitted: 0 });
+    expect((await fetch(`${base()}/api/updates/installed`, { method: "POST", headers: { "x-herdr-update": "1" } })).status).toBe(405);
+
+    const installed: InstalledNotes = { revision: "c".repeat(40), version: "9.9.9", previous_version: "9.9.8", installed_at: "2026-10-07T00:00:00.000Z",
+      releases: [{ version: "9.9.9", date: "2026-10-07", notes: "### Added\n- A thing.", summary: { en: { new: ["A thing."] }, ko: { new: ["기능 하나."] } } }], omitted: 0 };
+    const managedState = mkdtempSync(join(tmpdir(), "herdr-update-installed-"));
+    const managed = createServer({ port: 0, stateDir: managedState,
+      updates: { status: () => ({ ...unmanagedUpdateStatus(), managed: true }), notes: () => ({ revision: null, releases: [], omitted: 0 }), installed: () => installed, request() {} } });
+    try {
+      expect(await (await fetch(`http://localhost:${managed.port}/api/updates/installed`)).json()).toEqual(installed);
+    } finally { managed.stop(); rmSync(managedState, { recursive: true, force: true }); }
+  });
+
   it("refuses cross-site/form update requests and unmanaged installs", async () => {
     for (const headers of [{}, { "x-herdr-update": "1", origin: "https://untrusted.invalid" },
       { "x-herdr-update": "1", "sec-fetch-site": "cross-site" }] as Record<string, string>[]) {
@@ -153,9 +219,9 @@ describe("update API", () => {
     const protectedState = mkdtempSync(join(tmpdir(), "herdr-update-auth-"));
     const protectedServer = createServer({ port: 0, stateDir: protectedState, token: "test-update-token" });
     try {
-      for (const path of ["/api/updates", "/api/updates/check", "/api/updates/install"]) {
+      for (const path of ["/api/updates", "/api/updates/notes", "/api/updates/installed", "/api/updates/check", "/api/updates/install"]) {
         const response = await fetch(`http://localhost:${protectedServer.port}${path}`, {
-          method: path === "/api/updates" ? "GET" : "POST", headers: { "x-herdr-update": "1" },
+          method: path === "/api/updates/check" || path === "/api/updates/install" ? "POST" : "GET", headers: { "x-herdr-update": "1" },
         });
         expect(response.status).toBe(401);
       }
@@ -1088,7 +1154,11 @@ class RecordingSocket {
     const already = this.seen.find(predicate);
     if (already) return Promise.resolve(already);
     return new Promise<RecordedFrame>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`${label} not received within ${ms}ms`)), ms);
+      const timer = setTimeout(() => {
+        // what did arrive: without it a timeout cannot tell a lost frame from one that came differently
+        console.error(`${label}: the last frames received were\n${this.seen.slice(-20).map((frame) => JSON.stringify(frame).slice(0, 300)).join("\n")}`);
+        reject(new Error(`${label} not received within ${ms}ms`));
+      }, ms);
       const listener = (event: MessageEvent) => {
         const message = JSON.parse(String(event.data)) as RecordedFrame;
         if (!predicate(message)) return;
@@ -1249,8 +1319,12 @@ describe("WebSocket roles and status push", () => {
       // the terminal lens's grid is the pty's, not the pane's own one the covered attach left it at
       expect(await phone.waitFor((m) => m.type === "pane-geometry" && m.pane_id === paneId && m.cols === 91, "the resize applied after creation", 15_000)).toMatchObject({ cols: 91, rows: 27 });
       await phone.waitFor((m) => m.type === "input-ready" && m.pane_id === paneId, "attach took", 15_000);
-      phone.send({ type: "input", pane_id: paneId, text: "clear; echo size=$(stty size)\r" });
-      await phone.waitFor((m) => m.type === "pty-data" && m.pane_id === paneId && String(m.data).includes("size=27 91"), "the shell sees the terminal lens's grid", 15_000);
+      // one word, "27x91": herdr may draw a space as a cursor move, and "size=27 91" then never arrives as such
+      const from = phone.seen.length;
+      phone.send({ type: "input", pane_id: paneId, text: "clear; echo size=$(stty size | tr ' ' x)\r" });
+      // over every frame since the command: a read may end in the middle of the word
+      const output = () => phone.seen.slice(from).filter((m) => m.type === "pty-data" && m.pane_id === paneId).map((m) => String(m.data)).join("");
+      await phone.waitFor((m) => m.type === "pty-data" && m.pane_id === paneId && output().includes("size=27x91"), "the shell sees the terminal lens's grid", 15_000);
     } finally {
       phone.close();
       await workspaceClose(created.workspace.workspace_id).catch(() => undefined);
@@ -1613,7 +1687,7 @@ describe("web push", () => {
       const device = await startFakePushService();
       cleanupDevice = device;
       await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "unknown" });
-      bridge = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: dir, machines: false,
+      bridge = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: dir, machines: false, pushLoopbackHttp: true,
         alertTiming: { short: 0, long: 0, longTurn: 0 } });
       const origin = `http://127.0.0.1:${bridge.port}`;
       watcher = await RecordingSocket.connect(`ws://127.0.0.1:${bridge.port}/ws`);
@@ -1705,7 +1779,7 @@ describe("web push", () => {
       const before = (await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {})).snapshot;
       expect(before.panes.find((pane) => pane.pane_id === watchedId)?.agent_status).toBe("working");
 
-      restarted = createServer({ port: 0, stateDir: restartDir, alertTiming: { short: 0, long: 0, longTurn: 0 } });
+      restarted = createServer({ port: 0, stateDir: restartDir, alertTiming: { short: 0, long: 0, longTurn: 0 }, pushLoopbackHttp: true });
       const subscribe = await fetch(`http://localhost:${restarted.port}/api/push/subscribe`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1783,6 +1857,76 @@ describe("pairing and identity", () => {
     const refused = await fetch(`${base()}/api/session`, { headers: proxied("someone@example.com") });
     expect(refused.status).toBe(403);
     expect(((await refused.json()) as ApiError).error.code).toBe("other_user");
+  });
+
+  it("lets the owner's own device in with no login header, where serve is the only ingress and one login owns the tailnet", async () => {
+    const state = mkdtempSync(join(tmpdir(), "herdr-sole-user-"));
+    const savedOwner = process.env["HERDR_WEB_TAILSCALE_OWNER"];
+    const savedServeOnly = process.env["HERDR_WEB_TAILSCALE_SERVE_ONLY"];
+    delete process.env["HERDR_WEB_TAILSCALE_OWNER"];
+    // what `tailscale status --json` says for the reported tailnet: one login, every node untagged
+    const NODE = "denisss-macbook-pro-m1.tail5cc90b.ts.net";
+    const status = JSON.stringify({ BackendState: "Running", Self: { DNSName: `${NODE}.`, UserID: 7, TailscaleIPs: ["100.101.102.103"] }, Peer: { phone: { DNSName: "phone.tail5cc90b.ts.net.", UserID: 7 } }, User: { "7": { LoginName: OWNER } } });
+    const tailnet = new TailnetIdentitySource(async () => status);
+    process.env["HERDR_WEB_TAILSCALE_SERVE_ONLY"] = "1";
+    const sole = createServer({ port: 0, stateDir: state, tailnet });
+    if (savedServeOnly === undefined) delete process.env["HERDR_WEB_TAILSCALE_SERVE_ONLY"]; else process.env["HERDR_WEB_TAILSCALE_SERVE_ONLY"] = savedServeOnly;
+    const off = createServer({ port: 0, stateDir: state, tailscaleServeOnly: false, tailnet });
+    const named = createServer({ port: 0, stateDir: state, tailscaleOwner: OWNER, tailscaleServeOnly: true, tailnet });
+    const other = createServer({ port: 0, stateDir: state, tailscaleOwner: "named@example.com", tailscaleServeOnly: true, tailnet });
+    const at = async (port: number, headers: Record<string, string>) => ((await (await fetch(`http://127.0.0.1:${port}/api/health?scope=bridge`, { headers })).json()) as { auth: HealthAuth }).auth;
+    try {
+      // the captain's phone: tailscale serve proxied it, names no person, and the address is this PC's Tailscale name
+      const phone = { ...proxied(), host: NODE };
+      expect(await at(sole.port, phone)).toMatchObject({ authenticated: true, via: "tailscale" });
+      expect((await fetch(`http://127.0.0.1:${sole.port}/api/session`, { headers: phone })).status).not.toBe(401);
+      // the same name in another case, or this PC's tailnet address, is the same PC
+      expect(await at(sole.port, { ...proxied(), host: NODE.toUpperCase() })).toMatchObject({ authenticated: true, via: "tailscale" });
+      expect(await at(sole.port, { ...proxied(), host: "100.101.102.103:7317" })).toMatchObject({ authenticated: true, via: "tailscale" });
+      // a rebinding page or a public domain forwarded here presents its own Host, and pairs
+      expect(await at(sole.port, { ...proxied(), host: "evil.example:7317" })).toMatchObject({ authenticated: false, reason: "pairing_required" });
+      expect((await fetch(`http://127.0.0.1:${sole.port}/api/session`, { headers: { ...proxied(), host: "evil.example:7317" } })).status).toBe(401);
+      // and the floor stays where it was: another login, Funnel and a LAN client gain nothing
+      expect(await at(sole.port, { ...phone, "tailscale-user-login": "someone@example.com" })).toMatchObject({ authenticated: false, reason: "other_user" });
+      expect(await at(sole.port, { ...phone, "tailscale-funnel-request": "?1" })).toMatchObject({ authenticated: false, reason: "pairing_required" });
+      expect(await at(sole.port, { ...phone, "tailscale-user-login": OWNER })).toMatchObject({ authenticated: true, via: "tailscale" });
+      // where the operator did not declare serve the only ingress, the same request pairs, with or without the tailnet's name as Host
+      expect(await at(off.port, proxied())).toMatchObject({ authenticated: false, reason: "pairing_required" });
+      expect(await at(off.port, phone)).toMatchObject({ authenticated: false, reason: "pairing_required" });
+      expect((await fetch(`http://127.0.0.1:${off.port}/api/session`, { headers: proxied() })).status).toBe(401);
+      // a named owner is read the same way: the sole login it matches is let in, another name is not
+      expect(await at(named.port, phone)).toMatchObject({ authenticated: true, via: "tailscale" });
+      expect(await at(other.port, phone)).toMatchObject({ authenticated: false, reason: "pairing_required" });
+    } finally {
+      sole.stop();
+      off.stop();
+      named.stop();
+      other.stop();
+      if (savedOwner === undefined) delete process.env["HERDR_WEB_TAILSCALE_OWNER"]; else process.env["HERDR_WEB_TAILSCALE_OWNER"] = savedOwner;
+      rmSync(state, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a serve request inside the cache's TTL once a node is tagged since the cache was read", async () => {
+    const state = mkdtempSync(join(tmpdir(), "herdr-stale-identity-"));
+    const savedOwner = process.env["HERDR_WEB_TAILSCALE_OWNER"];
+    delete process.env["HERDR_WEB_TAILSCALE_OWNER"];
+    const NODE = "stale-pc.example.ts.net";
+    const self = { DNSName: `${NODE}.`, TailscaleIPs: ["100.101.102.103"], UserID: 7 };
+    const sole = JSON.stringify({ BackendState: "Running", Self: self, User: { "7": { LoginName: OWNER } } });
+    const tagged = JSON.stringify({ BackendState: "Running", Self: self, Peer: { node: { UserID: 7, Tags: ["tag:server"] } }, User: { "7": { LoginName: OWNER } } });
+    let read = 0;
+    const tailnet = new TailnetIdentitySource(() => Promise.resolve(read++ === 0 ? sole : tagged));
+    await tailnet.freshIdentity(NODE);
+    const serveOnly = createServer({ port: 0, stateDir: state, tailscaleServeOnly: true, tailnet });
+    try {
+      const auth = ((await (await fetch(`http://127.0.0.1:${serveOnly.port}/api/health?scope=bridge`, { headers: { ...proxied(), host: NODE } })).json()) as { auth: HealthAuth }).auth;
+      expect(auth).toMatchObject({ authenticated: false, reason: "pairing_required" });
+    } finally {
+      serveOnly.stop();
+      if (savedOwner === undefined) delete process.env["HERDR_WEB_TAILSCALE_OWNER"]; else process.env["HERDR_WEB_TAILSCALE_OWNER"] = savedOwner;
+      rmSync(state, { recursive: true, force: true });
+    }
   });
 
   it("takes the login named in HERDR_WEB_TAILSCALE_OWNER for the PC's own, as a tagged node needs", async () => {

@@ -15,7 +15,8 @@ import { KO } from "./i18n.ko.ts";
 import { ZH } from "./i18n.zh.ts";
 import { useSettings } from "./settings.ts";
 
-export const LANGUAGE_SETTINGS = ["system", "en", "ko", "ja", "zh"] as const;
+// in the order the Language menu lists them
+export const LANGUAGE_SETTINGS = ["system", "en", "zh", "ja", "ko"] as const;
 export type LanguageSetting = (typeof LANGUAGE_SETTINGS)[number];
 export type Language = Exclude<LanguageSetting, "system">;
 
@@ -27,14 +28,14 @@ export const LOCALE_TAGS: Record<Language, string> = { en: "en-US", ko: "ko-KR",
 const DICTIONARIES: Record<Language, Record<string, string>> = { en: {}, ko: KO, ja: JA, zh: ZH };
 
 /**
- * `system` follows the browser: the first tag in its list for a translated language picks it
- * (`["en-US", "ko"]` is Korean), otherwise English. Any Chinese tag, zh-TW included, picks
+ * `system` follows the browser: the first tag in its list for a supported language picks it
+ * (`["en-US", "ko"]` is English), otherwise English. Any Chinese tag, zh-TW included, picks
  * Simplified Chinese, the only Chinese there is.
  */
 export function resolveLanguage(setting: LanguageSetting, languages: readonly string[] = typeof navigator !== "undefined" ? navigator.languages : []): Language {
   if (setting !== "system") return setting;
   for (const tag of languages) {
-    const match = /^(ko|ja|zh)\b/i.exec(tag);
+    const match = /^(en|ko|ja|zh)\b/i.exec(tag);
     if (match) return match[1]!.toLowerCase() as Language;
   }
   return "en";

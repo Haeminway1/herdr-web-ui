@@ -1,31 +1,164 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
+import { appendFileSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
-import type { HerdrPane } from "../shared/protocol.ts";
-
-import { forgetHistoryChains } from "./codex.ts";
-import { ConversationUnavailable, devinSessionForPane, gjcTranscriptPath, HistoryChanged, isOmoProcess, ompSessionPath, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
+import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { MAX_TURNS, parseOmpTranscript } from "./transcript-records.ts";
+import { toolVerb } from "../src/lib/toolVerbs.ts";
+import type { ConversationTurn } from "../shared/protocol.ts";
+import * as herdr from "./herdr/client.ts";
+import { forgetHistoryChains } from "./codex.ts";
+import { ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionPath, paneConversation, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
+
+let mockedPanes: HerdrPane[] = [];
+let mockedProcesses: { argv?: unknown }[] = [];
 
 describe("Devin pane identity", () => {
+  const restores: Array<() => void> = [];
+  beforeEach(() => {
+    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method) => {
+      if (method !== "pane.process_info") throw new Error(`unexpected conversation fixture RPC: ${method}`);
+      return { process_info: { foreground_processes: mockedProcesses } } as never;
+    });
+    restores.push(() => rpc.mockRestore());
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockImplementation(async () => ({ panes: mockedPanes } as SessionSnapshot));
+    restores.push(() => snapshot.mockRestore());
+  });
+  afterEach(() => {
+    for (const restore of restores.splice(0)) restore();
+    mockedPanes = [];
+    mockedProcesses = [];
+    forgetTranscriptState();
+  });
   const pane = { pane_id: "pane-a", cwd: "/synthetic/work", agent: "devin" } as HerdrPane;
+  const shell = { pane_id: "pane-b", cwd: pane.cwd, agent_session: { agent: "devin", kind: "id", value: "stale" } } as HerdrPane;
   const peer = { pane_id: "pane-b", cwd: pane.cwd, agent: "devin" } as HerdrPane;
   const reported = { ...pane, agent_session: { agent: "devin", kind: "id", value: "one" } } as HerdrPane;
-  const argv = ["/bin/devin"];
-  it("accepts only a unique cwd and visible session without an explicit identity", () => {
-    expect(devinSessionForPane(pane, [pane], ["one"], argv)).toBe("one");
-    expect(() => devinSessionForPane(pane, [pane], ["one", "two"], argv)).toThrow(ConversationUnavailable);
-    expect(() => devinSessionForPane(pane, [pane, peer], ["one"], argv)).toThrow(ConversationUnavailable);
+  it("never guesses a session from its directory or a stale shell agent_session", () => {
+    expect(() => devinSessionForPane(pane, [pane], ["/bin/devin"])).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(shell, [shell], ["/bin/devin", "--resume", "stale"])).toThrow(ConversationUnavailable);
   });
-  it("uses an exact explicit session, never a mismatched cwd, conflicting resume or shared session", () => {
-    expect(devinSessionForPane(reported, [reported, peer], ["one", "two"], argv)).toBe("one");
-    expect(devinSessionForPane(pane, [pane, peer], ["one", "two"], [...argv, "--resume=two"])).toBe("two");
-    expect(() => devinSessionForPane(reported, [reported], ["two"], argv)).toThrow(ConversationUnavailable);
-    expect(() => devinSessionForPane(reported, [reported], ["one", "two"], [...argv, "--resume", "two"])).toThrow(ConversationUnavailable);
-    expect(() => devinSessionForPane(reported, [reported, { ...peer, agent_session: reported.agent_session }], ["one"], argv)).toThrow(ConversationUnavailable);
-    expect(() => devinSessionForPane(pane, [pane], ["one"], [...argv, "--resume", "../other"])).toThrow(ConversationUnavailable);
-    expect(() => devinSessionForPane(pane, [pane], ["one"], [...argv, "--resume"])).toThrow(ConversationUnavailable);
+  it("accepts only an exact reported or resumed identity and does not consider shell peers", () => {
+    expect(devinSessionForPane(reported, [reported, shell], ["/bin/devin"])).toBe("one");
+    expect(devinSessionForPane(pane, [pane, shell], ["/bin/devin", "--resume=two"])).toBe("two");
+    expect(() => devinSessionForPane(reported, [reported], ["/bin/devin", "--resume", "two"])).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(reported, [reported], ["/bin/devin", "--resume=one", "-r", "two"])).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(reported, [reported, { ...peer, agent_session: reported.agent_session }], ["/bin/devin"])).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(pane, [pane], ["/bin/devin", "--", "--resume", "one"])).toThrow(ConversationUnavailable);
+    expect(() => devinSessionForPane(pane, [pane], ["/bin/devin", "--resume"])).toThrow(ConversationUnavailable);
+  });
+  it("recognizes only Devin as the executable, not another argument", () => {
+    expect(isDevinProcess(["/usr/bin/devin"])).toBeTrue();
+    expect(isDevinProcess(["C:\\tools\\devin.exe"])).toBeTrue();
+    expect(isDevinProcess(["node", "/tmp/devin"])).toBeFalse();
+    expect(isDevinProcess(["sh", "-c", "devin --resume one"])).toBeFalse();
+    expect(isDevinProcess(["/usr/bin/not-devin"])).toBeFalse();
+  });
+  it("reads through paneConversation only with live executable and explicit session evidence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-devin-pane-"));
+    const dbPath = join(root, "sessions.db");
+    const cwd = "/synthetic/work";
+    const pane = { pane_id: "pane-a", cwd, foreground_cwd: cwd, agent: "devin", agent_session: { agent: "devin", kind: "id", value: "one" } } as HerdrPane;
+    try {
+      const db = new Database(dbPath);
+      try {
+        db.exec("CREATE TABLE sessions(id TEXT, working_directory TEXT, main_chain_id INTEGER, hidden INTEGER, model TEXT); CREATE TABLE message_nodes(session_id TEXT,node_id INTEGER,parent_node_id INTEGER,chat_message TEXT,created_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT,tool_call_json TEXT,tool_call_update_json TEXT)");
+        db.query("INSERT INTO sessions VALUES ('one', ?, 2, 0, 'synthetic-model')").run(cwd);
+        db.query("INSERT INTO message_nodes VALUES ('one', 1, NULL, ?, 1700000000)").run(JSON.stringify({ role: "user", content: "synthetic question" }));
+        db.query("INSERT INTO message_nodes VALUES ('one', 2, 1, ?, 1700000001)").run(JSON.stringify({ role: "assistant", content: "synthetic answer" }));
+      } finally { db.close(); }
+      mockedPanes = [pane];
+      mockedProcesses = [{ argv: ["/usr/local/bin/devin"] }];
+      const answer = await paneConversation(pane.pane_id, undefined, {}, dbPath);
+      expect(answer.source).toBe("devin-transcript");
+      expect(answer.turns.map((turn) => turn.parts[0])).toEqual([
+        { kind: "text", text: "synthetic question" }, { kind: "text", text: "synthetic answer" },
+      ]);
+      mockedProcesses = [{ argv: ["/usr/bin/vim", "/usr/local/bin/devin"] }];
+      await expect(paneConversation(pane.pane_id, undefined, {}, dbPath)).rejects.toThrow(ConversationUnavailable);
+      mockedProcesses = [{ argv: ["/usr/local/bin/devin"] }];
+      mockedPanes = [{ ...pane, agent_session: undefined }];
+      await expect(paneConversation(pane.pane_id, undefined, {}, dbPath)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "no_session_id" });
+      mockedProcesses = [{ argv: ["/usr/local/bin/devin", "--resume=one"] }];
+      expect((await paneConversation(pane.pane_id, undefined, {}, dbPath)).turns).toEqual(answer.turns);
+    } finally {
+      mockedPanes = [];
+      mockedProcesses = [];
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("does not render Devin for a shell with a stale Devin session report", async () => {
+    const pane = { pane_id: "pane-shell", cwd: "/synthetic/work", agent_session: { agent: "devin", kind: "id", value: "one" } } as HerdrPane;
+    mockedPanes = [pane];
+    mockedProcesses = [{ argv: ["/usr/local/bin/devin"] }];
+    try {
+      await expect(paneConversation(pane.pane_id, undefined, {}, "/missing/sessions.db")).rejects.toThrow(ConversationUnavailable);
+    } finally {
+      mockedPanes = [];
+      mockedProcesses = [];
+    }
+  });
+  it("falls back when the explicit store is inaccessible or malformed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-devin-unavailable-"));
+    const cwd = "/synthetic/work";
+    const pane = { pane_id: "pane-a", cwd, agent: "devin", agent_session: { agent: "devin", kind: "id", value: "one" } } as HerdrPane;
+    mockedPanes = [pane];
+    mockedProcesses = [{ argv: ["/usr/local/bin/devin"] }];
+    try {
+      await expect(paneConversation(pane.pane_id, undefined, {}, join(root, "missing.db"))).rejects.toThrow(ConversationUnavailable);
+      const dbPath = join(root, "malformed.db");
+      const db = new Database(dbPath);
+      try { db.exec("CREATE TABLE sessions(id TEXT)"); } finally { db.close(); }
+      await expect(paneConversation(pane.pane_id, undefined, {}, dbPath)).rejects.toThrow(ConversationUnavailable);
+
+      const oversizedPath = join(root, "oversized.db");
+      const oversized = new Database(oversizedPath);
+      try {
+        oversized.exec("CREATE TABLE sessions(id TEXT, working_directory TEXT, main_chain_id INTEGER, hidden INTEGER, model TEXT); CREATE TABLE message_nodes(session_id TEXT,node_id INTEGER,parent_node_id INTEGER,chat_message TEXT,created_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT,tool_call_json TEXT,tool_call_update_json TEXT); CREATE INDEX node_identity ON message_nodes(session_id, node_id); BEGIN");
+        oversized.query("INSERT INTO sessions VALUES ('one', ?, 5001, 0, NULL)").run(cwd);
+        const insert = oversized.query("INSERT INTO message_nodes VALUES ('one', ?, ?, '{\"role\":\"user\",\"content\":\"synthetic\"}', 1700000000)");
+        for (let index = 1; index <= 5001; index++) insert.run(index, index === 1 ? null : index - 1);
+        oversized.exec("COMMIT");
+      } finally { oversized.close(); }
+      await expect(paneConversation(pane.pane_id, undefined, {}, oversizedPath)).rejects.toThrow(ConversationUnavailable);
+    } finally {
+      mockedPanes = [];
+      mockedProcesses = [];
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("forgets a pane's Devin history cache on pane teardown and test-suite reset", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-devin-reset-"));
+    const dbPath = join(root, "sessions.db");
+    const cwd = "/synthetic/work";
+    const pane = { pane_id: "pane-a", cwd, agent: "devin", agent_session: { agent: "devin", kind: "id", value: "one" } } as HerdrPane;
+    const db = new Database(dbPath);
+    try {
+      db.exec("CREATE TABLE sessions(id TEXT, working_directory TEXT, main_chain_id INTEGER, hidden INTEGER, model TEXT); CREATE TABLE message_nodes(session_id TEXT,node_id INTEGER,parent_node_id INTEGER,chat_message TEXT,created_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT,tool_call_json TEXT,tool_call_update_json TEXT)");
+      db.query("INSERT INTO sessions VALUES ('one', ?, 1, 0, NULL)").run(cwd);
+      const insert = db.query("INSERT INTO message_nodes VALUES ('one', ?, NULL, ?, 1700000000)");
+      insert.run(1, JSON.stringify({ role: "user", content: "first branch" }));
+      mockedPanes = [pane];
+      mockedProcesses = [{ argv: ["/usr/local/bin/devin", "--resume", "one"] }];
+      const initial = await paneConversation(pane.pane_id, undefined, {}, dbPath);
+      db.query("UPDATE sessions SET main_chain_id = 2 WHERE id = 'one'").run();
+      insert.run(2, JSON.stringify({ role: "user", content: "second branch" }));
+      forgetPaneTranscriptState(pane.pane_id);
+      const paneReset = await paneConversation(pane.pane_id, undefined, {}, dbPath);
+      expect(paneReset.history_id).not.toBe(initial.history_id);
+      db.query("UPDATE sessions SET main_chain_id = 3 WHERE id = 'one'").run();
+      insert.run(3, JSON.stringify({ role: "user", content: "third branch" }));
+      forgetTranscriptState();
+      const testReset = await paneConversation(pane.pane_id, undefined, {}, dbPath);
+      expect(testReset.history_id).not.toBe(paneReset.history_id);
+      expect(testReset.turns[0]?.parts[0]).toEqual({ kind: "text", text: "third branch" });
+    } finally {
+      db.close();
+      mockedPanes = [];
+      mockedProcesses = [];
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -79,6 +212,100 @@ describe("parseClaudeTranscript", () => {
     expect(turns.some((turn) => turn.parts.some((part) => part.kind === "text" && part.text.includes("/clear")))).toBe(false);
   });
 
+  it("shows what a slash command answered, and leaves its echo and an empty answer out", () => {
+    const local = (content: string, ts: string) => JSON.stringify({ type: "system", subtype: "local_command", isMeta: false, timestamp: ts, content });
+    const refusal = "/goal can't run while hooks are restricted (disableAllHooks or allowManagedHooksOnly is set in settings or by policy).";
+    const turns = parseClaudeTranscript([
+      local("<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>test</command-args>", "2026-10-07T19:00:00.000Z"),
+      local(`<local-command-stdout>${refusal}</local-command-stdout>`, "2026-10-07T19:00:01.000Z"),
+      local("<local-command-stdout></local-command-stdout>", "2026-10-07T19:00:02.000Z"),
+      local("<local-command-stderr>\u001b[31mUnknown command: /gaol\u001b[39m</local-command-stderr>", "2026-10-07T19:00:03.000Z"),
+      JSON.stringify({ type: "system", subtype: "turn_duration", content: "<local-command-stdout>not a command's answer</local-command-stdout>" }),
+    ].join("\n"));
+    expect(turns).toEqual([
+      { role: "user", ts: "2026-10-07T19:00:01.000Z", parts: [{ kind: "notice", text: refusal, source: "local-command" }] },
+      { role: "user", ts: "2026-10-07T19:00:03.000Z", parts: [{ kind: "notice", text: "Unknown command: /gaol", source: "local-command" }] },
+    ]);
+  });
+
+  it("shows a slash command's answer only as the whole entry, as text, and not past its length", () => {
+    const local = (content: string) => JSON.stringify({ type: "system", subtype: "local_command", timestamp: "2026-10-07T19:00:00.000Z", content });
+    const notices = (lines: string[]) => parseClaudeTranscript(lines.join("\n")).flatMap((turn) => turn.parts).filter((part) => part.kind === "notice").map((part) => (part as { text: string }).text);
+    // an echo whose arguments quote the tag is still an echo
+    expect(notices([local("<command-name>/goal</command-name>\n<command-args>x <local-command-stdout>quoted</local-command-stdout></command-args>")])).toEqual([]);
+    // a link keeps its text and drops its hidden address; cursor moves and backspaces go too
+    expect(notices([local("<local-command-stdout>\u001b]8;;https://example.test/?token=hidden\u0007open\u001b]8;;\u0007 done\u001b[2K\b</local-command-stdout>")])).toEqual(["open done"]);
+    const long = notices([local(`<local-command-stdout>${"x".repeat(10_000)}</local-command-stdout>`)])[0]!;
+    expect(long.length).toBe(4001);
+    expect(long.endsWith("\u2026")).toBe(true);
+  });
+
+  it("strips an unterminated link, a charset switch, and shows both streams of one entry", () => {
+    const local = (content: string) => JSON.stringify({ type: "system", subtype: "local_command", timestamp: "2026-10-07T19:00:00.000Z", content });
+    const notices = (lines: string[]) => parseClaudeTranscript(lines.join("\n")).flatMap((turn) => turn.parts).filter((part) => part.kind === "notice").map((part) => (part as { text: string }).text);
+    // an OSC cut off before its BEL or ST still hides its address
+    expect(notices([local("<local-command-stdout>done \u001b]8;;https://example.test/?token=hidden</local-command-stdout>")])).toEqual(["done"]);
+    // ESC ( B is one sequence: no stray B
+    expect(notices([local("<local-command-stdout>\u001b(Bplain\u001b[m text</local-command-stdout>")])).toEqual(["plain text"]);
+    expect(notices([local("<local-command-stdout>out</local-command-stdout>\n<local-command-stderr>err</local-command-stderr>")])).toEqual(["out\nerr"]);
+    // a closing tag the output itself prints ends nothing: only one at the end, or before the next stream, does
+    expect(notices([local("<local-command-stdout>Use </local-command-stdout> in this example.</local-command-stdout>")])).toEqual(["Use </local-command-stdout> in this example."]);
+    expect(notices([local("<local-command-stdout>a </local-command-stdout> b</local-command-stdout>\n<local-command-stderr>err</local-command-stderr>")])).toEqual(["a </local-command-stdout> b\nerr"]);
+  });
+
+  it("strips escapes in work linear in a malformed answer's length", () => {
+    const local = (n: number, unit: string) => JSON.stringify({ type: "system", subtype: "local_command", timestamp: "2026-10-07T19:00:00.000Z", content: `<local-command-stdout>${unit.repeat(n)}</local-command-stdout>` });
+    // Counted, not timed: the parse takes well under a millisecond, and two such timings divide
+    // into noise. It reads the answer through these primitives, each charged the characters it
+    // touches. A regex's backtracking cannot be counted, so a run is charged its worst case, the
+    // square of its input: a regex over one character costs one step, one over the answer fails.
+    const work = (line: string): number => {
+      let steps = 0;
+      const text = String.prototype;
+      const { charCodeAt, indexOf, startsWith, slice } = text;
+      const { exec } = RegExp.prototype;
+      text.charCodeAt = function (this: string, index: number) {
+        steps++;
+        return charCodeAt.call(this, index);
+      };
+      text.indexOf = function (this: string, search: string, from = 0) {
+        const found = indexOf.call(this, search, from);
+        steps += (found === -1 ? this.length : found) - from + search.length;
+        return found;
+      };
+      text.startsWith = function (this: string, search: string, from?: number) {
+        steps += search.length;
+        return startsWith.call(this, search, from);
+      };
+      text.slice = function (this: string, start?: number, end?: number) {
+        const part = slice.call(this, start, end);
+        steps += part.length;
+        return part;
+      };
+      RegExp.prototype.exec = function (this: RegExp, input: string) {
+        steps += input.length ** 2;
+        return exec.call(this, input);
+      };
+      try {
+        parseClaudeTranscript(line);
+      } finally {
+        text.charCodeAt = charCodeAt;
+        text.indexOf = indexOf;
+        text.startsWith = startsWith;
+        text.slice = slice;
+        RegExp.prototype.exec = exec;
+      }
+      return steps;
+    };
+    // unterminated escapes, and closing tags the output prints itself
+    for (const unit of ["\u001b]x", "</local-command-stdout> x"]) {
+      // doubling the input doubles the work (2.00 measured for both); a rescan from every
+      // unterminated opener, or from every closing tag, quadruples it. No work counted at all
+      // is NaN here and fails too.
+      expect(work(local(40_000, unit)) / work(local(20_000, unit))).toBeLessThan(2.5);
+    }
+  });
+
   it("keeps thinking blocks in transcript order", () => {
     const assistant = parseClaudeTranscript(lines)[1];
     expect(assistant?.parts.map((part) => part.kind)).toEqual(["text", "tool", "thinking", "text"]);
@@ -100,6 +327,16 @@ describe("parseClaudeTranscript", () => {
     const turns = parseClaudeTranscript(big);
     const tool = turns[0]?.parts[0];
     expect(tool && tool.kind === "tool" ? tool.output.length : 0).toBeLessThanOrEqual(4100);
+  });
+
+  it("sums a NotebookEdit up by its notebook, so the row reads as an edit", () => {
+    const turns = parseClaudeTranscript(JSON.stringify({ type: "assistant", message: { role: "assistant", content: [
+      { type: "tool_use", id: "n", name: "NotebookEdit", input: { notebook_path: "/repo/analysis.ipynb", cell_id: "c1", new_source: "print(1)", edit_mode: "replace" } },
+    ] } }));
+    const tool = turns[0]?.parts[0];
+    if (tool?.kind !== "tool") throw new Error("expected a tool part");
+    expect(tool.summary).toBe("/repo/analysis.ipynb");
+    expect(toolVerb(tool, tool.summary)).toBe("Edited");
   });
 
   it("caps the turn list", () => {
@@ -324,6 +561,23 @@ describe("gjc sessions", () => {
     ]);
   });
 
+  it("ends a turn at an answer that stopped, so a hidden wake-up's work does not fold that answer away", () => {
+    // omo 5.x: a monitor notification (display:false) wakes the agent after its final answer
+    const assistant = (ts: string, stopReason: string, content: unknown[]) => JSON.stringify({ type: "message", timestamp: ts, message: { role: "assistant", content, stopReason } });
+    const text = [
+      JSON.stringify({ type: "message", timestamp: "2026-10-05T22:09:00.000Z", message: { role: "user", content: [{ type: "text", text: "review #368" }] } }),
+      assistant("2026-10-05T22:09:15.000Z", "toolUse", [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } }]),
+      JSON.stringify({ type: "message", timestamp: "2026-10-05T22:09:16.000Z", message: { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "ok" }] } }),
+      assistant("2026-10-05T22:14:54.000Z", "stop", [{ type: "thinking", thinking: "done" }, { type: "text", text: "The full review." }]),
+      JSON.stringify({ type: "custom_message", customType: "senpi-monitor:notification", display: false, timestamp: "2026-10-05T22:14:54.500Z", content: "<system-reminder>READY</system-reminder>" }),
+      assistant("2026-10-05T22:14:58.000Z", "stop", [{ type: "thinking", thinking: "nothing new" }, { type: "text", text: "Nothing new to do." }]),
+    ].join("\n");
+    const turns = parseOmpTranscript(text);
+    expect(turns.map((turn) => turn.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(turns[1]!.parts.at(-1)).toEqual({ kind: "text", text: "The full review." });
+    expect(turns[2]).toEqual({ role: "assistant", ts: "2026-10-05T22:14:58.000Z", end_ts: "2026-10-05T22:14:58.000Z", parts: [{ kind: "thinking", text: "nothing new" }, { kind: "text", text: "Nothing new to do." }] });
+  });
+
   it("says which kind of notice the runtime delivered, and nothing where the runtime named none", () => {
     const notice = (fields: Record<string, unknown>) => JSON.stringify({ type: "custom_message", display: true, timestamp: "2026-10-01T00:00:00.000Z", ...fields });
     const text = [
@@ -337,9 +591,75 @@ describe("gjc sessions", () => {
   });
 });
 
+describe("OmO background task results", () => {
+  it("draws the background tasks an OmO wake reports as one card in the user's seat, titled by the call that started them", () => {
+    const text = [
+      omoUser("2026-10-05T00:00:00.000Z", "look into it"),
+      omoSpawn("2026-10-05T00:00:01.000Z", "c1", { description: "record location", task_summary: "Find where task records live", subagent_type: "explore", prompt: "TASK: find" }, { task_id: "st_1", task_summary: "Find where task records live" }),
+      omoSpawn("2026-10-05T00:00:02.000Z", "c2", { tasks: [{ task_summary: "Read shots 1-7", prompt: "a" }, { description: "shots 8-14", prompt: "b" }] }, { items: [{ task_id: "st_2", task_summary: "Read shots 1-7" }, { task_id: "st_3" }] }),
+      omoWake("2026-10-05T00:01:00.000Z", [
+        completion({ task_id: "st_1", name: "st_1", status: "completed", agent_type: "explore", resolved_model: { display: "lab/luna" }, model: "lab/luna-raw", duration_ms: 58_350, run_stats: { turns: 6, tool_calls: 14, total_tokens: 210_304 }, final_response: "**Found** it." }),
+        completion({ task_id: "st_2", name: "st_2", status: "error", category: "visual-engineering", model: "lab/kimi", duration_ms: 9087, run_stats: { turns: 0, tool_calls: 0 }, final_response: "Invalid native tool call event order" }),
+        // the batch result named no summary for it, and its name is its id: the agent it ran as
+        completion({ task_id: "st_3", name: "st_3", status: "cancelled", category: "quick" }),
+        completion({ task_id: "st_4", name: "named-run", status: "completed", final_response: "x".repeat(16_005) }),
+      ]),
+      JSON.stringify({ type: "message", timestamp: "2026-10-05T00:01:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "The record lives in .omo." }] } }),
+    ].join("\n");
+    const turns = parseOmpTranscript(text);
+    expect(turns.map((turn) => turn.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(turns[2]).toEqual({ role: "user", ts: "2026-10-05T00:01:00.000Z", parts: [{ kind: "task_result", tasks: [
+      { id: "st_1", title: "Find where task records live", agent: "explore", model: "lab/luna", status: "completed", duration_ms: 58_350, turns: 6, tool_calls: 14, tokens: 210_304, result: "**Found** it." },
+      { id: "st_2", title: "Read shots 1-7", agent: "visual-engineering", model: "lab/kimi", status: "failed", duration_ms: 9087, turns: 0, tool_calls: 0, tokens: null, result: "Invalid native tool call event order" },
+      { id: "st_3", title: "quick", agent: "quick", model: null, status: "cancelled", duration_ms: null, turns: null, tool_calls: null, tokens: null, result: "" },
+      { id: "st_4", title: "named-run", agent: null, model: null, status: "completed", duration_ms: null, turns: null, tool_calls: null, tokens: null, result: "x".repeat(16_000), result_cut: true },
+    ] }] });
+    // the row of the call reads the summary it gave, one per task of a batch
+    expect(turns[1]!.parts.map((part) => part.kind === "tool" ? part.summary : part.kind)).toEqual(["Find where task records live", "Read shots 1-7 · shots 8-14"]);
+  });
+
+  it("leaves a wake that reports no task result to the runtime", () => {
+    const text = [
+      omoUser("2026-10-05T00:00:00.000Z", "watch the build"),
+      JSON.stringify({ type: "custom_message", customType: "omo-senpi:wake", display: false, timestamp: "2026-10-05T00:01:00.000Z", content: "monitor fired", details: [{ customType: "senpi-monitor:notification", details: [{ line: "READY" }] }] }),
+      JSON.stringify({ type: "custom_message", customType: "omo-senpi:wake", display: false, timestamp: "2026-10-05T00:01:01.000Z", content: "empty", details: [{ customType: "senpi-task.completion", details: [{ name: "no id", status: "completed" }] }] }),
+    ].join("\n");
+    expect(parseOmpTranscript(text).map((turn) => turn.parts.map((part) => part.kind))).toEqual([["text"]]);
+  });
+
+  it("draws a task reported twice in one wake once, as its later report", () => {
+    const text = [
+      omoUser("2026-10-05T00:00:00.000Z", "go"),
+      omoWake("2026-10-05T00:01:00.000Z", [
+        completion({ task_id: "st_1", name: "st_1", status: "completed", agent_type: "explore", final_response: "first" }),
+        completion({ task_id: "st_2", name: "st_2", status: "completed", agent_type: "explore", final_response: "other" }),
+        completion({ task_id: "st_1", name: "st_1", status: "error", agent_type: "explore", final_response: "again" }),
+      ]),
+    ].join("\n");
+    const ended = parseOmpTranscript(text)[1]?.parts[0];
+    expect(ended?.kind === "task_result" ? ended.tasks.map((task) => `${task.id} ${task.status} ${task.result}`) : ended).toEqual(["st_1 failed again", "st_2 completed other"]);
+  });
+});
+
+const omoUser = (ts: string, text: string) => JSON.stringify({ type: "message", timestamp: ts, message: { role: "user", content: [{ type: "text", text }] } });
+/** an OmO `task` call and the result that names the tasks it started */
+const omoSpawn = (ts: string, id: string, input: Record<string, unknown>, details: Record<string, unknown>) => [
+  JSON.stringify({ type: "message", timestamp: ts, message: { role: "assistant", content: [{ type: "toolCall", id, name: "task", arguments: { run_in_background: true, ...input } }] } }),
+  JSON.stringify({ type: "message", timestamp: ts, message: { role: "toolResult", toolCallId: id, toolName: "task", content: [{ type: "text", text: "Started task (running)." }], details: { status: "running", mode: "spawn", ...details } } }),
+].join("\n");
+const completion = (fields: Record<string, unknown>) => ({ continuation_hint: "Use task_send to continue.", ...fields });
+/** how OmO wakes its agent when background tasks end */
+const omoWake = (ts: string, tasks: Record<string, unknown>[]) => JSON.stringify({
+  type: "custom_message", customType: "omo-senpi:wake", display: false, timestamp: ts,
+  content: "task completion …", details: [{ customType: "senpi-task.completion", details: tasks }],
+});
+
 describe("transcript pages", () => {
   const roots: string[] = [];
-  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+  afterEach(() => {
+    forgetTranscriptState();
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
   const temp = (): string => { const root = mkdtempSync(join(tmpdir(), "herdr-pages-")); roots.push(root); return root; };
   /** a prompt, a tool call and its result: the result answers the turn, never the next page */
   const claudeTurn = (n: number) => [
@@ -350,6 +670,94 @@ describe("transcript pages", () => {
   ].map((entry) => JSON.stringify(entry)).join("\n");
   const texts = (turns: { parts: { kind: string; text?: string; output?: string }[] }[]) =>
     turns.map((turn) => turn.parts.map((part) => part.kind === "tool" ? `[${part.output}]` : part.text).join(" "));
+
+  it("titles a background task that ends a prompt after the one that started it, live and cold alike", () => {
+    const root = temp();
+    const path = join(root, "omo.jsonl");
+    writeFileSync(path, `${[
+      omoUser("2026-10-05T00:00:00.000Z", "start it"),
+      omoSpawn("2026-10-05T00:00:01.000Z", "c1", { task_summary: "Survey the repo", subagent_type: "explore", prompt: "go" }, { task_id: "st_1", task_summary: "Survey the repo" }),
+    ].join("\n")}\n`);
+    // the first read settles nothing yet; the next prompt makes the spawn's turn settled
+    expect(transcriptPage("omo-transcript", path).turns).toHaveLength(2);
+    appendFileSync(path, `${omoUser("2026-10-05T00:02:00.000Z", "meanwhile, something else")}\n`);
+    expect(transcriptPage("omo-transcript", path).turns).toHaveLength(3);
+    appendFileSync(path, `${omoWake("2026-10-05T00:03:00.000Z", [completion({ task_id: "st_1", name: "st_1", status: "completed", agent_type: "explore", final_response: "done" })])}\n`);
+    const cold = join(root, "cold.jsonl");
+    copyFileSync(path, cold);
+    for (const page of [transcriptPage("omo-transcript", path), transcriptPage("omo-transcript", cold)]) {
+      const ended = page.turns.at(-1)?.parts[0];
+      expect(ended?.kind === "task_result" ? ended.tasks.map((task) => task.title) : ended).toEqual(["Survey the repo"]);
+    }
+  });
+
+  const endedTitles = (page: { turns: ConversationTurn[] }): unknown => {
+    const ended = page.turns.at(-1)?.parts[0];
+    return ended?.kind === "task_result" ? ended.tasks.map((task) => task.title) : ended;
+  };
+
+  const spawning = (taskId: string) => `${[
+    omoUser("2026-10-05T00:00:00.000Z", "start it"),
+    omoSpawn("2026-10-05T00:00:01.000Z", "c1", { task_summary: "Survey the repo", subagent_type: "explore", prompt: "go" }, { task_id: taskId, task_summary: "Survey the repo" }),
+  ].join("\n")}\n`;
+  /** polled as it grows until the page start passes the first turn, then st_1 ends */
+  const pollPastFirstTurn = (path: string) => {
+    // the page start passes the first turn once more prompts than a page holds followed
+    for (let n = 0; n < MAX_TURNS / 2 + 2; n += 1) {
+      expect(transcriptPage("omo-transcript", path).turns.length).toBeGreaterThan(0);
+      appendFileSync(path, `${omoUser(`2026-10-05T00:${String(10 + Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}.000Z`, `prompt ${n}`)}\n`);
+    }
+    expect(transcriptPage("omo-transcript", path).turns[0]?.parts[0]).toEqual({ kind: "text", text: "prompt 2" });
+    appendFileSync(path, `${omoWake("2026-10-05T00:20:00.000Z", [completion({ task_id: "st_1", name: "st_1", status: "completed", agent_type: "explore", final_response: "done" })])}\n`);
+    return endedTitles(transcriptPage("omo-transcript", path));
+  };
+
+  it("keeps a task's title when the newest page moves past the turn that started it, while the file is watched", () => {
+    const path = join(temp(), "omo.jsonl");
+    writeFileSync(path, spawning("st_1"));
+    expect(pollPastFirstTurn(path)).toEqual(["Survey the repo"]);
+  });
+
+  it("keeps the last observed task title when many prompts arrive between polls", () => {
+    const path = join(temp(), "omo.jsonl");
+    writeFileSync(path, spawning("st_1"));
+    transcriptPage("omo-transcript", path);
+    for (let n = 0; n < MAX_TURNS / 2 + 2; n++) {
+      appendFileSync(path, `${omoUser(`2026-10-05T00:10:${String(n % 60).padStart(2, "0")}.000Z`, `prompt ${n}`)}\n`);
+    }
+    appendFileSync(path, `${omoWake("2026-10-05T00:20:00.000Z", [completion({ task_id: "st_1", name: "st_1", status: "completed", agent_type: "explore", final_response: "done" })])}\n`);
+    expect(endedTitles(transcriptPage("omo-transcript", path))).toEqual(["Survey the repo"]);
+  });
+
+  it("never titles a task from another file that had the same inode", () => {
+    const root = temp();
+    const gone = join(root, "gone.jsonl");
+    writeFileSync(gone, spawning("st_1"));
+    transcriptPage("omo-transcript", gone);
+    appendFileSync(gone, `${omoUser("2026-10-05T00:02:00.000Z", "meanwhile, something else")}\n`);
+    transcriptPage("omo-transcript", gone);
+    // Linux gives a deleted file's inode to the next file; a hard link rewritten in place does so anywhere
+    const path = join(root, "omo.jsonl");
+    linkSync(gone, path);
+    writeFileSync(path, spawning("st_2"));
+    expect(pollPastFirstTurn(path)).toEqual(["explore"]);
+  });
+
+  it("titles a wake read before the call that names its task as a cold read does, on every poll", () => {
+    const root = temp();
+    const path = join(root, "omo.jsonl");
+    writeFileSync(path, `${[
+      omoUser("2026-10-05T00:00:00.000Z", "start it"),
+      omoWake("2026-10-05T00:00:01.000Z", [completion({ task_id: "st_1", name: "st_1", status: "completed", agent_type: "explore", final_response: "done" })]),
+      omoSpawn("2026-10-05T00:00:02.000Z", "c1", { task_summary: "Survey the repo", subagent_type: "explore", prompt: "go" }, { task_id: "st_1", task_summary: "Survey the repo" }),
+    ].join("\n")}\n`);
+    const titles = (page: { turns: ConversationTurn[] }) => page.turns.flatMap((turn) => turn.parts.flatMap((part) => part.kind === "task_result" ? part.tasks.map((task) => task.title) : []));
+    expect(titles(transcriptPage("omo-transcript", path))).toEqual(["explore"]);
+    appendFileSync(path, `${JSON.stringify({ type: "message", timestamp: "2026-10-05T00:00:03.000Z", message: { role: "assistant", content: [{ type: "text", text: "noted" }] } })}\n`);
+    const cold = join(root, "cold.jsonl");
+    copyFileSync(path, cold);
+    expect(titles(transcriptPage("omo-transcript", path))).toEqual(titles(transcriptPage("omo-transcript", cold)));
+  });
 
   it("reads a growing file's newest page incrementally, exactly as a cold read of it", () => {
     const root = temp();

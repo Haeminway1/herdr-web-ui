@@ -2,6 +2,7 @@
  * conversation records belong in chat; developer prompts and terminal chrome do not. */
 import { Database } from "bun:sqlite";
 import { closeSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { ConversationPart, ConversationTurn, HerdrPane } from "../shared/protocol.ts";
@@ -69,6 +70,100 @@ function entries(text: string): RecordValue[] {
   });
 }
 
+/** Memory blocks are metadata unless the answer quotes them in Markdown code. */
+function withoutMemoryCitations(text: string): string {
+  const opening = "<oai-mem-citation>";
+  const closing = "</oai-mem-citation>";
+  if (!text.includes(opening)) return text.trimEnd();
+
+  type Line = { kind: "line"; index: number; quoteDepth: number; indent: number; listIndent?: number; blank: boolean };
+  type Token = Line | { kind: "fence"; index: number; marker: string; info: string; line: Line }
+    | { kind: "ticks"; index: number; size: number } | { kind: "citation"; index: number };
+  const tokens: Token[] = [];
+  const quote = /[ \t]*>[ \t]?/y;
+  for (const match of text.matchAll(/([^\r\n]*)(?:\r\n?|\n|$)/g)) {
+    const source = match[1]!;
+    let offset = 0;
+    let quoteDepth = 0;
+    quote.lastIndex = 0;
+    while (quote.exec(source)) { offset = quote.lastIndex; quoteDepth++; }
+    const indent = /^[ \t]*/.exec(source.slice(offset))![0].length;
+    const content = source.slice(offset + indent);
+    const list = /^(?:[-+*]|\d+[.)])[ \t]+/.exec(content);
+    const line: Line = { kind: "line", index: match.index!, quoteDepth, indent,
+      ...(list ? { listIndent: indent + list[0].length } : {}), blank: content.trim() === "" };
+    tokens.push(line);
+    const body = content.slice(list?.[0].length ?? 0);
+    const marker = /^(`{3,}|~{3,})/.exec(body)?.[0];
+    const info = marker ? body.slice(marker.length) : "";
+    // A backtick fence's info string cannot contain backticks.
+    if (marker && (marker[0] !== "`" || !info.includes("`"))) tokens.push({ kind: "fence",
+      index: match.index! + offset + indent + (list?.[0].length ?? 0), marker, info, line });
+    for (const token of source.matchAll(/`+|<oai-mem-citation>/g)) {
+      tokens.push(token[0] === opening ? { kind: "citation", index: match.index! + token.index! }
+        : { kind: "ticks", index: match.index! + token.index!, size: token[0].length });
+    }
+  }
+  const closes = new Map<number, number>();
+  const pairs: number[] = [];
+  // Index matching runs once: unmatched delimiters must not repeatedly scan the tail.
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const token = tokens[i]!;
+    if (token.kind !== "ticks") {
+      if (token.kind === "line") closes.clear();
+      continue;
+    }
+    let backslashes = 0;
+    for (let at = token.index - 1; at >= 0 && text[at] === "\\"; at--) backslashes++;
+    const length = token.size - (backslashes % 2);
+    pairs[i] = length > 0 ? closes.get(length) ?? -1 : -1;
+    // Inside a code span a backslash does not escape its closing backticks.
+    closes.set(token.size, i);
+  }
+  const parts: string[] = [];
+  const listIndents: number[] = [];
+  let quoteDepth = 0;
+  let kept = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.kind === "line") {
+      if (token.quoteDepth !== quoteDepth) { listIndents.length = 0; quoteDepth = token.quoteDepth; }
+      if (token.blank) continue;
+      while (listIndents.length > 0 && listIndents.at(-1)! > token.indent) listIndents.pop();
+      if (token.listIndent !== undefined) listIndents.push(token.listIndent);
+      continue;
+    }
+    if (token.kind === "fence") {
+      const within = token.line.listIndent ?? listIndents.at(-1) ?? 0;
+      const indent = token.line.listIndent === undefined ? token.line.indent - within : 0;
+      if (indent < 0 || indent > 3) continue;
+      // An unfinished fence remains code until its quote/list container ends.
+      for (i++; i < tokens.length; i++) {
+        const end = tokens[i]!;
+        if (end.kind === "line" && (end.quoteDepth < token.line.quoteDepth
+          || (within > 0 && end.quoteDepth === token.line.quoteDepth && !end.blank && end.indent < within))) { i--; break; }
+        if (end.kind === "fence" && end.line.quoteDepth === token.line.quoteDepth && end.marker[0] === token.marker[0]
+          && end.marker.length >= token.marker.length && /^[ \t]*$/.test(end.info)) {
+          // Skip the closing line's raw backtick/citation tokens too.
+          while (i + 1 < tokens.length && tokens[i + 1]!.kind !== "line") i++;
+          break;
+        }
+      }
+      continue;
+    }
+    const pair = pairs[i];
+    if (pair !== undefined && pair >= 0) { i = pair; continue; }
+    if (token.kind !== "citation") continue;
+    parts.push(text.slice(kept, token.index));
+    const close = text.indexOf(closing, token.index + opening.length);
+    kept = close === -1 ? text.length : close + closing.length;
+    // Metadata contents cannot open code spans or fences in the surrounding answer.
+    while (i + 1 < tokens.length && tokens[i + 1]!.index < kept) i++;
+  }
+  parts.push(text.slice(kept));
+  return parts.join("").trimEnd();
+}
+
 
 /**
  * Whether a Codex tool output says the call failed. Codex records no flag: its command
@@ -105,7 +200,8 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
     return turn;
   };
   const message = (role: "user" | "assistant", text: string, source: string, ts: string, phase?: "commentary" | "final_answer", images: ConversationPart[] = []): void => {
-    const body = role === "user" ? questionReply(text) ?? text : text;
+    const body = role === "user" ? questionReply(text) ?? text
+      : withoutMemoryCitations(text);
     if (!body.trim() && images.length === 0) return;
     const duplicate = messages.slice(-8).reverse().find((other) => !other.paired && other.role === role && other.text === body
       && other.source !== source && (other.ts === ts || Math.abs(Date.parse(other.ts) - Date.parse(ts)) <= 1000));
@@ -245,6 +341,86 @@ export function parseCodexTranscript(text: string, maxTurns = 100): Conversation
 
 export const defaultCodexHome = (): string => process.env["CODEX_HOME"] || join(homedir(), ".codex");
 
+/** What processCodexHome found, by pid and argv, and when (PROCESS_HOME_TTL_MS). */
+const processHomes = new Map<string, { home: string | null; at: number }>();
+/**
+ * A chat polls every 2 s and macOS reads the environment with a `ps` spawn: a process's
+ * environment does not change, so its answer is kept. A pid reused by another process
+ * carries other arguments or comes after this; ponytail: a reused pid with the same argv
+ * inside it reads the old store until it runs out.
+ */
+const PROCESS_HOME_TTL_MS = 30_000;
+
+/**
+ * The CODEX_HOME in a process's environment: /proc on Linux, `ps -E` (same user only) on macOS,
+ * kept for PROCESS_HOME_TTL_MS under the process's pid and argv.
+ */
+export async function processCodexHome(pid: number, argv: readonly string[] = []): Promise<string | null> {
+  const key = `${pid}\0${argv.join("\0")}`;
+  const known = processHomes.get(key);
+  if (known && Date.now() - known.at < PROCESS_HOME_TTL_MS) return known.home;
+  const home = await readProcessCodexHome(pid);
+  processHomes.delete(key);
+  processHomes.set(key, { home, at: Date.now() });
+  if (processHomes.size > 256) processHomes.delete(processHomes.keys().next().value!);
+  return home;
+}
+
+async function readProcessCodexHome(pid: number): Promise<string | null> {
+  let home: string | null = null;
+  try {
+    if (process.platform === "linux") {
+      home = (await readFile(`/proc/${pid}/environ`, "utf8")).split("\0").find((entry) => entry.startsWith("CODEX_HOME="))?.slice(11) || null;
+    } else if (process.platform === "darwin") {
+      const child = Bun.spawn(["/bin/ps", "-E", "-ww", "-p", String(pid), "-o", "command="], { stdout: "pipe", stderr: "ignore" });
+      const timer = setTimeout(() => child.kill(), 3000);
+      try {
+        // the environment follows the arguments, space-separated: the last match is the
+        // environment's, and its value runs to the next `NAME=` (a path may hold spaces).
+        // ponytail: a value holding ` NAME=` is cut there, and with none in the environment an
+        // argument spelled CODEX_HOME=/path would be taken. /proc on Linux has neither problem
+        const text = await new Response(child.stdout).text();
+        await child.exited;
+        home = codexHomeInPsLine(text);
+      } finally { clearTimeout(timer); }
+    }
+  } catch { home = null; }
+  return home !== null && (await isCodexHomeDir(home)) ? home : null;
+}
+
+/** An absolute path to a directory that is there: `ps` cannot tell an argument from the environment, a store can be checked. */
+async function isCodexHomeDir(home: string): Promise<boolean> {
+  if (!isAbsolute(home)) return false;
+  try { return (await stat(home)).isDirectory(); } catch { return false; }
+}
+
+/**
+ * CODEX_HOME in one `ps -E -o command=` line: the environment follows the arguments,
+ * space-separated, so the last assignment is taken and its value runs to the next `NAME=`
+ * (a path may hold spaces). A value holding ` NAME=` is cut there; an argument spelled
+ * `CODEX_HOME=/path` is taken when the environment has none, which the directory check above
+ * narrows. /proc on Linux has neither problem.
+ */
+export function codexHomeInPsLine(text: string): string | null {
+  return [...text.matchAll(/(?:^|\s)CODEX_HOME=(.*?)(?=\s+[A-Za-z_][A-Za-z0-9_]*=|\s*$)/g)].at(-1)?.[1] || null;
+}
+
+/**
+ * The store a pane's Codex writes to. A launcher can start Codex with its own CODEX_HOME (a
+ * harness keeps one per profile), so a single store for the whole server misses those panes:
+ * an explicit `configured` store wins, then the pane's Codex process's own, then the default.
+ */
+export async function paneCodexHome(paneId: string, configured?: string): Promise<string> {
+  if (configured) return configured;
+  try {
+    // the first Codex listed decides, with or without a home of its own: a child or wrapper it
+    // started with another CODEX_HOME writes to a store that is not this pane's conversation
+    const [first] = (await codexProcessesOf(paneId)).list;
+    if (first !== undefined) return (await processCodexHome(first.pid, first.argv)) ?? defaultCodexHome();
+  } catch { /* herdr busy: the default store */ }
+  return defaultCodexHome();
+}
+
 /** The session_meta payload on a rollout's first line, or null when the file is not a rollout. */
 function rolloutHeader(path: string): RecordValue | null {
   const fd = openSync(path, "r");
@@ -256,10 +432,31 @@ function rolloutHeader(path: string): RecordValue | null {
   } finally { closeSync(fd); }
 }
 
+/**
+ * A Windows path without the `\\?\` prefix that Codex on Windows stores in `threads` (`cwd`,
+ * `rollout_path`), as Rust's canonical paths carry it: `\\?\D:\x` is `D:\x` and
+ * `\\?\UNC\host\share` is `\\host\share` (#518). Any other path, `\\?\Volume{…}\` included, is
+ * returned as it is: without its prefix it would read as a relative path.
+ */
+export function withoutVerbatimPrefix(path: string): string {
+  if (!path.startsWith("\\\\?\\")) return path;
+  const rest = path.slice(4);
+  if (/^UNC\\/i.test(rest)) return `\\\\${rest.slice(4)}`;
+  return /^[A-Za-z]:\\/.test(rest) ? rest : path;
+}
+
+/** The `cwd` values Codex may have stored for a directory: as given, and on Windows also with `\\?\`. */
+export function storedCwds(cwd: string): [string, string] {
+  const plain = withoutVerbatimPrefix(cwd);
+  if (/^[A-Za-z]:\\/.test(plain)) return [plain, `\\\\?\\${plain}`];
+  if (/^\\\\[^\\?.]/.test(plain)) return [plain, `\\\\?\\UNC\\${plain.slice(2)}`];
+  return [cwd, cwd];
+}
+
 /** File access is constrained by canonical paths, including symlink targets. */
 export function codexRolloutPath(path: string, codexHome: string): string | null {
   try {
-    const canonical = realpathSync(path);
+    const canonical = realpathSync(withoutVerbatimPrefix(path));
     const rel = relative(realpathSync(join(codexHome, "sessions")), canonical);
     if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel) || !canonical.endsWith(".jsonl")) return null;
     if (!statSync(canonical).isFile()) return null;
@@ -380,6 +577,21 @@ export function forgetHistoryChains(): void {
 /** Drops one rollout's remembered chain: its next read resolves it again. */
 export function forgetHistoryChain(path: string): void {
   historyChains.delete(path);
+}
+
+/** Everything remembered about one rollout: its chain, its question scan and any scan in flight. */
+export function forgetCodexStateFor(path: string): void {
+  historyChains.delete(path);
+  questionScans.delete(path);
+  questionScansInFlight.delete(path);
+}
+
+/** Every remembered chain and question scan: the next read resolves each one again. */
+export function forgetAllCodexState(): void {
+  historyChains.clear();
+  questionScans.clear();
+  questionScansInFlight.clear();
+  linesBeforeCut.clear();
 }
 
 /** Lines before a cut, per file identity and cut: the bytes before a cut never change. */
@@ -673,9 +885,9 @@ const boundRollouts = new Map<string, { processes: string; path: string; at: num
  */
 function newerThreads(db: Database, cwd: string, since: number, except: string | null, paneId: string, home: string, firsts?: Map<string, string>): string[] {
   const first = db.query("SELECT 1 FROM pragma_table_info('threads') WHERE name = 'first_user_message'").get() !== null ? ", first_user_message" : "";
-  const rows = db.query<{ id: string; rollout_path: string; first_user_message?: string | null }, [string, number]>(
-    `SELECT id, rollout_path${first} FROM threads WHERE cwd = ? AND archived = 0 AND agent_role IS NULL${interactive(db)} AND created_at >= ?`,
-  ).all(cwd, since);
+  const rows = db.query<{ id: string; rollout_path: string; first_user_message?: string | null }, [string, string, number]>(
+    `SELECT id, rollout_path${first} FROM threads WHERE cwd IN (?, ?) AND archived = 0 AND agent_role IS NULL${interactive(db)} AND created_at >= ?`,
+  ).all(...storedCwds(cwd), since);
   return theirs(rows.flatMap((row) => {
     if (row.id === except) return [];
     const path = codexRolloutPath(row.rollout_path, home) ?? row.rollout_path;
@@ -839,23 +1051,26 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   const { list: codexProcesses, key: processes } = await codexProcessesOf(paneId);
   const resumed = resumedThread(codexProcesses.map((process) => process.argv ?? []));
   const open = new Set<string>();
+  if (globalThis.process.platform === "darwin" && codexProcesses.length > 0) {
+    // lsof is available on macOS, where /proc does not exist. Keep the same
+    // canonical-store and unambiguous-open-file checks as the Linux path. One run
+    // for every Codex process of the pane (a wrapper and the binary are two), and
+    // -b keeps lsof off the stat calls it does not need for a name: a chat polls this
+    // every 2 s, and each run costs about 20 ms of process start and kernel walk
+    const child = Bun.spawn(["/usr/sbin/lsof", "-nPbw", "-a", "-p", codexProcesses.map((process) => process.pid).join(","), "-Fn"], { stdout: "pipe", stderr: "ignore" });
+    const timer = setTimeout(() => child.kill(), 3000);
+    try {
+      const text = await new Response(child.stdout).text();
+      await child.exited;
+      for (const line of text.split("\n")) {
+        if (!line.startsWith("n") || !line.endsWith(".jsonl")) continue;
+        const path = codexRolloutPath(line.slice(1), home);
+        if (path) open.add(path);
+      }
+    } finally { clearTimeout(timer); }
+  }
   for (const process of codexProcesses) {
-    if (globalThis.process.platform === "darwin") {
-      // lsof is available on macOS, where /proc does not exist. Keep the same
-      // canonical-store and unambiguous-open-file checks as the Linux path.
-      const child = Bun.spawn(["/usr/sbin/lsof", "-nP", "-a", "-p", String(process.pid), "-Fn"], { stdout: "pipe", stderr: "ignore" });
-      const timer = setTimeout(() => child.kill(), 3000);
-      try {
-        const text = await new Response(child.stdout).text();
-        await child.exited;
-        for (const line of text.split("\n")) {
-          if (!line.startsWith("n") || !line.endsWith(".jsonl")) continue;
-          const path = codexRolloutPath(line.slice(1), home);
-          if (path) open.add(path);
-        }
-      } finally { clearTimeout(timer); }
-      continue;
-    }
+    if (globalThis.process.platform === "darwin") continue;
     let descriptors: string[];
     try { descriptors = readdirSync(`/proc/${process.pid}/fd`); } catch { continue; }
     for (const descriptor of descriptors.slice(0, 512)) {
@@ -907,10 +1122,10 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
     // the same guard for a match: after /new the process writes a thread begun since
     // (created_at has whole seconds, so one begun in the match's second counts too)
     if (boundHere !== undefined) boundNewer = newerThreads(db, cwd, Math.floor(boundHere.at / 1000), null, paneId, home, firsts);
-    const rows = db.query<{ rollout_path: string }, [string]>(
+    const rows = db.query<{ rollout_path: string }, [string, string]>(
       // a burst of `codex exec` runs must not push the pane's own thread out of the 32
-      `SELECT rollout_path FROM threads WHERE cwd = ? AND archived = 0 AND agent_role IS NULL${interactive(db)} ORDER BY updated_at DESC LIMIT 33`,
-    ).all(cwd);
+      `SELECT rollout_path FROM threads WHERE cwd IN (?, ?) AND archived = 0 AND agent_role IS NULL${interactive(db)} ORDER BY updated_at DESC LIMIT 33`,
+    ).all(...storedCwds(cwd));
     const rollouts = rows.slice(0, 32).map((row) => codexRolloutPath(row.rollout_path, home));
     // a thread whose rollout is gone or outside the store is still a conversation of this cwd
     listed = rows.length <= 32 && !rollouts.includes(null);

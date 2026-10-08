@@ -1,6 +1,6 @@
 /**
  * User preferences: one localStorage record, one React context, applied to the
- * document as `data-theme` / `data-density` attributes that src/styles.css keys
+ * document as `data-theme` / `data-density` / `data-chat-width` attributes that src/styles.css keys
  * its token overrides on. xterm reads no CSS, so `terminalTheme()` mirrors the
  * `--term-*` tokens of each theme for PaneTerminal's theme object.
  */
@@ -9,18 +9,31 @@ import { createContext, createElement, useCallback, useContext, useEffect, useMe
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
 import type { AlertPrefs, DoneAlerts } from "../../shared/notify-policy.ts";
 import { chatFontStack, sanitizeFontFamily } from "./fontFamily.ts";
+import { sanitizeKeyBarExtras, type KeyBarExtra } from "./keys.ts";
+import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems, sanitizeKeyBarItems, type KeyBarItem } from "./keyBar.ts";
 
 export type ThemeSetting = "dark" | "light" | "system";
 export type ResolvedTheme = "dark" | "light";
 export type Density = "compact" | "comfortable";
-export type SidebarGrouping = "workspace" | "directory";
+/** One line names the workspace; two lines say what its pane is doing, with the workspace under it. */
+export type SidebarRows = "one" | "two";
+/** the Agents list's order: herdr's workspace order, or a waiting agent first and then the latest change */
+export type AgentOrder = "workspace" | "activity";
 /** what the plan meters count: the share of a limit used, or what is left of it */
 export type UsageCount = "used" | "left";
 /** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
 export type UsageGlance = "week" | "session";
 /** amber: the herdr look (the default); report: the dark technical report look; charcoal: neutral Ghostty-style dark;
- *  catppuccin: Catppuccin Mocha in dark, Latte in light */
-export type Palette = "amber" | "report" | "charcoal" | "catppuccin";
+ *  catppuccin: Catppuccin Mocha in dark, Latte in light; lilac: lavender surfaces and indigo accents */
+export type Palette = "amber" | "report" | "charcoal" | "catppuccin" | "lilac";
+/** the chat lane's widest: the transcript, the composer column and the held list share it (--chat-w in src/styles.css).
+ *  narrow: 820px; default: follows the pane, up to 60rem (chatLaneWidth); wide: 72rem; full: the pane, less the gutters */
+export type ChatWidth = "narrow" | "default" | "wide" | "full";
+export const CHAT_WIDTHS: readonly ChatWidth[] = ["narrow", "default", "wide", "full"];
+/** the microphone button. auto: in the chat composer off a phone, and only where dictation can work;
+ *  on: there, on a phone and in the terminal input line, disabled with its reason where it cannot work; off: nowhere */
+export type VoiceButton = "auto" | "on" | "off";
+export const VOICE_BUTTONS: readonly VoiceButton[] = ["auto", "on", "off"];
 /** the lens a pane opens in until it is switched there: auto is chat for an agent on a touch screen, else terminal */
 export type DefaultView = "auto" | "chat" | "terminal";
 
@@ -28,11 +41,19 @@ import { sanitizeShortcutOverrides, type ShortcutOverrides } from "./shortcutBin
 
 export interface Settings {
   terminalInputMode: "auto" | "line" | "direct";
+  /** Kept for migration of the old fixed-order bar. New layouts use keyBarItems. */
+  keyBarExtras: KeyBarExtra[];
+  /** This device's terminal keys, sticky modifiers and exact chords, in display order. */
+  keyBarItems: KeyBarItem[];
   shortcutOverrides: ShortcutOverrides;
   theme: ThemeSetting;
   density: Density;
-  /** The sidebar's display grouping; workspaces themselves remain independent. */
-  sidebarGrouping: SidebarGrouping;
+  /** How much a workspace row says: its name, or its pane's title over its place. */
+  sidebarRows: SidebarRows;
+  /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
+  agentOrder: AgentOrder;
+  /** a DONE opened here since it finished reads as ready, as herdr's own view would make it (per browser and PC) */
+  quietOpenedDone: boolean;
   /** the chrome color family, keyed as data-palette in src/styles.css */
   palette: Palette;
   /** xterm font size in px */
@@ -41,10 +62,18 @@ export interface Settings {
   terminalWheelSpeed: number;
   /** fonts tried before the built-in terminal stack, as a CSS font-family list; "" keeps the built-in one */
   terminalFontFamily: string;
+  /** let a pane's OSC 52 sequence write the clipboard (lib/osc52.ts), as vim, tmux and Claude Code copy;
+   *  on unless chosen off, since any process in the pane can then plant text the user pastes elsewhere.
+   *  Stored under this key, not 0.4.1's `terminalOsc52`: settings are saved whole, so a `false` there
+   *  was written by any change at all, not chosen, and is ignored. */
+  paneClipboard: boolean;
   /** chat text size in px (its body text; the rest scales with it); null follows the density */
   chatFontSize: number | null;
   /** fonts tried before the UI font in the chat's prose (code stays mono), as a CSS font-family list; "" keeps the UI font */
   chatFontFamily: string;
+  /** how wide the chat lane may run on a large screen, keyed as data-chat-width in src/styles.css; default follows the pane
+   *  (chatLaneWidth, written by PaneTerminal); a narrower pane is never affected */
+  chatWidth: ChatWidth;
   /** true: Enter sends in the composer, Shift+Enter breaks the line; false: Ctrl/Cmd+Enter sends */
   enterSends: boolean;
   /** show the agent's folded reasoning blocks in the chat view */
@@ -67,7 +96,7 @@ export interface Settings {
   quickReplies: string[];
   /** whether the quick replies show above the composer at all */
   showQuickReplies: boolean;
-  /** touch screens: a chip above the message box takes the prompt Claude suggests next; off until chosen */
+  /** touch screens: a chip above the message box takes the prompt Claude suggests next */
   showSuggestionChip: boolean;
   /** the plan meters beside Settings in the sidebar (GET /api/usage); off until chosen, as it sends this PC's sign-ins out */
   showUsage: boolean;
@@ -79,8 +108,8 @@ export interface Settings {
   usageOrder: string[];
   /** accounts left out of the plan meters, strip and popover alike, by ProviderUsage.key */
   usageHidden: string[];
-  /** the microphone button in the composer and the terminal input line; off until chosen, as it sends audio out */
-  voiceInput: boolean;
+  /** the microphone button in the composer and the terminal input line; nothing is recorded until it is pressed */
+  voiceInput: VoiceButton;
   voicePolishChat: boolean;
   /** off by default: a terminal line is usually a command, kept as spoken */
   voicePolishTerminal: boolean;
@@ -88,16 +117,22 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   terminalInputMode: "auto",
+  keyBarExtras: ["alt"],
+  keyBarItems: DEFAULT_KEY_BAR_ITEMS,
   shortcutOverrides: {},
   theme: "dark",
   density: "comfortable",
-  sidebarGrouping: "workspace",
+  sidebarRows: "two",
+  agentOrder: "workspace",
+  quietOpenedDone: false,
   palette: "amber",
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
+  paneClipboard: true,
   chatFontSize: null,
   chatFontFamily: "",
+  chatWidth: "default",
   enterSends: true,
   showThinking: false,
   keepScreenOn: false,
@@ -109,14 +144,14 @@ export const DEFAULT_SETTINGS: Settings = {
   alertSound: false,
   quickReplies: ["continue", "yes", "no", "commit and push", "retry"],
   showQuickReplies: false,
-  showSuggestionChip: false,
+  showSuggestionChip: true,
   showUsage: false,
   usageCount: "used",
   usageGlance: "week",
   defaultView: "auto",
   usageOrder: [],
   usageHidden: [],
-  voiceInput: false,
+  voiceInput: "auto",
   voicePolishChat: true,
   voicePolishTerminal: false,
 };
@@ -131,6 +166,20 @@ function usageKeys(value: unknown): string[] {
   return [...new Set(value.filter((key): key is string => typeof key === "string" && key.length > 0 && key.length <= 512))].slice(0, USAGE_KEYS_MAX);
 }
 export const QUICK_REPLY_MAX_CHARS = 200;
+
+/**
+ * A record from before the button had a place of its own holds a boolean: on stays on. Its off
+ * was also what a device that never chose held, so it follows the default.
+ */
+function voiceButton(value: unknown): VoiceButton {
+  if (value === true) return "on";
+  return VOICE_BUTTONS.includes(value as VoiceButton) ? value as VoiceButton : DEFAULT_SETTINGS.voiceInput;
+}
+
+/** Whether an input asks for dictation at all: auto leaves the terminal input line and a phone's composer alone. */
+export function wantsVoiceInput(setting: VoiceButton, mode: "chat" | "terminal", phone: boolean): boolean {
+  return setting === "on" || (setting === "auto" && mode === "chat" && !phone);
+}
 
 /** The replies worth a button: what the list holds, without the blank ones still being written. */
 export function quickReplyButtons(settings: Settings): string[] {
@@ -162,6 +211,47 @@ export function chatFontSize(settings: Settings): number {
   return settings.chatFontSize ?? CHAT_BASE_FONT[settings.density];
 }
 
+/** The Default chat lane never runs narrower than this, in px: --content-w, the Narrow step. */
+export const CHAT_LANE_MIN = 820;
+/** ...or wider than this, in rem: 960px at a 16px root. In rem because Wide is (72rem, styles.css),
+ *  so Default stays the narrower of the two at a root font of 11.39px and up; under that the
+ *  820px floor wins and is itself wider than Wide (see chatLaneLength). */
+export const CHAT_LANE_MAX_REM = 60;
+/** The share of its pane the Default chat lane takes between the two. */
+export const CHAT_LANE_RATIO = 0.7143;
+/** The root font size chatLaneWidth resolves the rem ceiling with when none is given. */
+export const ROOT_FONT_PX = 16;
+
+/** The Default lane's pane-following part in whole px, before the rem ceiling: 71.43% of the pane, min 820px. */
+function chatLaneFollow(paneWidth: number): number {
+  if (!Number.isFinite(paneWidth)) return CHAT_LANE_MIN;
+  return Math.max(CHAT_LANE_MIN, Math.round(paneWidth * CHAT_LANE_RATIO));
+}
+
+/**
+ * The Default chat lane for a pane this wide, as the CSS length PaneTerminal writes to --chat-w:
+ * 71.43% of the pane, min 820px, max 60rem.
+ * A length with no percentage in it: the lane's columns sit in boxes of different widths (the
+ * transcript and the composer column inside a gutter, the held list and the menus outside it),
+ * and one length is what keeps them equal. A pane narrower than the result is unaffected:
+ * every column is min(100%, lane).
+ * The ceiling is left to the stylesheet engine as 60rem, not resolved here: Wide's 72rem follows
+ * the root font size the moment it changes, and so must this, or Default would be the wider of
+ * the two until the pane was next measured.
+ * Where the two ends cross (60rem is under 820px below a 13.67px root) the floor wins: Default is
+ * then the same lane as Narrow, never narrower than it, and still no wider than Wide down to an
+ * 11.39px root, under which Narrow's own 820px is already wider than Wide's 72rem.
+ */
+export function chatLaneLength(paneWidth: number): string {
+  return `min(max(${CHAT_LANE_MIN}px, ${CHAT_LANE_MAX_REM}rem), ${chatLaneFollow(paneWidth)}px)`;
+}
+
+/** What chatLaneLength resolves to at this root font size, in px (960 at most at 16px): the rule in numbers. */
+export function chatLaneWidth(paneWidth: number, rootFontPx: number = ROOT_FONT_PX): number {
+  const root = Number.isFinite(rootFontPx) && rootFontPx > 0 ? rootFontPx : ROOT_FONT_PX;
+  return Math.min(Math.max(CHAT_LANE_MIN, CHAT_LANE_MAX_REM * root), chatLaneFollow(paneWidth));
+}
+
 /** Only known keys with the right type survive: a stale or hand-edited record never breaks the UI. */
 export function sanitizeSettings(raw: unknown): Settings {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
@@ -169,13 +259,18 @@ export function sanitizeSettings(raw: unknown): Settings {
   const density = record["density"];
   const font = record["terminalFontSize"];
   const chatFont = record["chatFontSize"];
+  const keyBarExtras = sanitizeKeyBarExtras(record["keyBarExtras"], DEFAULT_SETTINGS.keyBarExtras);
   return {
     terminalInputMode: record["terminalInputMode"] === "line" || record["terminalInputMode"] === "direct" ? record["terminalInputMode"] : "auto",
+    keyBarExtras,
+    keyBarItems: sanitizeKeyBarItems(record["keyBarItems"], migrateKeyBarItems(keyBarExtras)),
     shortcutOverrides: sanitizeShortcutOverrides(record["shortcutOverrides"]),
     theme: theme === "dark" || theme === "light" || theme === "system" ? theme : DEFAULT_SETTINGS.theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
-    sidebarGrouping: record["sidebarGrouping"] === "workspace" || record["sidebarGrouping"] === "directory" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
-    palette: record["palette"] === "amber" || record["palette"] === "report" || record["palette"] === "charcoal" || record["palette"] === "catppuccin" ? record["palette"] : DEFAULT_SETTINGS.palette,
+    sidebarRows: record["sidebarRows"] === "one" || record["sidebarRows"] === "two" ? record["sidebarRows"] : DEFAULT_SETTINGS.sidebarRows,
+    agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
+    quietOpenedDone: record["quietOpenedDone"] === true,
+    palette: record["palette"] === "amber" || record["palette"] === "report" || record["palette"] === "charcoal" || record["palette"] === "catppuccin" || record["palette"] === "lilac" ? record["palette"] : DEFAULT_SETTINGS.palette,
     terminalFontSize: typeof font === "number" && Number.isFinite(font) ? clampFont(font) : DEFAULT_SETTINGS.terminalFontSize,
     terminalWheelSpeed: typeof record["terminalWheelSpeed"] === "number" && Number.isFinite(record["terminalWheelSpeed"])
       ? Math.min(TERMINAL_WHEEL_SPEED_MAX, Math.max(TERMINAL_WHEEL_SPEED_MIN, Math.round(record["terminalWheelSpeed"])))
@@ -184,7 +279,9 @@ export function sanitizeSettings(raw: unknown): Settings {
       ? Math.min(CHAT_FONT_MAX, Math.max(CHAT_FONT_MIN, Math.round(chatFont)))
       : DEFAULT_SETTINGS.chatFontSize,
     terminalFontFamily: sanitizeFontFamily(record["terminalFontFamily"]),
+    paneClipboard: typeof record["paneClipboard"] === "boolean" ? record["paneClipboard"] : DEFAULT_SETTINGS.paneClipboard,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
+    chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
@@ -206,7 +303,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     defaultView: record["defaultView"] === "chat" || record["defaultView"] === "terminal" || record["defaultView"] === "auto" ? record["defaultView"] : DEFAULT_SETTINGS.defaultView,
     usageOrder: usageKeys(record["usageOrder"]),
     usageHidden: usageKeys(record["usageHidden"]),
-    voiceInput: typeof record["voiceInput"] === "boolean" ? record["voiceInput"] : DEFAULT_SETTINGS.voiceInput,
+    voiceInput: voiceButton(record["voiceInput"]),
     voicePolishChat: typeof record["voicePolishChat"] === "boolean" ? record["voicePolishChat"] : DEFAULT_SETTINGS.voicePolishChat,
     voicePolishTerminal: typeof record["voicePolishTerminal"] === "boolean" ? record["voicePolishTerminal"] : DEFAULT_SETTINGS.voicePolishTerminal,
   };
@@ -256,6 +353,10 @@ const TERMINAL_THEMES: Record<Palette, Record<ResolvedTheme, TerminalColors>> = 
     light: { background: "#eff1f5", foreground: "#4c4f69", cursor: "#dc8a78", selectionBackground: "#d2d4dc" },
     dark: { background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc", selectionBackground: "#3b3d4f" },
   },
+  lilac: {
+    light: { background: "#f8f7fe", foreground: "#2b2d4d", cursor: "#4a42c2", selectionBackground: "#dcd7f8" },
+    dark: { background: "#18172f", foreground: "#dcdaf4", cursor: "#b3abff", selectionBackground: "#3a3768" },
+  },
 };
 
 export function terminalTheme(theme: ResolvedTheme, palette: Palette = "amber"): TerminalColors {
@@ -268,6 +369,7 @@ const THEME_COLOR: Record<Palette, Record<ResolvedTheme, string>> = {
   report: { dark: "#0f1319", light: "#fafaf9" },
   charcoal: { dark: "#171717", light: "#fafaf9" },
   catppuccin: { dark: "#181825", light: "#e6e9ef" },
+  lilac: { dark: "#1c1b34", light: "#f6f5fe" },
 };
 
 function applyToDocument(settings: Settings, resolved: ResolvedTheme, language: Language): void {
@@ -276,6 +378,7 @@ function applyToDocument(settings: Settings, resolved: ResolvedTheme, language: 
   root.dataset["theme"] = resolved;
   root.dataset["density"] = settings.density;
   root.dataset["palette"] = settings.palette;
+  root.dataset["chatWidth"] = settings.chatWidth;
   // ChatView.css scales its type tokens by this: the chosen size over the density's
   root.style.setProperty("--chat-scale", String(chatFontSize(settings) / CHAT_BASE_FONT[settings.density]));
   // ChatView.css sets the transcript's prose in this, and falls back to --font-ui without it

@@ -5,6 +5,9 @@
   z-index: calc(var(--z-drawer) + 1);
   min-width: 208px;
   max-width: min(280px, calc(100vw - var(--space-4)));
+  /* the popover's max-height comes from the room the anchor leaves (RowMenu.tsx); `.menu` hides
+     its overflow, so the scroll box is here */
+  overflow-y: auto;
 }
 
 .row-menu .menu-item:focus-visible {
@@ -28,6 +31,13 @@
 .row-sheet-item[aria-current="true"] {
   color: var(--text-strong);
   font-weight: var(--fw-semibold);
+}
+
+/* what the menu is about, above its items: a line of its own, ruled off from them */
+.row-menu-header {
+  padding: var(--space-2);
+  margin-bottom: var(--space-1);
+  border-bottom: var(--hairline) solid var(--border);
 }
 
 .row-menu-divider {
@@ -88,6 +98,18 @@
   font-size: var(--fs-md);
   text-align: left;
   cursor: pointer;
+}
+
+/* the label takes the row; a state in words sits at its far end */
+.row-sheet-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.row-sheet-hint {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
 }
 
 .row-sheet-item svg {

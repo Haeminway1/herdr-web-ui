@@ -11,7 +11,7 @@ Do not open a public issue, pull request or discussion about it.
 
 Include what you can of:
 
-- the version (the sidebar footer shows `herdr web ui vX.Y.Z`) and, for a remote PC, its OS;
+- the version (Settings, under Updates, opens with `Running vX.Y.Z (commit)`) and, for a remote PC, its OS;
 - how the server was reached (localhost, SSH tunnel, `tailscale serve`, LAN, reverse proxy) and how
   the client signed in (this PC, Tailscale login, paired device, token);
 - the steps to reproduce, and what an attacker needs beforehand;
@@ -23,7 +23,7 @@ the details private until that release is out.
 
 ## Supported versions
 
-Only the latest `vX.Y.Z` release gets fixes. Installs update to it from **Settings → Updates** (or
+Only the latest `vX.Y.Z` release gets fixes. Installs update to it from **Settings → About** (or
 by themselves with `HERDR_WEB_AUTO_UPDATE=1`). A fix in the remote-PC runtime ships as a new
 `remote-vN` bundle together with the release that uses it.
 

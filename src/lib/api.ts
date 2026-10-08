@@ -28,9 +28,11 @@ import type {
   WorktreeRemoved,
 } from "../../shared/protocol.ts";
 import type { PaneScrollInfo } from "../../shared/herdr-api.generated.ts";
-import type { HerdrUpdateStatus, UpdateCommand, UpdateStatus } from "../../shared/update.ts";
+import { readInstalledNotes, readUpdateNotes, type HerdrUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../../shared/update.ts";
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
 import type { VoiceConfigUpdate, VoiceStatus } from "../../shared/voice.ts";
+import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
+import { t } from "./i18n.ts";
 
 /** Settings → Phone: what Tailscale on the server's PC already serves, or the command to run. */
 export function fetchRemoteAccess(): Promise<RemoteAccess> {
@@ -44,6 +46,16 @@ export function fetchUsage(refresh = false): Promise<UsageReport> {
 
 export function fetchUpdateStatus(): Promise<UpdateStatus> {
   return getJson<UpdateStatus>("/api/updates");
+}
+
+/** What the available update brings. A server older than the notes answers with an error. */
+export async function fetchUpdateNotes(): Promise<UpdateNotes> {
+  return readUpdateNotes(await getJson<unknown>("/api/updates/notes"));
+}
+
+/** What the last update brought. A server older than the question answers with an error. */
+export async function fetchInstalledNotes(): Promise<InstalledNotes> {
+  return readInstalledNotes(await getJson<unknown>("/api/updates/installed"));
 }
 
 export async function requestUpdate(command: UpdateCommand): Promise<void> {
@@ -140,9 +152,45 @@ export type ConversationPageQuery = { before?: string; since?: string; from?: st
  * and a newest page can be megabytes: an unchanged one comes back as a bodyless 304,
  * and the chat gets the very same object back, which tells it nothing changed. An
  * older page (`before`) is asked for once, so it keeps no ETag and takes no slot.
+ *
+ * A count alone does not bound what a tab holds: sixteen polled panes is a small number of
+ * bodies, each as large as the server makes it, so the cache also gives up its oldest entries
+ * once the answers together pass a byte budget. The answer just fetched is never given up for
+ * that (it is the one the caller is about to read), the panes after it go first.
  */
-const conversationAnswers = new Map<string, { etag: string; body: ConversationResponse }>();
+interface ConversationAnswer {
+  etag: string;
+  body: ConversationResponse;
+  /** the body's rough size: what the count cap alone cannot bound */
+  bytes: number;
+}
+const conversationAnswers = new Map<string, ConversationAnswer>();
 const CONVERSATION_ANSWERS_KEPT = 16;
+/** …and this much of them, about four ordinary conversation pages each. */
+const CONVERSATION_ANSWERS_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The body a cache entry carries: the server's own count when it sends one for the body as it is,
+ * else the JSON we parsed. A compressed answer's length counts the bytes on the wire, not these.
+ */
+export function conversationAnswerBytes(body: ConversationResponse, contentLength: string | null, contentEncoding: string | null = null): number {
+  const declared = Number(contentLength);
+  const identity = contentEncoding === null || contentEncoding.trim().toLowerCase() === "identity";
+  if (identity && Number.isFinite(declared) && declared > 0) return declared;
+  return JSON.stringify(body)?.length ?? 0;
+}
+
+/** Drops the least recently used answers until the cache is back inside both caps. */
+function trimConversationAnswers(keep: string): void {
+  let total = 0;
+  for (const answer of conversationAnswers.values()) total += answer.bytes;
+  while (conversationAnswers.size > CONVERSATION_ANSWERS_KEPT || total > CONVERSATION_ANSWERS_BYTES) {
+    const oldest = conversationAnswers.keys().next().value;
+    if (oldest === undefined || oldest === keep) break;
+    total -= conversationAnswers.get(oldest)!.bytes;
+    conversationAnswers.delete(oldest);
+  }
+}
 
 /** GET /api/pane/conversation: structured turns, or scrollback fallback; `page` as ConversationResponse.cursor describes. */
 export async function fetchPaneConversation(paneId: string, machineId = "local", page: ConversationPageQuery = {}): Promise<ConversationResponse> {
@@ -166,8 +214,8 @@ export async function fetchPaneConversation(paneId: string, machineId = "local",
   if (!polled) return body;
   conversationAnswers.delete(url);
   if (etag !== null) {
-    conversationAnswers.set(url, { etag, body });
-    if (conversationAnswers.size > CONVERSATION_ANSWERS_KEPT) conversationAnswers.delete(conversationAnswers.keys().next().value!);
+    conversationAnswers.set(url, { etag, body, bytes: conversationAnswerBytes(body, response.headers.get("content-length"), response.headers.get("content-encoding")) });
+    trimConversationAnswers(url);
   }
   return body;
 }
@@ -235,13 +283,36 @@ function base64FromBytes(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** Megabytes to one decimal, rounded up: a file just over the limit never reads as the limit itself. */
+const megabytes = (bytes: number): string => `${Math.ceil((bytes / (1024 * 1024)) * 10) / 10} MB`;
+
+/** A file over the attachment limit. Its message is what the person reads: the file, its size, the limit. */
+export class AttachmentTooLargeError extends Error {
+  readonly fileName: string;
+  readonly size: number;
+
+  constructor(fileName: string, size: number) {
+    super(t("Too large to attach: {name} ({size}). A file can be up to {limit}.", { name: fileName, size: megabytes(size), limit: megabytes(MAX_ATTACHMENT_BYTES) }));
+    this.name = "AttachmentTooLargeError";
+    this.fileName = fileName;
+    this.size = size;
+  }
+}
+
+/** Throws for a file the server would refuse, before any of it is read or sent. */
+export function assertAttachable(file: Blob): void {
+  if (file.size > MAX_ATTACHMENT_BYTES) throw new AttachmentTooLargeError(file instanceof File && file.name ? file.name : file.type || "file", file.size);
+}
+
 /**
  * POST /api/pane/image: stores one pasted or file-picked image next to the pane and
  * resolves to the absolute path the prompt should reference (the composer inserts
- * `@path`). ApiError 413 image_too_large / 415 unsupported_media_type on bad input.
+ * `@path`). AttachmentTooLargeError for a file over the limit, with nothing sent;
+ * ApiError 413 image_too_large from a server whose limit is lower.
  */
 /** Any file: an image is stored as a paste, anything else under its own (sanitised) name. */
 export async function uploadPaneImage(paneId: string, image: Blob, machineId = "local"): Promise<string> {
+  assertAttachable(image);
   const data_base64 = base64FromBytes(new Uint8Array(await image.arrayBuffer()));
   const response = await fetch(machinePath(machineId, "pane/image"), {
     method: "POST",

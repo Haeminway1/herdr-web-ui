@@ -66,11 +66,13 @@ function labelMapKeys(): string[] {
     ...grab("components/Composer.tsx", "SOURCE_LABEL", value),
     ...grab("components/DevicesPanel.tsx", "VIA", value),
     ...grab("components/KeyBar.tsx", "ARROWS", /label: "([^"]+)"/g),
+    ...grab("components/KeyBar.tsx", "EXTRA_KEY_CAPS", /label: "([^"]+)"/g),
     ...grab("lib/shortcuts.ts", "SHORTCUTS", /label: "([^"]+)"/g),
     ...grab("lib/bridgeProgress.ts", "STAGES", /label: "([^"]+)"/g),
     ...grab("lib/updateProgress.ts", "STEPS", /label: "([^"]+)"/g),
     ...grab("lib/workBlocks.ts", "CATEGORY_LABEL", /\["([^"]+)", "([^"]+)"\]/g),
     ...grab("lib/usage.ts", "WINDOW_LABEL", value),
+    ...grab("lib/toolVerbs.ts", "VERB_LABEL", value),
   ];
 }
 
@@ -101,7 +103,7 @@ describe.each(Object.entries(DICTIONARIES))("%s dictionary", (_name, dictionary)
 
   it("is not just the English repeated", () => {
     // names and key caps read the same in every language; Chinese UIs leave "Shell" and "Agent" in English
-    const sameOnPurpose = new Set(["PC {name}", "Control C", "Shell", "Agent", "Catppuccin"]);
+    const sameOnPurpose = new Set(["PC {name}", "Control C", "Control D", "Control Z", "Shift Tab", "Shell", "Agent", "Catppuccin"]);
     const same = Object.entries(dictionary).filter(([en, text]) => en === text && /[a-z]{3}/i.test(en) && !sameOnPurpose.has(en));
     expect(same.map(([en]) => en)).toEqual([]);
   });
@@ -119,14 +121,28 @@ describe("translate", () => {
 
   it("follows the browser only when asked to", () => {
     expect(resolveLanguage("system", ["ko-KR", "en-US"])).toBe("ko");
-    expect(resolveLanguage("system", ["en-US", "ko"])).toBe("ko");
+    expect(resolveLanguage("system", ["en-US", "ko"])).toBe("en");
     expect(resolveLanguage("system", ["en-US"])).toBe("en");
     expect(resolveLanguage("system", [])).toBe("en");
     expect(resolveLanguage("en", ["ko-KR"])).toBe("en");
     expect(resolveLanguage("ko", ["en-US"])).toBe("ko");
     expect(resolveLanguage("system", ["ja-JP"])).toBe("ja");
-    expect(resolveLanguage("system", ["en-US", "zh-CN", "ko"])).toBe("zh");
+    expect(resolveLanguage("system", ["en-US", "zh-CN", "ko"])).toBe("en");
     expect(resolveLanguage("system", ["zh-TW"])).toBe("zh");
     expect(resolveLanguage("ja", ["zh-CN"])).toBe("ja");
+  });
+
+  it("respects English priority regardless of region or later preferences", () => {
+    expect(resolveLanguage("system", ["en-US", "ja-JP"])).toBe("en");
+    expect(resolveLanguage("system", ["en-JP", "ja-JP"])).toBe("en");
+    expect(resolveLanguage("system", ["EN", "ja-JP"])).toBe("en");
+    expect(resolveLanguage("system", ["ja-JP", "en-US"])).toBe("ja");
+    expect(resolveLanguage("system", ["zh-TW", "en-US"])).toBe("zh");
+  });
+
+  it("skips unsupported languages and falls back to English when none match", () => {
+    expect(resolveLanguage("system", ["fr-FR", "en-US", "ja-JP"])).toBe("en");
+    expect(resolveLanguage("system", ["fr-FR", "ja-JP", "en-US"])).toBe("ja");
+    expect(resolveLanguage("system", ["fr-FR", "de-DE"])).toBe("en");
   });
 });

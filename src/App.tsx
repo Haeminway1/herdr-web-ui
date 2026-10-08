@@ -1,27 +1,35 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bell, FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Plus, Search, SquareTerminal, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Bell, Ellipsis, FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Plus, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ClientRole, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
 import { ApiError, authenticate, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, sendTestPush, signOut, type HealthInfo } from "./lib/api.ts";
 import { deviceLabel, takePairCode } from "./lib/phone.ts";
 import { displayPaneTitle } from "./components/Sidebar.tsx";
 import { PaneTerminal } from "./components/PaneTerminal.tsx";
+import { PANE_TABPANEL_ID, paneTabPanelLabel } from "./lib/paneRegion.ts";
 import { AccessGate } from "./components/AccessGate.tsx";
 import { AgentMark } from "./components/AgentMark.tsx";
 import { NewSessionDialog, type NewTabTarget } from "./components/NewSessionDialog.tsx";
 import { TabStrip } from "./components/TabStrip.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
+import { onSettingsHistory, recordSettings } from "./lib/settingsHistory.ts";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { MachineContext } from "./lib/machineContext.tsx";
 import { MachineActionBanner, MachineSidebar } from "./components/MachineSidebar.tsx";
+import { SidebarResizer } from "./components/SidebarResizer.tsx";
+import { storedSidebarWidth } from "./lib/sidebarWidth.ts";
 import { MachineDialog } from "./components/MachineDialog.tsx";
+import { RowMenu, type RowMenuItem } from "./components/RowMenu.tsx";
 import { focusWorkspaceListToggle } from "./lib/focus.ts";
+import { headerCrumb, showsChat } from "./lib/headerCrumb.ts";
 import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
+import { rosterPanes } from "./lib/dagPane.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
 import { alertPrefs, useSettings, type DefaultView } from "./lib/settings.ts";
 import { useShortcuts } from "./lib/shortcuts.ts";
+import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import type { AppActions, PaneView } from "./lib/actions.ts";
 import {
   notificationState,
@@ -44,7 +52,7 @@ import { useT } from "./lib/i18n.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
 import { watchDrawerSwipe } from "./lib/edgeSwipe.ts";
 import { Droplet } from "./components/Droplet.tsx";
-import { dropletAllows, endedTurn, showDroplet, trackTurn, type DropletKind } from "./lib/droplet.ts";
+import { dropletAllows, endedTurn, seedStatuses, showDroplet, trackTurn, type DropletKind } from "./lib/droplet.ts";
 import { playAlertSound, unlockAlertSound, type AlertSoundKind } from "./lib/alertSound.ts";
 
 const APP_TITLE = "herdr web ui";
@@ -132,7 +140,7 @@ export function App() {
   const alerts = useMemo(() => alertPrefs(settings), [settings.alertInput, settings.alertDone]);
   const alertsRef = useRef(alerts);
   alertsRef.current = alerts;
-  // the bell's switch for this device: off drops its push subscription and silences tab and in-app alerts
+  // the Alerts item's switch for this device (the header's More menu): off drops its push subscription and silences tab and in-app alerts
   const alertsOn = settings.alertsOn;
   const alertsOnRef = useRef(alertsOn);
   alertsOnRef.current = alertsOn;
@@ -184,13 +192,32 @@ export function App() {
   const [autoSelected, setAutoSelected] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerOpenRef = useRef(drawerOpen); drawerOpenRef.current = drawerOpen;
+  // from 769px the drawer is a plain sidebar column and its toggle is hidden, so a drawer a
+  // narrow window opened must not come back (with its scrim) the next time the window narrows
+  const wideScreen = useMediaQuery("(min-width: 769px)");
+  useEffect(() => { if (wideScreen) setDrawerOpen(false); }, [wideScreen]);
   const selectionRef = useRef({ machineId: selectedMachineId, paneId: selectedPaneId });
   selectionRef.current = { machineId: selectedMachineId, paneId: selectedPaneId };
   // on a phone the drawer follows a swipe in from the left edge, and a swipe back (lib/edgeSwipe.ts)
   useEffect(() => watchDrawerSwipe(() => drawerOpenRef.current, setDrawerOpen), []);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // the width the sidebar's edge was dragged to on this device; null is the density's own
+  const [sidebarWidth, setSidebarWidth] = useState(storedSidebarWidth);
   const [lens, setLens] = useState<{ key: string; view: PaneView }>({ key: "", view: "terminal" });
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // the header's More menu: its button, and whether it opened on a phone-width screen
+  const [more, setMore] = useState<{ anchor: HTMLElement; phone: boolean } | null>(null);
+  const closeMore = useCallback(() => setMore(null), []);
+  const moreOpen = more !== null;
+  // a sheet stays up through a resize: its palette item follows the header's palette button,
+  // which the same breakpoint hides
+  useEffect(() => {
+    if (!moreOpen) return;
+    const media = window.matchMedia("(max-width: 480px)");
+    const onChange = (): void => setMore((open) => open && { ...open, phone: media.matches });
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [moreOpen]);
   // the Files dialog, and the file open in the viewer (a path as the chat or the dialog gave it)
   const [filesOpen, setFilesOpen] = useState(false);
   const { viewing, openFile, closeFile } = useFileViewer();
@@ -198,7 +225,17 @@ export function App() {
     openFile({ path, paneId: selectedPaneId, machineId: selectedMachineId });
   }, [openFile, selectedPaneId, selectedMachineId]);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  // set by a button that points at one section of Settings, for that opening alone
+  const [settingsSection, setSettingsSection] = useState<"updates" | null>(null);
+  const closeSettings = useCallback(() => { setSettingsOpen(false); setSettingsSection(null); }, []);
+  // Settings is in the history (lib/settingsHistory.ts): Back out of its last entry closes it,
+  // Forward onto one opens it again, and closing it any other way takes its entries off
+  useEffect(() => onSettingsHistory((entry, own) => {
+    if (own) return;
+    if (entry === null) closeSettings();
+    else setSettingsOpen(true);
+  }), [closeSettings]);
+  useEffect(() => { if (!settingsOpen) recordSettings([]); }, [settingsOpen]);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   // the dialog makes a tab in this workspace instead of a workspace, while set
   const [newTab, setNewTab] = useState<NewTabTarget | null>(null);
@@ -328,11 +365,6 @@ export function App() {
   // One SSE subscription watches every PC, even when no terminal is selected.
   useEffect(() => {
     if (locked !== false) return;
-    const seed = (list: Machine[]) => {
-      for (const machine of list) for (const pane of machine.snapshot?.panes ?? []) {
-        statusRef.current.set(paneStorageId(machine.id, pane.pane_id), pane.agent_status);
-      }
-    };
     const events = new EventSource("/api/machines/events");
     events.onmessage = (event) => {
       let payload: MachineEvent;
@@ -340,7 +372,7 @@ export function App() {
       // A poll started before this event can carry an older roster or pane status.
       snapshotRequests.current.invalidate();
       if (payload.type === "machines") {
-        seed(payload.machines);
+        seedStatuses(statusRef.current, payload.machines, { started: turnStartRef.current, lasted: lastTurnRef.current });
         setMachines((previous) => sameData(previous, payload.machines) ? previous : payload.machines);
         return;
       }
@@ -527,6 +559,9 @@ export function App() {
     : null;
   const targetHerdr = selectedMachineId === "local" ? health?.herdr : selectedMachine?.herdr;
   const selectedTitle = selectedPane ? displayPaneTitle(selectedPane) : null;
+  // the tab that governs the pane region, so the strip's tabs and the pane they select are
+  // one thing to a screen reader (A4); null while no tab owns this pane
+  const tabPanelLabel = paneTabPanelLabel(snapshot, selectedPane, t);
   const selectedAgent = selectedPane?.agent ?? null;
   // unknown herdr (offline, or a server that predates the flag) counts as attach-capable
   // a server that repaints the pane's screen instead (terminal_mirror) has a terminal lens too
@@ -556,22 +591,22 @@ export function App() {
     [selectedPaneId, selectedMachineId],
   );
 
-  // The bell says what this device does, whatever the browser's permission: in-app alerts need
-  // none, so they count as on. A device that has not answered the permission question is asked
-  // by the bell's tap; one that has answered gets a plain switch.
-  const bell: { label: string; title: string; on: boolean; run: () => Promise<unknown> } =
+  // The Alerts item says what this device does, whatever the browser's permission: in-app alerts
+  // need none, so they count as on. A device that has not answered the permission question is
+  // asked by the item; one that has answered gets a plain switch.
+  const bell: { state: string; title: string; on: boolean; run: () => Promise<unknown> } =
     !alertsOn
-      ? { label: t("Alerts off"), title: t("Alerts off on this device — tap to turn them on"), on: false, run: enableNotifications }
+      ? { state: t("Off on this device"), title: t("Alerts off on this device. Tap to turn them on"), on: false, run: enableNotifications }
       : notifications !== "granted"
         ? !settings.alertInApp
-          ? { label: t("Enable notifications"), title: t("Notify me when a pane needs input or finishes"), on: false, run: enableNotifications }
+          ? { state: t("Off on this device"), title: t("Notify me when a pane needs input or finishes"), on: false, run: enableNotifications }
           : notifications === "default"
-            ? { label: t("Alerts on in the app only"), title: t("Alerts show while the app is open. Tap to allow them when it is closed too"), on: true, run: enableNotifications }
-            : { label: t("Alerts on in the app only"), title: t("Alerts show while the app is open. Tap to turn them off"), on: true, run: disableNotifications }
+            ? { state: t("On in the app"), title: t("Alerts on in the app. Tap to allow them when it is closed too"), on: true, run: enableNotifications }
+            : { state: t("On in the app"), title: t("Alerts on in the app. Tap to turn them off"), on: true, run: disableNotifications }
         : pushOn
-          ? { label: t("Alerts on"), title: t("Alerts on — pushed to this device, even with the app closed. Tap to turn them off"), on: true, run: disableNotifications }
+          ? { state: t("On, pushed to this device"), title: t("Alerts on, pushed to this device, even with the app closed. Tap to turn them off"), on: true, run: disableNotifications }
           : {
-              label: t("Alerts on in this tab"),
+              state: t("On in this tab"),
               // turning them off and on again retries the push subscription
               title: pushSupported()
                 ? t("Alerts on while this tab is open. Tap to turn them off")
@@ -581,6 +616,12 @@ export function App() {
             };
   // hidden only where it could do nothing: no system notifications and in-app alerts off
   const bellVisible = notifications === "default" || notifications === "granted" || settings.alertInApp;
+  // the menu's button carries a dot while alerts are off here: the one state of the menu worth a glance
+  const alertsOffDot = bellVisible && !bell.on;
+  const connWord = t(connected ? "live" : outputStopped ? "disconnected" : "reconnecting");
+  const crumb = selectedPane && selectedTitle !== null
+    ? headerCrumb({ machine: selectedMachine?.name ?? selectedMachineId, workspace: selectedWorkspace?.label ?? selectedPane.workspace_id, title: selectedTitle, cwd: selectedPane.cwd })
+    : null;
 
   useEffect(() => {
     document.title = selectedTitle ? `${selectedTitle} · herdr` : APP_TITLE;
@@ -590,7 +631,8 @@ export function App() {
     () => ({
       selectPane,
       selectAdjacentPane: (direction) => {
-        const panes = snapshotRef.current?.panes ?? [];
+        // the panes the sidebar lists: a step never lands on a viewer it leaves out
+        const panes = rosterPanes(snapshotRef.current?.panes ?? [], selectedPaneId);
         if (panes.length === 0) return;
         const index = panes.findIndex((pane) => pane.pane_id === selectedPaneId);
         const next = panes[(index + direction + panes.length) % panes.length];
@@ -626,6 +668,7 @@ export function App() {
       openPalette: () => setPaletteOpen(true),
       openSettings: () => {
         setDrawerOpen(false);
+        setSettingsSection(null);
         setSettingsOpen(true);
       },
       openAddPc: () => {
@@ -649,6 +692,22 @@ export function App() {
   );
 
   useShortcuts(actions, locked === false);
+
+  // The header's More menu: what used to be three buttons of its own. Each item is there under
+  // the condition its button had. At phone width the palette's button gives its room to the
+  // pane's title, and the palette is the menu's first item.
+  const paletteItem: RowMenuItem = { id: "palette", label: t("Command palette"), icon: Search, run: () => setPaletteOpen(true) };
+  const moreItems: RowMenuItem[] = [
+    ...(selectedPane && selectedWorkspace
+      ? [{ id: "new-tab", label: t("New tab"), title: t("New tab in {workspace}", { workspace: selectedWorkspace.label }), icon: Plus, run: () => actions.openNewTab() }]
+      : []),
+    ...(selectedPane ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: () => setFilesOpen(true) }] : []),
+    ...(bellVisible ? [{ id: "alerts", label: t("Alerts"), hint: bell.state, checked: bell.on, title: bell.title, icon: Bell, run: () => void bell.run() }] : []),
+  ];
+
+  // the chat's surface is what the pane column shows: the header's pane zone and the tab strip
+  // take it (from 769px). A pane herdr could not restore draws a placeholder, not the chat.
+  const chatShown = showsChat(selectedPane, view);
 
   if (locked === null) {
     // the auth state is unknown until /api/health or /api/session answers (ten seconds when
@@ -679,55 +738,55 @@ export function App() {
   if (locked) return <AccessGate reason={lockReason} initialCode={pairCode} onUnlocked={unlock} />;
 
   return (
-    <MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-      <header className="app-header">
-        <button
-          type="button"
-          className="icon-button drawer-toggle"
-          aria-label={t(drawerOpen ? "Close workspace list" : "Open workspace list")}
-          aria-expanded={drawerOpen}
-          aria-controls="workspace-drawer"
-          onClick={() => setDrawerOpen((open) => !open)}
-        >
-          {drawerOpen ? <X /> : <Menu />}
-        </button>
-        <button
-          type="button"
-          className="icon-button header-desktop-only sidebar-toggle"
-          aria-label={t(sidebarCollapsed ? "Show workspace list" : "Hide workspace list")}
-          aria-pressed={!sidebarCollapsed}
-          title={t("Toggle sidebar (⌘⇧B)")}
-          onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
-        >
-          <PanelLeft />
-        </button>
-        {selectedPane ? (
-          <div className="context" title={`${selectedWorkspace?.label ?? selectedPane.workspace_id} › ${selectedTitle}`}>
+    <MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null ? undefined : { "--sidebar-user-w": `${sidebarWidth}px` } as CSSProperties}>
+      <header className={`app-header is-zoned${chatShown ? " is-chat" : ""}`}>
+        {/* is-zoned tells this header from the connecting shell's, which has no zones to draw.
+            .header-side is the sidebar's own top row from 769px (styles.css); below that its
+            buttons sit in the bar */}
+        <div className="header-side">
+          <button
+            type="button"
+            className="icon-button drawer-toggle"
+            aria-label={t(drawerOpen ? "Close workspace list" : "Open workspace list")}
+            aria-expanded={drawerOpen}
+            aria-controls="workspace-drawer"
+            onClick={() => setDrawerOpen((open) => !open)}
+          >
+            {drawerOpen ? <X /> : <Menu />}
+          </button>
+          <button
+            type="button"
+            className="icon-button header-desktop-only sidebar-toggle"
+            aria-label={t(sidebarCollapsed ? "Show workspace list" : "Hide workspace list")}
+            aria-pressed={!sidebarCollapsed}
+            title={t("Toggle sidebar (⌘⇧B)")}
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          >
+            <PanelLeft />
+          </button>
+          <button type="button" className="icon-button palette-button" aria-label={t("Command palette")} title={t("Command palette (⌘⇧K)")} onClick={() => setPaletteOpen(true)}>
+            <Search />
+          </button>
+        </div>
+        {selectedPane && crumb ? (
+          <div className="context" title={crumb.tooltip}>
             <div className="context-title">
               {selectedAgent && <AgentMark agent={selectedAgent} size={18} />}
               <span className="context-title-text">{selectedTitle}</span>
             </div>
             <div className="context-sub">
-              <span className="machine-context-name">{selectedMachine?.name ?? selectedMachineId}</span><span aria-hidden="true"> › </span>
-              <span>{selectedWorkspace?.label ?? selectedPane.workspace_id}</span>
-              {selectedPane.cwd && (
+              <span className="machine-context-name">{crumb.machine}</span><span className="context-sep" aria-hidden="true">›</span>
+              <span>{crumb.workspace}</span>
+              {crumb.folder !== null && (
                 <>
-                  <span className="context-sep" aria-hidden="true">
-                    ›
-                  </span>
-                  <span>{selectedPane.cwd}</span>
+                  <span className="context-sep" aria-hidden="true">›</span>
+                  <span>{crumb.folder}</span>
                 </>
               )}
             </div>
           </div>
         ) : (
           <><Brand /><span className="machine-context-name">{selectedMachine?.name ?? selectedMachineId}</span></>
-        )}
-        {selectedPane && selectedWorkspace && (
-          <button type="button" className="btn btn-ghost new-tab-button" title={t("New tab in {workspace}", { workspace: selectedWorkspace.label })} onClick={() => actions.openNewTab()}>
-            <Plus aria-hidden="true" />
-            <span>{t("New tab")}</span>
-          </button>
         )}
         {selectedPane && (
           <div className="segmented view-switch" role="group" aria-label="Pane view">
@@ -743,60 +802,80 @@ export function App() {
           </div>
         )}
         <div className="header-meta">
+          {/* speaks only while the bridge is not live; live, it stays in the document for a screen
+              reader (and the browser scripts that wait on it), drawn by nothing (styles.css) */}
           <span
             className={`conn ${connected ? "conn-live" : "conn-reconnecting"}`}
             role="status"
-            title={targetHerdr ? t("herdr {version} · protocol {protocol}", { version: targetHerdr.version, protocol: targetHerdr.protocol }) : undefined}
+            title={[connected ? null : connWord, targetHerdr ? t("herdr {version} · protocol {protocol}", { version: targetHerdr.version, protocol: targetHerdr.protocol }) : null].filter((part) => part !== null).join(" · ") || undefined}
           >
             <span className="conn-dot" aria-hidden="true" />
-            <span className="conn-text">{t(connected ? "live" : outputStopped ? "disconnected" : "reconnecting")}</span>
+            <span className="conn-text">{connWord}</span>
           </span>
           {!targetHerdr && <span className="pill pill-offline">{t("herdr offline")}</span>}
-          {selectedPane && (
-            <button type="button" className="icon-button files-button" aria-label={t("Browse files")} title={t("Browse files")} onClick={() => setFilesOpen(true)}>
-              <FolderOpen />
-            </button>
-          )}
-          <button type="button" className="icon-button" aria-label={t("Command palette")} title={t("Command palette (⌘⇧K)")} onClick={() => setPaletteOpen(true)}>
-            <Search />
-          </button>
-          {bellVisible && (
-            <button
-              type="button"
-              className={`icon-button bell-button${bell.on ? " is-on" : ""}`}
-              aria-label={bell.label}
-              aria-pressed={bell.on}
-              title={bell.title}
-              onClick={() => void bell.run()}
-            >
-              <Bell />
-            </button>
-          )}
           {canSignOut && (
             <button type="button" className="icon-button lock-button header-desktop-only" aria-label={t("Sign out")} title={t("Sign out")} onClick={() => void lock()}>
               <Lock />
             </button>
           )}
+          {/* with nothing of its own to offer it is still the phone's way to the palette */}
+          <span className={`header-more${moreItems.length === 0 ? " is-phone-only" : ""}`}>
+            <button
+              type="button"
+              className="icon-button header-more-button"
+              aria-label={alertsOffDot ? t("More · alerts are off") : t("More")}
+              title={alertsOffDot ? t("More · alerts are off") : t("More")}
+              aria-haspopup="menu"
+              aria-expanded={more !== null}
+              onClick={(event) => {
+                const anchor = event.currentTarget;
+                setMore((open) => (open ? null : { anchor, phone: window.matchMedia("(max-width: 480px)").matches }));
+              }}
+            >
+              <Ellipsis />
+            </button>
+            {alertsOffDot && <span className="header-more-dot" aria-hidden="true" />}
+          </span>
         </div>
+        {more && (
+          <RowMenu
+            anchor={more.anchor}
+            title={t("More")}
+            header={crumb ? (
+              <div className="header-more-crumb">
+                <span>{crumb.place}</span>
+                {crumb.path !== null && <span className="header-more-path">{crumb.path}</span>}
+              </div>
+            ) : undefined}
+            items={more.phone ? [paletteItem, ...moreItems] : moreItems}
+            onClose={closeMore}
+          />
+        )}
       </header>
 
-      <UpdateNotice updates={updates} onOpen={() => setSettingsOpen(true)} />
-      <MachineActionBanner machines={machines} onSetup={(machine, update = false) => { setDrawerOpen(false); setUpdateRemote(update); setMachineDialog(machine); }} />
       <div className="app-body">
         <aside id="workspace-drawer" className={`sidebar${drawerOpen ? " is-open" : ""}`}>
           {error && <div className="error-state" role="alert"><p>{error}</p><button className="btn" onClick={() => void load()}>{t("Retry")}</button></div>}
-          <MachineSidebar version={health?.herdr?.version ?? null} machines={machines} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} />
+          <MachineSidebar machines={machines} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} />
+          <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
         </aside>
 
         {drawerOpen && <div className="scrim" aria-hidden="true" onClick={() => setDrawerOpen(false)} />}
 
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
-        <div className="pane-column">
+        <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
+        {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
+        <UpdateNotice updates={updates} onOpen={() => { setSettingsSection("updates"); setSettingsOpen(true); }} />
+        <MachineActionBanner machines={machines} onSetup={(machine, update = false) => { setDrawerOpen(false); setUpdateRemote(update); setMachineDialog(machine); }} />
         {snapshot && selectedPane && selectedWorkspace && (
           <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()} />
         )}
+        {/* the tab strip's panel: its id is what each tab's aria-controls points at. No tabIndex -
+            the terminal (PaneTerminal) and the composer are the focusable things inside it. */}
         <main className="terminal-host">
+          {/* the panel sits inside main, so the page keeps its main landmark; it draws no box */}
+          <div id={PANE_TABPANEL_ID} className="terminal-tabpanel" role={tabPanelLabel === null ? undefined : "tabpanel"} aria-label={tabPanelLabel ?? undefined}>
           <PaneTerminal
             key={selectedMachineId}
             paneId={selectedPane?.restore_error ? null : selectedPaneId}
@@ -804,6 +883,8 @@ export function App() {
             agent={selectedAgent}
             agentStatus={selectedPane?.agent_status}
             backgroundTasks={(selectedPane as HerdrPane | null)?.background_tasks ?? 0}
+            cwd={selectedPane?.cwd ?? null}
+            machineName={selectedMachine?.name ?? selectedMachineId}
             view={view}
             autoSelected={autoSelected}
             terminalFontSize={settings.terminalFontSize}
@@ -816,6 +897,7 @@ export function App() {
             onConnectionChange={(next) => { setConnected(next); if (next) setOutputStopped(false); }}
             onServerMessage={handleServerMessage}
           />
+          </div>
         </main>
         </div>
         </OpenFileContext.Provider>
@@ -842,12 +924,12 @@ export function App() {
         setFilesOpen(false);
         selectTargetRef.current(machineId, paneId);
       }} />
-      <SettingsDialog auth={auth} open={settingsOpen} onClose={closeSettings} actions={actions} updates={updates} onEnableNotifications={enableNotifications} />
+      <SettingsDialog auth={auth} herdrVersion={health?.herdr?.version ?? null} open={settingsOpen} section={settingsSection} onClose={closeSettings} actions={actions} updates={updates} onEnableNotifications={enableNotifications} overPreview={viewing !== null} />
       {filesOpen && selectedPane && (
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} viewing={viewing !== null} onOpenFile={viewFile} onClose={() => setFilesOpen(false)} />
       )}
       {viewing !== null && <MachineContext.Provider value={viewing.machineId}>
-        <FileViewer key={viewing.path} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path })} />
+        <FileViewer key={viewing.path} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path })} keyboardActive={!settingsOpen} />
       </MachineContext.Provider>}
       <CommandPalette key={selectedMachineId} open={paletteOpen} onClose={() => setPaletteOpen(false)} snapshot={snapshot} selectedPaneId={selectedPaneId} view={view} actions={actions} />
     </div></MachineContext.Provider>

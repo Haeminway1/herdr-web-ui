@@ -121,6 +121,12 @@ it("watch credentials cannot mutate HTTP state, read credential files, or elevat
       expect((await fetch(`${base}/api/${path}`, { method: "POST", headers, body: "{}" })).status).toBe(403);
     }
     expect((await fetch(`${base}/api/fs/file?path=${encodeURIComponent(join(root, "devices.json"))}`, { headers })).status).toBe(403);
+    // a PC's file is read without the origin check (#448, Android's Open button): the watch refusal still comes first, for GET and HEAD alike
+    for (const method of ["GET", "HEAD"]) {
+      const response = await fetch(`${base}/api/machines/pc1/fs/file?path=%2Fetc%2Fhostname`, { method, headers: { ...headers, "sec-fetch-site": "cross-site" } });
+      expect(response.status).toBe(403);
+      if (method === "GET") expect(await response.json()).toMatchObject({ error: { code: "read_only" } });
+    }
     // an empty segment must not turn a file read into "some other route" (the PC proxy drops it)
     for (const path of ["api//fs/file", "api/machines/pc1//fs/file", "api/machines/pc1/fs//file"]) {
       expect((await fetch(`${base}/${path}?path=${encodeURIComponent(join(root, "devices.json"))}`, { headers })).status).toBe(404);
@@ -148,7 +154,7 @@ it("watch credentials cannot mutate HTTP state, read credential files, or elevat
 
 it("revoking a paired device removes its persistent push subscription", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-device-push-"));
-  const server = createServer({ port: 0, stateDir: root, token: "test-push-owner", tailscaleOwner: null, machines: false });
+  const server = createServer({ port: 0, stateDir: root, token: "test-push-owner", tailscaleOwner: null, machines: false, pushLoopbackHttp: true });
   const fake = await startFakePushService();
   const base = `http://127.0.0.1:${server.port}`;
   const admin = { ...guard, authorization: "Bearer test-push-owner" };

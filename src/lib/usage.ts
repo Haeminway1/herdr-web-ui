@@ -11,12 +11,12 @@ const POLL_MS = 60_000;
 export const HIGH_PERCENT = 80;
 
 export const PROVIDER_NAME: Readonly<Record<UsageProviderId, string>> = {
-  claude: "Claude", codex: "Codex", cursor: "Cursor", copilot: "Copilot", grok: "Grok", antigravity: "Antigravity",
+  claude: "Claude", codex: "Codex", cursor: "Cursor", copilot: "Copilot", grok: "Grok", antigravity: "Antigravity", opencode: "OpenCode",
 };
 
 /** AgentMark's name for each provider's logo */
 export const PROVIDER_MARK: Readonly<Record<UsageProviderId, string>> = {
-  claude: "claude", codex: "codex", cursor: "cursor", copilot: "copilot", grok: "grok", antigravity: "agy",
+  claude: "claude", codex: "codex", cursor: "cursor", copilot: "copilot", grok: "grok", antigravity: "agy", opencode: "opencode",
 };
 
 export const WINDOW_LABEL: Readonly<Record<UsageWindow["kind"], string>> = {
@@ -25,6 +25,24 @@ export const WINDOW_LABEL: Readonly<Record<UsageWindow["kind"], string>> = {
   week: "Weekly",
   month: "Monthly",
 };
+
+/** A pane's agent selects a provider, not an inferred active account. */
+export function providerForAgent(agent: string | null | undefined): UsageProviderId | null {
+  return (Object.keys(PROVIDER_MARK) as UsageProviderId[]).find((id) => PROVIDER_MARK[id] === agent) ?? null;
+}
+
+/** The first visible account in Settings order supplies the composer's compact reference. */
+export function composerUsage(providers: readonly ProviderUsage[], agent: string | null, order: readonly string[], hidden: readonly string[]): ProviderUsage | undefined {
+  const providerId = providerForAgent(agent);
+  return orderProviders(providers, order).find((usage) => usage.id === providerId && !hidden.includes(usage.key));
+}
+
+/** Plan-wide five-hour session first, then week; scoped limits do not stand in for either. */
+export function statusWindows(usage: ProviderUsage): UsageWindow[] {
+  return (["session", "week"] as const)
+    .map((kind) => usage.windows.find((window) => window.kind === kind && window.scope === null))
+    .filter((window): window is UsageWindow => window !== undefined);
+}
 
 /** The limit closest to running out: what a chip shows when the plan has no limit of the chosen kind. */
 export function tightestWindow(usage: ProviderUsage): UsageWindow | null {

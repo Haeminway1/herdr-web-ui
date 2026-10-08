@@ -4,20 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
+import { buildDemoApp } from "./demo-build.ts";
 
 // Build the unmodified app and inject only the demo's fixture transport. All files and
 // HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const repo = join(import.meta.dir, "..");
 const app = mkdtempSync(join(tmpdir(), "herdr-droplet-demo-"));
 try {
-  const build = Bun.spawnSync([join(repo, "node_modules/.bin/vite"), "build", "--base", "./", "--outDir", app, "--emptyOutDir", "--logLevel", "warn"], { cwd: repo });
-  assert.equal(build.exitCode, 0, new TextDecoder().decode(build.stderr));
-  const transport = await Bun.build({
-    entrypoints: [join(repo, "site/demo/transport.ts")], outdir: app,
-    naming: "demo-transport.js", target: "browser",
-    define: { __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).version) },
-  });
-  assert.ok(transport.success, transport.logs.map(String).join("\n"));
+  await buildDemoApp(app);
   const index = join(app, "index.html");
   const html = readFileSync(index, "utf8");
   assert.match(html, /<script type="module"/);
@@ -80,6 +74,15 @@ try {
             const card = document.querySelector(".droplet-card")!;
             return getComputedStyle(card).opacity === "1";
           });
+          // From 769px the header is 46px, so a rotation changes its height: the card follows on
+          // the header's next resize callback. Give it a bounded wait; the assertion below still
+          // decides, and reports the numbers.
+          await page.waitForFunction(() => {
+            const top = document.querySelector(".droplet-card")!.getBoundingClientRect().top;
+            const header = document.querySelector(".app-header")!.getBoundingClientRect().bottom;
+            const safe = parseFloat(getComputedStyle(document.querySelector(".droplet-probe")!).paddingTop) || 0;
+            return Math.abs(top - (Math.max(safe, header) + 12)) <= 2;
+          }, undefined, { timeout: 5_000 }).catch(() => undefined);
           const geometry = await page.evaluate(() => {
             const card = document.querySelector<HTMLElement>(".droplet-card")!;
             const rect = card.getBoundingClientRect();

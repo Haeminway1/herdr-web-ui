@@ -14,10 +14,15 @@ import type { LucideIcon } from "lucide-react";
 import "./RowMenu.css";
 
 import { useT } from "../lib/i18n.ts";
+import { useMediaQuery } from "../lib/useMediaQuery.ts";
 
 export interface RowMenuItem {
   id: string;
   label: string;
+  /** a state in words, after the label: "On in the app" */
+  hint?: string;
+  /** the item's tooltip, when it has more to say than its label */
+  title?: string;
   icon: LucideIcon;
   /** drawn in the icon's place when given: an agent's mark, which is not a lucide icon */
   glyph?: ReactNode;
@@ -26,6 +31,8 @@ export interface RowMenuItem {
   danger?: boolean;
   /** the item that stands for what is open now (a pane picker's current pane) */
   current?: boolean;
+  /** a switch's state, when the item is one: it is then a checkbox item (a pressed button in the sheet), not a plain item */
+  checked?: boolean;
   run: () => void;
 }
 
@@ -34,6 +41,8 @@ interface Props {
   /** the menu's accessible name, and the sheet's title */
   title: string;
   subtitle?: string;
+  /** drawn above the items, and in the sheet's head in the title's place: what the menu is about, when that is more than a name */
+  header?: ReactNode;
   items: RowMenuItem[];
   /** which edge of the button the popover lines up with: its right one (a row's ⋯), or its left one (a tab) */
   align?: "start" | "end";
@@ -43,21 +52,26 @@ interface Props {
 const SHEET_QUERY = "(max-width: 640px)";
 const GAP = 4;
 const EDGE = 8;
-const POPOVER_ITEMS = '[role="menuitem"]';
+/** a popover never grows past this, however much room the screen has */
+const MAX_HEIGHT = 320;
+const POPOVER_ITEMS = '[role="menuitem"], [role="menuitemcheckbox"]';
 // the sheet is modal: its Cancel is one of the stops
 const SHEET_ITEMS = '.row-sheet-item, .row-sheet-cancel';
 
-export function RowMenu({ anchor, title, subtitle, items, align = "end", onClose }: Props) {
+export function RowMenu({ anchor, title, subtitle, header, items, align = "end", onClose }: Props) {
   const t = useT();
-  const [sheet] = useState(() => window.matchMedia(SHEET_QUERY).matches);
+  const sheet = useMediaQuery(SHEET_QUERY);
   const surface = useRef<HTMLDivElement>(null);
-  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+  const [place, setPlace] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   // where the button was when the menu was placed: a scroll that leaves it there is not a reason to close
   const placedAt = useRef<{ top: number; left: number } | null>(null);
 
   useLayoutEffect(() => () => { if (anchor.isConnected) anchor.focus({ preventScroll: true }); }, [anchor]);
 
-  // under the button, right edges aligned (left ones for a tab); above it when the screen ends first
+  // under the button, right edges aligned (left ones for a tab); above it when the screen ends
+  // first. The height is capped to the room on that side and the menu scrolls, as AgentPicker's
+  // list does: a tab's pane picker has one item per pane and is unbounded, and an item below the
+  // fold must not be reachable by keyboard while the pointer cannot see it
   useLayoutEffect(() => {
     if (sheet) return;
     const menu = surface.current;
@@ -66,8 +80,11 @@ export function RowMenu({ anchor, title, subtitle, items, align = "end", onClose
     placedAt.current = { top: rect.top, left: rect.left };
     const left = Math.max(EDGE, Math.min(align === "start" ? rect.left : rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - EDGE));
     const below = rect.bottom + GAP;
-    const top = below + menu.offsetHeight + EDGE <= window.innerHeight ? below : Math.max(EDGE, rect.top - GAP - menu.offsetHeight);
-    setPlace({ top, left });
+    const roomBelow = window.innerHeight - below - EDGE;
+    const roomAbove = rect.top - GAP - EDGE;
+    const up = below + menu.offsetHeight + EDGE > window.innerHeight && roomAbove > roomBelow;
+    const top = up ? Math.max(EDGE, rect.top - GAP - menu.offsetHeight) : below;
+    setPlace({ top, left, maxHeight: Math.max(EDGE, Math.min(MAX_HEIGHT, up ? roomAbove : roomBelow)) });
   }, [align, anchor, onClose, sheet]);
 
   useEffect(() => {
@@ -146,14 +163,17 @@ export function RowMenu({ anchor, title, subtitle, items, align = "end", onClose
       <div className="modal-scrim">
         <div ref={surface} className="modal row-sheet" role="dialog" aria-modal="true" aria-label={title} onKeyDown={onKeyDown} onBlur={onBlur}>
           <span className="row-sheet-grip" aria-hidden="true" />
-          <div className="row-sheet-head">
-            <span className="row-sheet-title">{title}</span>
-            {subtitle && <span className="row-sheet-subtitle">{subtitle}</span>}
-          </div>
+          {header ? <div className="row-sheet-head">{header}</div> : (
+            <div className="row-sheet-head">
+              <span className="row-sheet-title">{title}</span>
+              {subtitle && <span className="row-sheet-subtitle">{subtitle}</span>}
+            </div>
+          )}
           {items.map((item) => (
-            <button key={item.id} type="button" className={`row-sheet-item${item.danger ? " is-danger" : ""}${item.divider ? " has-divider" : ""}`} aria-current={item.current ? "true" : undefined} onMouseDown={keepFocus} onClick={() => run(item)}>
+            <button key={item.id} type="button" className={`row-sheet-item${item.danger ? " is-danger" : ""}${item.divider ? " has-divider" : ""}`} aria-current={item.current ? "true" : undefined} aria-pressed={item.checked} title={item.title} onMouseDown={keepFocus} onClick={() => run(item)}>
               {item.glyph ?? <item.icon aria-hidden="true" />}
-              {item.label}
+              <span className="row-sheet-label">{item.label}</span>
+              {item.hint && <span className="row-sheet-hint">{item.hint}</span>}
             </button>
           ))}
           <button type="button" className="btn row-sheet-cancel" onMouseDown={keepFocus} onClick={onClose}>{t("Cancel")}</button>
@@ -165,12 +185,14 @@ export function RowMenu({ anchor, title, subtitle, items, align = "end", onClose
 
   return createPortal(
     <div ref={surface} className="menu row-menu" role="menu" aria-label={title} style={place ?? { visibility: "hidden" }} onKeyDown={onKeyDown} onBlur={onBlur}>
+      {header && <div className="row-menu-header" role="presentation">{header}</div>}
       {items.map((item) => (
         <Fragment key={item.id}>
           {item.divider && <span className="row-menu-divider" role="separator" />}
-          <button type="button" role="menuitem" className={`menu-item${item.danger ? " is-danger" : ""}`} aria-current={item.current ? "true" : undefined} onMouseDown={keepFocus} onClick={() => run(item)}>
+          <button type="button" role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={item.checked} className={`menu-item${item.danger ? " is-danger" : ""}`} aria-current={item.current ? "true" : undefined} title={item.title} onMouseDown={keepFocus} onClick={() => run(item)}>
             {item.glyph ?? <item.icon aria-hidden="true" />}
             <span className="menu-item-main">{item.label}</span>
+            {item.hint && <span className="menu-item-hint">{item.hint}</span>}
           </button>
         </Fragment>
       ))}

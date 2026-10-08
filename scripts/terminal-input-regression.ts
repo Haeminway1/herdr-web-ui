@@ -1,6 +1,7 @@
 /** Input lifecycle adversarial cases, using an owned pane and intercepted submits. */
 import assert from "node:assert/strict";
 import type { Browser } from "playwright-core";
+import { openSettingsPage } from "./settings-page.ts";
 
 export async function checkTerminalInput(browser: Browser, origin: string, pane: string, otherPane: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -34,7 +35,8 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
   const line = page.getByRole("textbox", { name: "Terminal input line", exact: true });
   // A desktop has no key bar: the input mode is a Settings choice there.
   const setMode = async (mode: "line" | "direct") => {
-    await page.keyboard.press("Control+Shift+Comma");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Terminal");
     await page.getByRole("combobox", { name: "Terminal input mode", exact: true }).selectOption(mode);
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
   };
@@ -81,24 +83,27 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     assert.equal(await line.inputValue(), "draft 한글 😀", "late ack cannot erase replacement text");
     assert.equal(sent.length, 1);
 
-    await page.keyboard.press("Control+Shift+Comma");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Shortcuts");
     const shortcut = page.getByRole("combobox", { name: "Command palette", exact: true });
     await shortcut.selectOption("p");
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
-    await page.keyboard.press("Control+Shift+p");
+    await page.keyboard.press("ControlOrMeta+Shift+p");
     await page.getByRole("dialog", { name: "Command palette", exact: true }).waitFor();
     await page.keyboard.press("Escape");
-    await page.keyboard.press("Control+Shift+Comma");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Shortcuts");
     await shortcut.selectOption("off");
     await page.getByRole("combobox", { name: "Next pane", exact: true }).selectOption("p");
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
     await line.focus();
     const selectionBefore = await page.evaluate(() => localStorage.getItem("herdr-web-ui:selection"));
-    await page.keyboard.press("Control+Shift+p");
+    await page.keyboard.press("ControlOrMeta+Shift+p");
     await until(async () => (await page.evaluate(() => localStorage.getItem("herdr-web-ui:selection"))) !== selectionBefore);
     await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
     await line.waitFor();
-    await page.keyboard.press("Control+Shift+Comma");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Shortcuts");
     await page.getByRole("button", { name: "Reset shortcuts", exact: true }).click();
     if (process.env.UI_EVIDENCE_DIR) {
       const { mkdirSync } = await import("node:fs");
@@ -111,7 +116,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
       await page.setViewportSize({ width: 1280, height: 800 });
     }
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
-    await page.keyboard.press("Control+Shift+k");
+    await page.keyboard.press("ControlOrMeta+Shift+k");
     await page.getByRole("dialog", { name: "Command palette", exact: true }).waitFor();
     await page.keyboard.press("Escape");
 

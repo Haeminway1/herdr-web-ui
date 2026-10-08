@@ -61,6 +61,14 @@
   min-height: 0;
 }
 
+/* Under the chat lens a prompt card and the held messages can take the stack's whole height (a
+   phone with its keyboard up). The transcript's box then reaches zero, and its scroller, which
+   keeps its own padding, must not paint over what stands under it. The xterm mount is not
+   resized by this. */
+.terminal-stack.is-chat > .terminal-surface {
+  overflow: hidden;
+}
+
 /* no pane selected: the mount keeps its size (the fit needs it) but never paints, so its
    cursor cannot show through the placeholder */
 .pane-terminal.is-idle {
@@ -150,6 +158,11 @@
   color: var(--status-working);
 }
 
+/* a banner's own action takes clicks back from the pass-through column */
+.terminal-banner-action {
+  pointer-events: auto;
+}
+
 /* not a fault: a lens herdr does not offer on this PC yet */
 .terminal-banner-soon {
   border-color: var(--accent);
@@ -205,7 +218,7 @@
   color: var(--text);
 }
 
-.terminal-banner-draft .draft-dropped {
+.terminal-banner-draft .draft-truncated {
   color: var(--text-dim);
 }
 

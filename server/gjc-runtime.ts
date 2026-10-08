@@ -283,6 +283,13 @@ export function forgetGjcState(): void {
   processTable = null;
 }
 
+/** What one pane's gjc chat left behind: its bound session and that file's title scan (a memo either way). */
+export function forgetGjcPane(paneId: string): void {
+  const bound = windowsBindings.get(paneId);
+  windowsBindings.delete(paneId);
+  if (bound !== undefined) titleScans.delete(bound.path);
+}
+
 /**
  * Where `file` sits inside `root`, as path segments, or null when it is not inside. The
  * platform's own rules decide: a Windows path comes with backslashes and a drive letter whose
@@ -312,8 +319,11 @@ export function gjcTerminal(pid: number): GjcTerminal | null {
       return { id: tty.slice(5).replaceAll("/", "-"), startedAt };
     }
     if (process.platform === "darwin") {
+      // lstart is local time without a zone: print it in the zone Date.parse reads it in,
+      // which is not always $TZ (bun test runs in UTC without setting it)
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const output = execFileSync("ps", ["-p", String(pid), "-o", "tty=", "-o", "lstart="], {
-        encoding: "utf8", timeout: 1500, maxBuffer: 4096, env: { ...process.env, LC_ALL: "C" }, stdio: ["ignore", "pipe", "ignore"],
+        encoding: "utf8", timeout: 1500, maxBuffer: 4096, env: { ...process.env, LC_ALL: "C", TZ: zone }, stdio: ["ignore", "pipe", "ignore"],
       });
       return parseGjcPs(output);
     }
