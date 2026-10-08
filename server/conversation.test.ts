@@ -9,6 +9,7 @@ import { toolVerb } from "../src/lib/toolVerbs.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
 import * as herdr from "./herdr/client.ts";
 import { forgetHistoryChains } from "./codex.ts";
+import { DevinHistoryChanged } from "./devin.ts";
 import { ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionPath, paneConversation, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 
 let mockedPanes: HerdrPane[] = [];
@@ -136,23 +137,26 @@ describe("Devin pane identity", () => {
     const db = new Database(dbPath);
     try {
       db.exec("CREATE TABLE sessions(id TEXT, working_directory TEXT, main_chain_id INTEGER, hidden INTEGER, model TEXT); CREATE TABLE message_nodes(session_id TEXT,node_id INTEGER,parent_node_id INTEGER,chat_message TEXT,created_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT,tool_call_json TEXT,tool_call_update_json TEXT)");
-      db.query("INSERT INTO sessions VALUES ('one', ?, 1, 0, NULL)").run(cwd);
-      const insert = db.query("INSERT INTO message_nodes VALUES ('one', ?, NULL, ?, 1700000000)");
-      insert.run(1, JSON.stringify({ role: "user", content: "first branch" }));
+      // more turns than one page holds, so the newest page carries a cursor
+      db.query("INSERT INTO sessions VALUES ('one', ?, 120, 0, NULL)").run(cwd);
+      const insert = db.query("INSERT INTO message_nodes VALUES ('one', ?, ?, ?, 1700000000)");
+      for (let node = 1; node <= 120; node++) insert.run(node, node === 1 ? null : node - 1, JSON.stringify({ role: "user", content: `synthetic ${node}` }));
       mockedPanes = [pane];
       mockedProcesses = [{ argv: ["/usr/local/bin/devin", "--resume", "one"] }];
-      const initial = await paneConversation(pane.pane_id, undefined, {}, dbPath);
-      db.query("UPDATE sessions SET main_chain_id = 2 WHERE id = 'one'").run();
-      insert.run(2, JSON.stringify({ role: "user", content: "second branch" }));
+      // the store never changes below, so only a forgotten cache can move the identity
+      const read = () => paneConversation(pane.pane_id, undefined, {}, dbPath);
+      const initial = await read();
+      expect(typeof initial.cursor).toBe("string");
+      expect((await read()).history_id).toBe(initial.history_id);
+      expect((await paneConversation(pane.pane_id, undefined, { before: initial.cursor! }, dbPath)).turns.length).toBe(20);
       forgetPaneTranscriptState(pane.pane_id);
-      const paneReset = await paneConversation(pane.pane_id, undefined, {}, dbPath);
+      const paneReset = await read();
       expect(paneReset.history_id).not.toBe(initial.history_id);
-      db.query("UPDATE sessions SET main_chain_id = 3 WHERE id = 'one'").run();
-      insert.run(3, JSON.stringify({ role: "user", content: "third branch" }));
+      await expect(paneConversation(pane.pane_id, undefined, { before: initial.cursor! }, dbPath)).rejects.toThrow(DevinHistoryChanged);
       forgetTranscriptState();
-      const testReset = await paneConversation(pane.pane_id, undefined, {}, dbPath);
+      const testReset = await read();
       expect(testReset.history_id).not.toBe(paneReset.history_id);
-      expect(testReset.turns[0]?.parts[0]).toEqual({ kind: "text", text: "third branch" });
+      await expect(paneConversation(pane.pane_id, undefined, { before: paneReset.cursor! }, dbPath)).rejects.toThrow(DevinHistoryChanged);
     } finally {
       db.close();
       mockedPanes = [];
