@@ -275,3 +275,12 @@ test("renders a tool call id listed many times once, so one stored output is not
   expect(page.turns[1]!.parts.length).toBe(1);
   expect(JSON.stringify(page).length).toBeLessThan(128 * 1024);
 });
+
+test("refuses node ids SQLite holds exactly and JavaScript would round to a sibling", () => {
+  const f = fixture();
+  const insert = f.db.query("INSERT INTO message_nodes VALUES ('one', CAST(? AS INTEGER), NULL, ?, 1700000000)");
+  insert.run("9007199254740992", JSON.stringify({ role: "user", content: "sibling branch" }));
+  insert.run("9007199254740993", JSON.stringify({ role: "user", content: "selected branch" }));
+  f.db.exec("UPDATE sessions SET main_chain_id = 9007199254740993 WHERE id = 'one'");
+  expect(() => f.page()).toThrow(DevinHistoryUnavailable);
+});

@@ -74,6 +74,8 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
       "SELECT main_chain_id, model FROM sessions WHERE id = ? AND working_directory = ? AND hidden = 0",
     ).get(sessionId, cwd);
     if (!session) throw new DevinHistoryUnavailable();
+    // SQLite ids are 64-bit; one past 2^53 arrives rounded and would select a neighbouring node
+    if (session.main_chain_id !== null && !Number.isSafeInteger(session.main_chain_id)) throw new DevinHistoryUnavailable();
     // Follow only the selected head, not every branch in the session.
     const chain = session.main_chain_id === null ? [] : db.query<Node, [number, string, string]>(`
       WITH RECURSIVE ancestry(node_id, parent_node_id, chat_message, created_at, depth, bytes) AS (
@@ -93,6 +95,7 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
     if (chain.length && (chain[0]!.parent_node_id !== null || chain.length > MAX_NODES || chain[0]!.bytes > MAX_BYTES)) throw new DevinHistoryUnavailable();
     if (session.main_chain_id !== null && !chain.length) throw new DevinHistoryUnavailable();
     const ids = chain.map((node) => node.node_id);
+    if (chain.some((node) => !Number.isSafeInteger(node.node_id) || (node.parent_node_id !== null && !Number.isSafeInteger(node.parent_node_id)))) throw new DevinHistoryUnavailable();
     if (new Set(ids).size !== ids.length) throw new DevinHistoryUnavailable();
     const key = JSON.stringify([dbPath, sessionId, cwd]);
     const previous = histories.get(key);
