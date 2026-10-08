@@ -8,6 +8,8 @@ const MAX_NODES = 5000;
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_TEXT = 64 * 1024;
 const PROCESS_SALT = randomUUID();
+// a time without a zone would be read in the server's own zone
+const ZONED_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const text = (value: unknown): string => typeof value === "string" ? value.slice(0, MAX_TEXT) : "";
 const boundedOutput = (value: string): string => value.length > MAX_TEXT ? `${value.slice(0, MAX_TEXT)}\n… trimmed` : value;
 const record = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -149,8 +151,8 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
       if (typeof meta.generation_model === "string") metadata.model = text(meta.generation_model);
       if (typeof meta.reasoning_effort === "string") metadata.reasoning_effort = text(meta.reasoning_effort);
       // a node's created_at is when Devin last saved the whole tree, which rewrites every row
-      const sent = typeof meta.created_at === "string" ? Date.parse(meta.created_at) : NaN;
-      const ts = stamp(sent > 0 ? sent : node.created_at);
+      const sent = typeof meta.created_at === "string" && ZONED_ISO.test(meta.created_at) ? new Date(meta.created_at) : null;
+      const ts = sent !== null && Number.isFinite(sent.getTime()) ? sent.toISOString() : stamp(node.created_at);
       if (role === "tool") {
         const part = pending.get(text(message.tool_call_id));
         if (part) {

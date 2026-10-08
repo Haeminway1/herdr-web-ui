@@ -326,6 +326,17 @@ test("shows a real Devin session's reasoning, which it stores as an object", () 
   expect(first.kind === "thinking" && first.text).toStartWith("The user wants me to run `ls`");
 });
 
+test("takes a message time only as a zoned ISO time, read as milliseconds", () => {
+  const f = fixture();
+  f.node(1, null, { role: "user", content: "old", metadata: { created_at: "1971-01-01T00:00:00Z" } });
+  f.node(2, 1, { role: "assistant", content: "no zone", metadata: { created_at: "2026-10-08T12:28:40.410481575" } });
+  f.node(3, 2, { role: "user", content: "not a time", metadata: { created_at: "-1" } });
+  f.node(4, 3, { role: "assistant", content: "offset", metadata: { created_at: "2026-10-08T21:28:40.410481575+09:00" } });
+  expect(f.page().turns.map((turn) => turn.ts)).toEqual([
+    "1971-01-01T00:00:00.000Z", "2023-11-14T22:13:22.000Z", "2023-11-14T22:13:23.000Z", "2026-10-08T12:28:40.410Z",
+  ]);
+});
+
 test("labels a real Devin tool call with the title Devin shows for it", () => {
   const tool = realSession().turns[1]!.parts.find((part) => part.kind === "tool");
   expect(tool).toMatchObject({ name: "exec", summary: "Listed ./" });
