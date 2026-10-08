@@ -509,7 +509,10 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
   const rows = menuRows(lines, Math.max(0, hintIndex - 64), end);
   if (!sequentialRows(rows) || rows.filter((row) => row.selected).length !== 1) return null;
   const chatIndex = rows.findIndex((row) => row.label === "Chat about this");
-  const customIndex = rows.findIndex((row) => /^Type something\.?$/i.test(row.label));
+  let customIndex = rows.findIndex((row) => /^Type something\.?$/i.test(row.label));
+  // typed into, the row shows the draft instead of "Type something.", and while it holds the
+  // cursor the hint offers "ctrl+g to edit": that row is still the typed answer's
+  if (customIndex < 0 && !preview && chatIndex > 1 && rows[chatIndex - 1]!.selected && /ctrl\+g to edit/i.test(wrapped(raw, hintIndex))) customIndex = chatIndex - 1;
   if (preview) {
     // its notes are no answer of their own: no typed-answer row, the options are the menu
     if (customIndex >= 0 || chatIndex >= 0) return null;
@@ -1183,12 +1186,15 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
     const callIndex = findLastIndex(lines.slice(0, questionIndex), (line) => /^●\s+[\w.:-]+(?:\s[\w.:-]+)*(?:\s\(MCP\))?\(/.test(cleanLine(line)));
     const rules = lines.slice(0, questionIndex).flatMap((line, index) => index > callIndex && SOLID_RULE_RE.test(cleanLine(line)) ? [index] : []);
     const ruleIndex = callIndex >= 0 ? rules[0] ?? -1 : rules.at(-1) ?? -1;
-    if (ruleIndex < 0 || questionIndex - ruleIndex > 60) return null;
-    const panel = lines.slice(ruleIndex + 1, questionIndex).map(cleanLine)
+    // a long command pushes the panel's rule and tool name off the top of the screen: the
+    // numbered rows and Claude's own key hint under them still say it is an approval
+    const scrolled = ruleIndex < 0 && callIndex < 0 && hintIndex > questionIndex && /^esc to cancel\b/i.test(cleanLine(lines[hintIndex]!));
+    if (!scrolled && (ruleIndex < 0 || questionIndex - ruleIndex > 60)) return null;
+    const panel = lines.slice(scrolled ? Math.max(0, questionIndex - 8) : ruleIndex + 1, questionIndex).map(cleanLine)
       .filter((line) => line && !isDivider(line) && !/^Tip:/i.test(line));
     if (panel.length === 0) return null;
-    title = panel[0]!;
-    body = panel.slice(1).join("\n");
+    title = scrolled ? "Command approval" : panel[0]!;
+    body = (scrolled ? panel : panel.slice(1)).join("\n");
   }
   return finishPrompt("claude", {
     kind: "approval", title, question: cleanLine(lines[questionIndex]!),
@@ -1724,7 +1730,8 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   // the last row carries the cursor once a move has put it there
   if (prompt.responder === "codex-approval") return ends(/press enter to confirm|esc to cancel|enter continue.*esc back|^(?:[›>❯]\s*)?\d+\.\s+(?:No|Reject|Cancel|Deny)\b/i);
   if (prompt.responder === "omp-approval") return ends(/^(?:[›>❯•]\s*)?(?:Approve|Deny)$|esc.*cancel/i);
-  if (prompt.responder === "claude-approval") return ends(/esc to cancel.*(?:tab|ctrl\+e)|ctrl\+e to explain/i);
+  // Claude Code 2.1.29x ends the panel with "Esc to cancel" alone, the hint's other keys gone
+  if (prompt.responder === "claude-approval") return ends(/esc to cancel.*(?:tab|ctrl\+e)|ctrl\+e to explain|^esc to cancel$/i);
   if (prompt.responder === "claude-confirm") return ends(CLAUDE_CONFIRM_HINT_RE);
   if (prompt.responder === "claude-model") return ends(CLAUDE_MODEL_HINT_RE);
   if (prompt.responder === "claude-effort") return ends(CLAUDE_EFFORT_HINT_RE);
