@@ -4057,3 +4057,81 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
   });
 });
+
+// fork: Claude Code 2.1.29x screens the readers missed, answered as menus (arrows + enter), never by typing the number
+describe("Claude Code 2.1.29x approvals and questions", () => {
+  const RULE = "─".repeat(80);
+  const DASH = "╌".repeat(80);
+  test("an approval whose hint is Esc to cancel alone is a card", () => {
+    const screen = [
+      "● Bash(systemctl --user restart demo.service)",
+      "  ⎿  Waiting…",
+      "",
+      RULE,
+      " Bash command",
+      " Restart the demo service",
+      DASH,
+      " │ systemctl --user restart demo.service",
+      DASH,
+      " │ Permission rule Bash(systemctl --user restart:*) requires confirmation for this command.",
+      " /permissions to update rules",
+      "",
+      " Do you want to proceed?",
+      "   1. Yes",
+      " ❯ 2. Yes, and don't ask again for: systemctl *",
+      "   3. No",
+      "",
+      " Esc to cancel",
+      "",
+    ].join("\n");
+    const prompt = parseInteractivePrompt("claude", screen)!;
+    expect(prompt).toMatchObject({ kind: "approval", title: "Bash command", question: "Do you want to proceed?" });
+    expect(prompt.options.map((option) => option.label)).toEqual(["Yes", "Yes, and don't ask again for: systemctl *", "No"]);
+    expect(answerKeys(prompt, { option_index: 0 }).flatMap((step) => step.keys ?? [])).toEqual(["up", "enter"]);
+  });
+
+  test("a long command pushes the panel's title off the screen: still an approval", () => {
+    const screen = [
+      ...Array.from({ length: 24 }, (_, index) => ` │ echo line ${index}`),
+      DASH,
+      " A variable in this command can't be checked before it runs",
+      " │ Permission rule Bash(systemctl --user daemon-reload:*) requires confirmation for this command.",
+      " /permissions to update rules",
+      "",
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+      "",
+      " Esc to cancel · Tab to amend",
+      "",
+    ].join("\n");
+    const prompt = parseInteractivePrompt("claude", screen)!;
+    expect(prompt).toMatchObject({ kind: "approval", title: "Command approval", question: "Do you want to proceed?" });
+    expect(prompt.options.map((option) => option.label)).toEqual(["Yes", "No"]);
+  });
+
+  test("a question whose typed-answer row already holds a draft keeps it as the typed answer", () => {
+    const screen = [
+      "❯ which session should get the notes?",
+      RULE,
+      " ☐ Session",
+      "",
+      "Two sessions are open. Which one?",
+      "",
+      "  1. builder-a",
+      "     started 15 hours ago",
+      "  2. builder-b",
+      "     started 13 hours ago",
+      "❯ 3. neither, tell me their names",
+      RULE,
+      "  4. Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · ctrl+g to edit in VS Code · Esc to cancel",
+      "",
+    ].join("\n");
+    const prompt = parseInteractivePrompt("claude", screen)!;
+    expect(prompt).toMatchObject({ kind: "question", title: "Session", question: "Two sessions are open. Which one?", custom_option_index: 2 });
+    expect(prompt.options.map((option) => option.label)).toEqual(["builder-a", "builder-b"]);
+    expect(answerKeys(prompt, { option_index: 1 }).flatMap((step) => step.keys ?? [])).toEqual(["up", "enter"]);
+  });
+});
