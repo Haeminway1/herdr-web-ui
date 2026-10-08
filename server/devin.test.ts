@@ -325,3 +325,12 @@ test("shows a real Devin session's reasoning, which it stores as an object", () 
   const first = page.turns[1]!.parts[0]!;
   expect(first.kind === "thinking" && first.text).toStartWith("The user wants me to run `ls`");
 });
+
+test("dates a real Devin turn by its message, not by the save that rewrote every row", () => {
+  const page = realSession();
+  expect(page.turns.map((turn) => [turn.ts, turn.end_ts ?? null])).toEqual([
+    ["2026-10-08T12:28:40.410Z", null], ["2026-10-08T12:28:42.873Z", "2026-10-08T12:28:44.463Z"],
+    ["2026-10-08T12:29:19.031Z", null], ["2026-10-08T12:29:20.560Z", null],
+    ["2026-10-08T12:30:21.694Z", null], ["2026-10-08T12:30:23.515Z", null],
+  ]);
+});

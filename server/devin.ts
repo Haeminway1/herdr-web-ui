@@ -148,7 +148,9 @@ export function devinConversation(sessionId: string, cwd: string, options: Devin
       const meta = record(message.metadata);
       if (typeof meta.generation_model === "string") metadata.model = text(meta.generation_model);
       if (typeof meta.reasoning_effort === "string") metadata.reasoning_effort = text(meta.reasoning_effort);
-      const ts = stamp(node.created_at);
+      // a node's created_at is when Devin last saved the whole tree, which rewrites every row
+      const sent = typeof meta.created_at === "string" ? Date.parse(meta.created_at) : NaN;
+      const ts = stamp(sent > 0 ? sent : node.created_at);
       if (role === "tool") {
         const part = pending.get(text(message.tool_call_id));
         if (part) {
