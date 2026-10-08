@@ -47,6 +47,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   cleared its box. The chat now shows a card with the message as Claude holds it: **Send** sends
   it, **Discard** clears Claude's input.
   ([#601](https://github.com/devswha/herdr-web-ui/pull/601) by @Yoonwoo-Ha)
+- Clicking an agent's notification opens that pane on its chat, where the answer or the question
+  is, also when the pane is kept on the terminal. The pane's own view is not changed: pick the
+  pane or a view yourself and it is back. A shell's notification opens its terminal as before.
+  ([#605](https://github.com/devswha/herdr-web-ui/pull/605) by @Xianbei233)
 
 ## [0.4.1] - 2026-10-08
 
