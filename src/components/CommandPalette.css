@@ -1,4 +1,7 @@
+/* above every scrim dialog whenever it is open, Settings raised above a preview included: it takes
+   focus and Escape. A showModal() dialog (MachineDialog) sits in the browser's top layer instead. */
 .palette-scrim {
+  z-index: var(--z-palette);
   align-items: flex-start;
   padding-top: var(--palette-top);
 }
@@ -119,6 +122,10 @@
     max-height: calc(100% - var(--space-8));
     padding-bottom: env(safe-area-inset-bottom, 0px);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+
+  [data-keyboard] .command-palette {
+    padding-bottom: 0;
   }
 
   .palette-search {

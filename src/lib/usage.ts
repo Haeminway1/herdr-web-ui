@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProviderUsage, UsageProviderId, UsageReport, UsageWindow } from "../../shared/protocol.ts";
 import { fetchUsage } from "./api.ts";
-import type { UsageCount } from "./settings.ts";
+import type { UsageCount, UsageGlance } from "./settings.ts";
 import { t } from "./i18n.ts";
 import { usePageVisible } from "./visibility.ts";
 
@@ -11,12 +11,12 @@ const POLL_MS = 60_000;
 export const HIGH_PERCENT = 80;
 
 export const PROVIDER_NAME: Readonly<Record<UsageProviderId, string>> = {
-  claude: "Claude", codex: "Codex", cursor: "Cursor", copilot: "Copilot", grok: "Grok", antigravity: "Antigravity",
+  claude: "Claude", codex: "Codex", cursor: "Cursor", copilot: "Copilot", grok: "Grok", antigravity: "Antigravity", opencode: "OpenCode",
 };
 
 /** AgentMark's name for each provider's logo */
 export const PROVIDER_MARK: Readonly<Record<UsageProviderId, string>> = {
-  claude: "claude", codex: "codex", cursor: "cursor", copilot: "copilot", grok: "grok", antigravity: "agy",
+  claude: "claude", codex: "codex", cursor: "cursor", copilot: "copilot", grok: "grok", antigravity: "agy", opencode: "opencode",
 };
 
 export const WINDOW_LABEL: Readonly<Record<UsageWindow["kind"], string>> = {
@@ -26,21 +26,35 @@ export const WINDOW_LABEL: Readonly<Record<UsageWindow["kind"], string>> = {
   month: "Monthly",
 };
 
-/** The limit closest to running out: the one a glance at the sidebar has to show. */
+/** A pane's agent selects a provider, not an inferred active account. */
+export function providerForAgent(agent: string | null | undefined): UsageProviderId | null {
+  return (Object.keys(PROVIDER_MARK) as UsageProviderId[]).find((id) => PROVIDER_MARK[id] === agent) ?? null;
+}
+
+/** The first visible account in Settings order supplies the composer's compact reference. */
+export function composerUsage(providers: readonly ProviderUsage[], agent: string | null, order: readonly string[], hidden: readonly string[]): ProviderUsage | undefined {
+  const providerId = providerForAgent(agent);
+  return orderProviders(providers, order).find((usage) => usage.id === providerId && !hidden.includes(usage.key));
+}
+
+/** Plan-wide five-hour session first, then week; scoped limits do not stand in for either. */
+export function statusWindows(usage: ProviderUsage): UsageWindow[] {
+  return (["session", "week"] as const)
+    .map((kind) => usage.windows.find((window) => window.kind === kind && window.scope === null))
+    .filter((window): window is UsageWindow => window !== undefined);
+}
+
+/** The limit closest to running out: what a chip shows when the plan has no limit of the chosen kind. */
 export function tightestWindow(usage: ProviderUsage): UsageWindow | null {
   return usage.windows.reduce<UsageWindow | null>((tightest, window) => tightest === null || window.used_percent > tightest.used_percent ? window : tightest, null);
 }
 
 /**
- * The limit a glance shows: the nearest to running out, or, when `glance` is "week", the plan-wide
- * weekly limit where the plan has one (Claude's 5-hour session refills before it matters to some).
+ * The limit a chip shows: the plan-wide one of the kind chosen in Settings (the week, or the
+ * short session), never a model's own. A plan without it shows its limit closest to running out.
  */
-export function glanceWindow(usage: ProviderUsage, glance: "nearest" | "week"): UsageWindow | null {
-  if (glance === "week") {
-    const week = usage.windows.find((window) => window.kind === "week" && window.scope === null);
-    if (week !== undefined) return week;
-  }
-  return tightestWindow(usage);
+export function glanceWindow(usage: ProviderUsage, glance: UsageGlance): UsageWindow | null {
+  return usage.windows.find((window) => window.kind === glance && window.scope === null) ?? tightestWindow(usage);
 }
 
 export function windowLabel(window: UsageWindow): string {
@@ -111,17 +125,14 @@ export function formatPercent(value: number): string {
   return value > 0 && value < 1 ? `${value.toFixed(1)}%` : `${Math.round(value)}%`;
 }
 
-/**
- * The accounts in the user's order (`order`, by key), then the rest: a limit near its end first,
- * otherwise the server's order.
- */
+/** The accounts in the user's order (`order`, by key), then the rest as the server lists them. */
 export function orderProviders(providers: readonly ProviderUsage[], order: readonly string[] = []): ProviderUsage[] {
   const rank = new Map(order.map((key, index) => [key, index]));
   return [...providers].sort((a, b) => {
     const ranked = [rank.get(a.key), rank.get(b.key)];
     if (ranked[0] !== undefined && ranked[1] !== undefined) return ranked[0] - ranked[1];
     if (ranked[0] !== undefined || ranked[1] !== undefined) return ranked[0] !== undefined ? -1 : 1;
-    return (tightestWindow(b)?.used_percent ?? -1) - (tightestWindow(a)?.used_percent ?? -1);
+    return 0;
   });
 }
 

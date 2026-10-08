@@ -17,7 +17,7 @@
  * screen app (standalone, black-translucent status bar) reports a visual viewport
  * shorter than the screen with no keyboard at all, which left a band as tall as the
  * status bar under the composer. Without a keyboard the shell is 100dvh unless
- * that missing height matches the measured standalone top safe area.
+ * the missing height matches the measured standalone top safe area.
  */
 
 const viewport = window.visualViewport;
@@ -66,9 +66,8 @@ const syncKeyboard = (): void => {
   root.toggleAttribute("data-keyboard", visible);
   if (visible && viewport) root.style.setProperty("--app-height", `${Math.round(height)}px`);
   else {
-    // Some iOS standalone layouts exclude the status region even from 100dvh.
-    // Correct only when the missing screen height agrees with the actual top
-    // safe area; ordinary browser chrome, landscape and full-height layouts do not.
+    // Only correct the standalone status region when the screen-to-CSS gap
+    // agrees with the measured top safe area.
     const inset = topInset.getBoundingClientRect().height;
     const missing = window.screen.height - largeViewport.getBoundingClientRect().height;
     if (window.matchMedia("(display-mode: standalone)").matches && inset > 0

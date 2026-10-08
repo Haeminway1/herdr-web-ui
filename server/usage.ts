@@ -130,6 +130,18 @@ function keychainFound(result: SignIn | "locked" | null, source: string, account
   return [result === "locked" ? { source, locked: true, account } : { ...result, account: result.account ?? account, source }];
 }
 
+/**
+ * A keychain item and a credentials file for the same sign-in. A CLI refreshes the file alone when it
+ * cannot write the keychain (started outside the desktop session), so the item can hold a token that
+ * expired hours ago: the later one wins. An item that names no expiry is not known to be older, and stays.
+ */
+function keychainOrFile(keychain: SignIn | "locked" | null, file: SignIn | null, source: string, account: Account | null = null): Found[] {
+  const item = keychain && keychain !== "locked" ? keychain : null;
+  const fileIsLater = file != null && item != null && file.expiresAt != null && item.expiresAt != null && file.expiresAt > item.expiresAt;
+  if (item && !fileIsLater) return keychainFound(item, source, account);
+  return file ? [{ ...file, account: file.account ?? account, source }] : keychainFound(keychain, source, account);
+}
+
 function parseJson(source: string | null): unknown {
   if (source === null) return null;
   try { return JSON.parse(source); } catch { return null; }
@@ -282,13 +294,7 @@ const claude: UsageProvider = {
       const account = claudeAccount(home.config);
       const keychain = await fromKeychain(ctx, home.service, user ? [user, undefined] : [undefined], claudeSignIn);
       const file = claudeSignIn(readText(join(home.dir, ".credentials.json")));
-      // Claude Code refreshes the file alone when it cannot write the keychain (started outside the
-      // desktop session), so the item can hold a token that expired hours ago: the later one wins.
-      // An item that names no expiry is not known to be older, and stays.
-      const item = keychain && keychain !== "locked" ? keychain : null;
-      const fileIsLater = file != null && item != null && file.expiresAt != null && item.expiresAt != null && file.expiresAt > item.expiresAt;
-      if (item && !fileIsLater) return keychainFound(item, home.source, account);
-      return file ? [{ ...file, account, source: home.source }] : keychainFound(keychain, home.source, account);
+      return keychainOrFile(keychain, file, home.source, account);
     }));
     return found.flat();
   },
@@ -302,6 +308,13 @@ const claude: UsageProvider = {
       claudeWindow(body["seven_day_opus"], "week", "Opus"),
       claudeWindow(body["seven_day_sonnet"], "week", "Sonnet"),
     ].filter((window): window is UsageWindow => window !== null);
+    // a model with a weekly limit of its own (Fable) is only in `limits`; the flat fields win
+    for (const limit of (Array.isArray(body["limits"]) ? body["limits"] : []).map(record)) {
+      const model = text(record(record(limit["scope"])["model"])["display_name"]);
+      const used = number(limit["percent"]);
+      if (limit["kind"] !== "weekly_scoped" || !model || used === null || windows.some((window) => window.scope === model)) continue;
+      windows.push({ kind: "week", scope: model, used_percent: percent(used), resets_at: isoTime(limit["resets_at"]) });
+    }
     return { plan: null, windows };
   },
 };
@@ -581,13 +594,22 @@ const grok: UsageProvider = {
   },
 };
 
-// ---- Antigravity (Google's Gemini and third-party model quota): keychain `gemini` / `antigravity` ----
+// ---- Antigravity (Google's Gemini and third-party model quota): keychain `gemini` / `antigravity`,
+// or the CLI's `antigravity-oauth-token` file where there is no keychain (Linux) ----
 
-function antigravitySignIn(value: string): SignIn | null {
+function antigravitySignIn(value: string | null): SignIn | null {
+  if (value === null) return null;
   const encoded = value.startsWith("go-keyring-base64:") ? Buffer.from(value.slice("go-keyring-base64:".length), "base64").toString("utf8") : value;
-  const token = record(record(parseJson(encoded))["token"]);
+  const root = record(parseJson(encoded));
+  const token = record(root["token"]);
   const access = text(token["access_token"]);
-  return access ? { token: access, expiresAt: epochMs(token["expiry"]) } : null;
+  if (!access) return null;
+  const idToken = text(root["id_token"]);
+  const claims = idToken ? jwtClaims(idToken) : {};
+  const email = text(claims["email"]);
+  const sub = text(claims["sub"]);
+  const account = sub || email ? { id: sub ?? email!, label: email } : null;
+  return { token: access, expiresAt: epochMs(token["expiry"]), account };
 }
 
 const ANTIGRAVITY_BUCKETS: Record<string, { kind: UsageWindow["kind"]; scope: string | null }> = {
@@ -599,7 +621,11 @@ const ANTIGRAVITY_BUCKETS: Record<string, { kind: UsageWindow["kind"]; scope: st
 
 const antigravity: UsageProvider = {
   id: "antigravity",
-  signIns: async (ctx) => keychainFound(await fromKeychain(ctx, "gemini", ["antigravity"], antigravitySignIn), "keychain"),
+  async signIns(ctx) {
+    const dir = ctx.env["ANTIGRAVITY_APP_DATA_DIR"] || join(ctx.home, ".gemini", "antigravity-cli");
+    const file = antigravitySignIn(readText(join(dir, "antigravity-oauth-token")));
+    return keychainOrFile(await fromKeychain(ctx, "gemini", ["antigravity"], antigravitySignIn), file, "keychain");
+  },
   async read(ctx, signIn) {
     const init: RequestInit = {
       method: "POST",
@@ -629,7 +655,66 @@ const antigravity: UsageProvider = {
   },
 };
 
-export const USAGE_PROVIDERS: readonly UsageProvider[] = [claude, codex, cursor, copilot, grok, antigravity];
+// ---- OpenCode Go: the key OpenCode keeps in <XDG data>/opencode/auth.json, else OPENCODE_API_KEY ----
+
+/**
+ * OpenCode keeps every sign-in in that one file, keyed by provider id; an API key is
+ * `{ type: "api", key }` and names no account. The Go key is read first, then the Zen key: the Go
+ * endpoint takes any console key, and answers 403 for one without a Go subscription.
+ */
+function opencodeSignIn(source: string | null): SignIn | null {
+  const root = record(parseJson(source));
+  for (const provider of ["opencode-go", "opencode"]) {
+    const entry = record(root[provider]);
+    const token = entry["type"] === "api" ? text(entry["key"]) : null;
+    if (token) return { token, expiresAt: null };
+  }
+  return null;
+}
+
+const opencode: UsageProvider = {
+  id: "opencode",
+  async signIns(ctx) {
+    // xdg-basedir, as OpenCode resolves it: XDG_DATA_HOME, else ~/.local/share, on macOS too
+    const dir = join(ctx.env["XDG_DATA_HOME"] || join(ctx.home, ".local", "share"), "opencode");
+    const file = opencodeSignIn(readText(join(dir, "auth.json")));
+    if (file) return [{ ...file, source: dir }];
+    // the variable OpenCode itself reads for both providers (models.dev)
+    const token = text(ctx.env["OPENCODE_API_KEY"]);
+    return token ? [{ token, expiresAt: null, source: "env" }] : [];
+  },
+  async read(ctx, signIn) {
+    let body: Json;
+    try {
+      body = await requestJson(ctx, "https://opencode.ai/zen/go/v1/usage", {
+        headers: { authorization: `Bearer ${signIn.token}`, accept: "application/json", "user-agent": USER_AGENT },
+      });
+    } catch (error) {
+      if (error instanceof UsageHttpError && error.status === 403) return null;
+      throw error;
+    }
+    const usage = record(body["usage"]);
+    const windows: UsageWindow[] = [];
+    const rolling = record(usage["rolling"]);
+    const rollingPercent = number(rolling["percent"]);
+    if (rollingPercent !== null) {
+      windows.push({ kind: "session", scope: null, used_percent: percent(rollingPercent), resets_at: isoTime(rolling["resetsAt"]) });
+    }
+    const weekly = record(usage["weekly"]);
+    const weeklyPercent = number(weekly["percent"]);
+    if (weeklyPercent !== null) {
+      windows.push({ kind: "week", scope: null, used_percent: percent(weeklyPercent), resets_at: isoTime(weekly["resetsAt"]) });
+    }
+    const monthly = record(usage["monthly"]);
+    const monthlyPercent = number(monthly["percent"]);
+    if (monthlyPercent !== null) {
+      windows.push({ kind: "month", scope: null, used_percent: percent(monthlyPercent), resets_at: isoTime(monthly["resetsAt"]) });
+    }
+    return { plan: text(body["plan"]) ?? "Go", windows };
+  },
+};
+
+export const USAGE_PROVIDERS: readonly UsageProvider[] = [claude, codex, cursor, copilot, grok, antigravity, opencode];
 
 /** Keychain services whose read hung (an access prompt nobody answered): not asked again. */
 const promptedServices = new Set<string>();

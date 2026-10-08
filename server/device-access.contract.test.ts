@@ -117,10 +117,16 @@ it("watch credentials cannot mutate HTTP state, read credential files, or elevat
   }, websocket: { open(ws) { ws.data.relay.bind(ws); }, message(ws, raw) { ws.data.relay.message(raw); }, close(ws) { ws.data.relay.close(); } } });
   try {
     expect((await fetch(`${base}/api/session`, { headers })).status).toBe(200);
-    for (const path of ["pane/input", "workspace/create", "machines/setup", "updates/install"]) {
+    for (const path of ["pane/input", "workspace/create", "tab/create", "tab/rename", "tab/close", "machines/setup", "updates/install", "herdr/update"]) {
       expect((await fetch(`${base}/api/${path}`, { method: "POST", headers, body: "{}" })).status).toBe(403);
     }
     expect((await fetch(`${base}/api/fs/file?path=${encodeURIComponent(join(root, "devices.json"))}`, { headers })).status).toBe(403);
+    // a PC's file is read without the origin check (#448, Android's Open button): the watch refusal still comes first, for GET and HEAD alike
+    for (const method of ["GET", "HEAD"]) {
+      const response = await fetch(`${base}/api/machines/pc1/fs/file?path=%2Fetc%2Fhostname`, { method, headers: { ...headers, "sec-fetch-site": "cross-site" } });
+      expect(response.status).toBe(403);
+      if (method === "GET") expect(await response.json()).toMatchObject({ error: { code: "read_only" } });
+    }
     // an empty segment must not turn a file read into "some other route" (the PC proxy drops it)
     for (const path of ["api//fs/file", "api/machines/pc1//fs/file", "api/machines/pc1/fs//file"]) {
       expect((await fetch(`${base}/${path}?path=${encodeURIComponent(join(root, "devices.json"))}`, { headers })).status).toBe(404);

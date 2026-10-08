@@ -7,6 +7,883 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Fixed
+- Secret input and the Codex follow-up fallback validate the live screen, so a password
+  prompt or collapsed question queue in scrollback cannot send input into the current program.
+  ([#566](https://github.com/devswha/herdr-web-ui/pull/566))
+- The PC's Tailscale login is read from a real Tailscale user id. These ids are too large for a
+  JavaScript number, so the owner was not recognised and the owner's own devices had to pair. Two
+  logins with neighbouring ids are also no longer taken for one.
+  ([#572](https://github.com/devswha/herdr-web-ui/pull/572))
+- On Windows, a Claude Code pane started with a second account's `~/.claude-*` directory as its
+  `CLAUDE_CONFIG_DIR` shows its chat. Before, the pane fell back to `~/.claude`, so the chat said
+  **Conversation unavailable** and only the terminal worked. Windows does not let the server read
+  another process's environment, so the store is the one among the server's own
+  `CLAUDE_CONFIG_DIR`, `~/.claude` and the `~/.claude-*` directories beside it that holds the
+  Claude process's own record, checked against the time the process started. A directory
+  elsewhere is not looked in. Claude Code processes reported as `claude.exe` are
+  recognized too.
+  ([#563](https://github.com/devswha/herdr-web-ui/pull/563) by @David-Sousa-Web)
+- A long line of brackets, `\(` or underscores that never close, as an agent prints in a log or a
+  minified file, no longer freezes the chat: a megabyte of them took a minute or more to read, and
+  now takes milliseconds. What every message shows is unchanged.
+  ([#574](https://github.com/devswha/herdr-web-ui/pull/574))
+- On a mirrored pane (Windows, where herdr cannot attach a terminal), text typed while a message
+  was still being sent no longer reaches the pane once you have left it, or left it and opened it
+  again, before the text's turn came.
+  ([#576](https://github.com/devswha/herdr-web-ui/pull/576))
+- The plugin's `start` keeps the app on its port when the app's own server holds it but cannot
+  reach herdr. It used to move the app to another port beside the running one and blame another
+  program; now it says that the app runs there without herdr and exits, and the app answers
+  again on its port once herdr is back.
+  ([#577](https://github.com/devswha/herdr-web-ui/pull/577))
+- On Windows, a Codex pane shows its chat when Codex stored its paths with the `\\?\` prefix, as
+  it does for a canonical Windows path (`\\?\D:\work` for `D:\work`). Before, the chat said
+  **Conversation unavailable**: the session's file seemed to lie outside Codex's store, and none of
+  the threads matched the pane's directory as herdr reports it.
+  ([#582](https://github.com/devswha/herdr-web-ui/pull/582) by @David-Sousa-Web)
+- In a Claude Code pane, the chat shows what a slash command answered, so a `/goal` that Claude
+  Code refuses says why in the chat instead of only in the terminal. `/goal` is also among the
+  commands the message box suggests.
+  ([#583](https://github.com/devswha/herdr-web-ui/pull/583))
+- Settings opened over a file preview is visible above it; Escape and Back close Settings
+  first, preserving the preview and its history entry until the file itself is closed.
+  ([#568](https://github.com/devswha/herdr-web-ui/pull/568))
+- Command palette buttons keep their native Enter action; IME commit and cancel keys
+  stay with text input, and arrow navigation keeps the selected result visible.
+  ([#567](https://github.com/devswha/herdr-web-ui/pull/567))
+- A secret sent from a pane you then left and opened again, while another browser kept the pane
+  open, is no longer typed into the pane: you send it again from the pane you opened.
+  ([#588](https://github.com/devswha/herdr-web-ui/pull/588))
+- A Claude Code slash command whose answer holds a long run of broken terminal escape codes no
+  longer stalls the server while the chat reads it. Its answer also drops a link cut off before
+  its end and a stray `B` after a charset switch, and an answer with both output and errors
+  shows both.
+  ([#588](https://github.com/devswha/herdr-web-ui/pull/588))
+- The command palette opened over Settings and a file preview shows above both, instead of
+  taking the keyboard unseen beneath them.
+  ([#588](https://github.com/devswha/herdr-web-ui/pull/588))
+- The plugin's `start` no longer takes another program on the app's port for the app because
+  its answer says `ok`: it treats it as any other program there, moving the app to a free port,
+  or saying the port is taken when `PORT` is set.
+  ([#588](https://github.com/devswha/herdr-web-ui/pull/588))
+- Updating an already current remote bridge verifies and reuses it without downloading or
+  restarting it again, while a bridge from a newer app is left running instead of downgraded.
+  A PC that waits on such a conflict says so in the sidebar and under the header, with a
+  **Reconnect** button, instead of asking for setup approval.
+  ([#519](https://github.com/devswha/herdr-web-ui/pull/519) by @suho-han)
+
+## [0.4.0] - 2026-10-08
+
+### Added
+- An update tells what it brings before it is installed. **Settings → About** shows
+  **What's new** under the version on offer: the changelog of every release the update installs,
+  newest first, read from the release itself. The line under the header has a **What's new**
+  button that opens Settings there. The notes come from the version that is running, so they
+  appear from the update after this one.
+  ([#535](https://github.com/devswha/herdr-web-ui/pull/535))
+- An update also tells what it brought once it is installed. After the reload, the line under
+  the header says which version now runs, with **What's new** and **Dismiss**, for a week or
+  until it is closed on that device, and **Settings → About** keeps the notes under
+  **What the last update brought**. These come from the new version itself, so they appear
+  with the first update to a version that has them.
+  ([#560](https://github.com/devswha/herdr-web-ui/pull/560))
+- A release is told the way a game's patch notes are, before and after its install: a short
+  list under **New features**, **Improvements** and **Bug fixes**, in the app's language
+  (English, Korean, Japanese or Chinese). The changelog entries are folded under
+  **Show every change**. A release that wrote no such list shows its entries as before.
+  ([#560](https://github.com/devswha/herdr-web-ui/pull/560))
+- The one-line installers can give the GitHub star they mention. On a first install, when the gh
+  CLI is signed in and that account has not starred the repository, `install.sh` and `install.ps1`
+  ask once at the terminal and star only on `y`. An account that already starred hears nothing.
+  Without a terminal, as under a script or in CI, nothing is asked, and a question nobody answers
+  goes on by itself after 20 seconds. `install.ps1` did not mention the star before.
+  ([#550](https://github.com/devswha/herdr-web-ui/pull/550))
+- **Settings → Appearance → Sidebar rows** chooses between **Two lines** and **One line**. On two
+  lines, the default, a workspace row shows what its agent is doing, with the workspace and
+  folder under it, as the sidebar did before its rows became one line. **One line** keeps the
+  workspace's name alone.
+  ([#521](https://github.com/devswha/herdr-web-ui/pull/521),
+  [#559](https://github.com/devswha/herdr-web-ui/pull/559))
+- A right-click on a workspace or pane row in the sidebar opens the row's menu, the one its `⋯`
+  button opens. ([#521](https://github.com/devswha/herdr-web-ui/pull/521))
+- The sidebar can be resized: drag its right edge, or focus the edge and use the arrow keys.
+  A double-click returns to the default width. The width is remembered on each device, and the
+  sidebar never takes more than half the window.
+  ([#521](https://github.com/devswha/herdr-web-ui/pull/521))
+- The mobile terminal key bar has sticky Ctrl, Alt and Shift toggles and an Enter key.
+  Herdr encodes held combinations with arrows, special keys and direct typing for
+  the pane's keyboard protocol. Modifiers clear when leaving
+  the pane or disconnecting. Pasted text and submitted drafts keep their contents.
+  Queued terminal chords and text are cancelled when the sender leaves their attachment or
+  its terminal is replaced.
+  ([#433](https://github.com/devswha/herdr-web-ui/pull/433) by @nickadminroot,
+  [#508](https://github.com/devswha/herdr-web-ui/pull/508))
+- Settings can add, remove and reorder every mobile terminal key and register custom key
+  combinations in a separate key bar editor. Existing extra-key preferences keep their keys and order,
+  and Restore defaults returns the original bar. Native clipboard shortcuts on non-Latin keyboards
+  and existing Alt combinations remain intact. ([#508](https://github.com/devswha/herdr-web-ui/pull/508))
+
+### Changed
+- The terminal's **Input held until the terminal is ready** notice appears only when there is
+  text to send or discard, or when text was too long to hold. It no longer counts "special
+  keys dropped": the count rose without a key being pressed, with every answer the terminal
+  gives a program by itself, and with nothing held the notice had only a dash to show. Text
+  past the 1,024 characters it holds is now told as left out, where it only raised that count.
+  ([#561](https://github.com/devswha/herdr-web-ui/pull/561))
+- Settings shows one page at a time. A list of pages (Appearance, Chat, Terminal, Alerts, Voice
+  input, Subscription usage, Shortcuts, Phone & devices, Remote PCs, About) stays beside the open
+  page; on a phone the list comes first and a page opens from it. Each page groups its settings
+  in cards, one control at the end of each row, and a phone no longer scrolls through every
+  setting to reach the last. What moved: the terminal's font, wheel speed, input mode and
+  **Key bar** from Appearance to **Terminal**; Composer and Quick replies into **Chat**; Phone,
+  Install and Devices into **Phone & devices**; Updates and herdr into **About**. Colors and
+  Language are menus now, and Language lists English, 简体中文, 日本語, 한국어 in that order after
+  System. Every setting keeps its value. The Back button of a phone or a browser
+  steps out of Settings (the key bar editor, the page, then the dialog) instead of leaving the app.
+  ([#562](https://github.com/devswha/herdr-web-ui/pull/562))
+- The mic button shows in a desktop's chat without being turned on. **Settings → Voice input →
+  Microphone button** is now **Auto**, **On** or **Off**. Auto, the default, puts the mic in the
+  chat's message box on a desktop, and only where dictation can work: over HTTPS, with an OpenAI
+  key or a browser that recognizes speech. A phone and the terminal input line have it when the
+  setting is **On**, as before. Nothing is recorded until the mic is pressed. A device that had
+  the button on keeps it; one that had it off follows Auto.
+  ([#559](https://github.com/devswha/herdr-web-ui/pull/559))
+- On a phone, the sidebar's **Agents** list starts folded, leaving the drawer to the workspaces.
+  A tap on its heading opens it. ([#559](https://github.com/devswha/herdr-web-ui/pull/559))
+- On a touch screen, the chip above the message box that takes Claude Code's suggested next
+  prompt is on again unless **Settings → Chat → Suggestion chip** turns it off.
+  ([#559](https://github.com/devswha/herdr-web-ui/pull/559))
+- Every agent's chat uses one compact Send/Stop button on desktop and phones. Sending during
+  work schedules a next-turn message; its explicit ↑ Send now action delivers it immediately,
+  or X discards it. The bridge claims each message once and pauses automatic delivery when
+  the connection changes, including during delivery and when a request races the end of a turn.
+  While a draft shows Send in Stop's place, Escape in the message box stops the agent.
+  A remote PC whose bridge is older than this keeps the draft during work and asks for an
+  update; its messages held by earlier versions keep their own Send now.
+  Chat status words stay hidden, and desktop plan usage shows the five-hour limit first with
+  weekly fallback; phones omit the compact quota.
+  ([#520](https://github.com/devswha/herdr-web-ui/pull/520))
+- The message box follows **Settings → Chat font size**, as the transcript and prompt cards
+  already did: with a mouse it is typed at the transcript's size, and on a touch screen it
+  grows with a size above 16px (it stays at 16px or more, so iOS still does not zoom).
+  ([#515](https://github.com/devswha/herdr-web-ui/pull/515) by @phirschybar)
+- Workspace rows no longer reserve a left column for a reorder grip. Rows can still be dragged
+  directly or moved with Alt+Up/Down while focused.
+  ([#521](https://github.com/devswha/herdr-web-ui/pull/521))
+- The sidebar follows herdr's separate workspace and agent lists, drawn on one quiet grid. Every
+  row leads with the coding agent that runs in it (its mark, or a terminal for a shell and a
+  branch for a worktree without an agent) and ends in one status column, drawn by urgency (a red question mark waits for an answer, a
+  green dot has finished and was not looked at yet, a dim arc runs), which stays empty while
+  an agent is ready. Agent rows name the agent, then the PC when there are several, the workspace
+  and the tab. Sections are parted by space instead of rules, a row's menu button takes no room
+  until the row is hovered or selected, and a workspace row starts with a folder: where linked
+  worktrees sit under the workspace, the folder folds them, and folded it shows how many it
+  holds and the most urgent state among its checkouts. A PC's fold sits beside its `+`. A pane herdr could
+  not restore shows a warning glyph,
+  and the background-task count sits on agent rows.
+  Workspace rows keep their names, and agents open their panes directly. Tab and pane navigation
+  stays in the tab strip and palette.
+  ([#521](https://github.com/devswha/herdr-web-ui/pull/521))
+- The sidebar no longer opens with a **Needs you** list of waiting panes. A pane that waits
+  shows its state on its workspace row and its row in **Agents**, and the alerts are unchanged.
+  ([#521](https://github.com/devswha/herdr-web-ui/pull/521))
+- **Settings → Appearance → Sidebar grouping** is gone, and with it the **By folder** view that
+  listed panes under their working directory. The sidebar always lists workspaces, a repository's
+  worktrees under it. A device that had chosen **By folder** shows workspaces again; its workspaces
+  and panes are untouched.
+  ([#556](https://github.com/devswha/herdr-web-ui/pull/556))
+- Opened worktree branches appear beneath their repository workspace, using actual branch names
+  from herdr's worktree API and keeping custom workspace names beside them. Creating or opening
+  a worktree expands its group. The browser demo supports these worktree actions with fictional
+  checkouts too. ([#521](https://github.com/devswha/herdr-web-ui/pull/521))
+- A linked worktree's row in the sidebar is titled by its workspace name, the one its owner gave it
+  or the one herdr made from the branch, instead of the branch; the branch follows in dim text
+  where the name does not already say it, and in the row's tooltip and menu. The sidebar's mark
+  for an agent waiting for an answer is a red question mark instead of a filled speech bubble;
+  a finished one keeps its green dot.
+  ([#557](https://github.com/devswha/herdr-web-ui/pull/557))
+
+### Fixed
+- A pane whose agent has just started is listed as an agent's pane within a moment, where the
+  list on this PC could take up to 5 seconds to say so. A device that opened the pane in that
+  time took it for a shell: it opened the terminal instead of the chat, and resized the
+  terminal shared with the other devices.
+  ([#537](https://github.com/devswha/herdr-web-ui/pull/537))
+- A message can no longer freeze or crash the chat by its shape alone. A long run of underscores
+  nested emphasis until the page ran out of stack; a URL followed by thousands of closing
+  parentheses, a formula opened on many lines and never closed, a long blank line under a table
+  header, a list item of thousands of lines, and a heading or list item holding a line-separator
+  character after a long run of spaces each took seconds to read; a line of plus signs took half
+  a second, and a formula of thousands of nested fractions a second more. Each is read in a few
+  milliseconds now. Emphasis stops nesting after sixteen levels, and a formula nested deeper than
+  a hundred braces shows as its source.
+  ([#547](https://github.com/devswha/herdr-web-ui/pull/547))
+- A workspace row's state rolls up as herdr's does: a workspace with one finished agent and one
+  still running shows DONE, where it showed RUN.
+  ([#521](https://github.com/devswha/herdr-web-ui/pull/521))
+- Codex chat hides internal memory citation blocks and pairs the answer with its display record,
+  so a reply that uses memory appears once without raw citation markup. Quoted code examples
+  keep their text. ([#514](https://github.com/devswha/herdr-web-ui/pull/514) by @JJLiebig)
+- An in-app alert and its sound are no longer lost now and then: when the list of panes showed
+  a pane waiting or finished a moment before the status change itself arrived, the open app
+  took the change for old news and said nothing. A finished turn is also measured from its own
+  start in that case, so a short turn is not told as a long one.
+  ([#536](https://github.com/devswha/herdr-web-ui/pull/536))
+- **Dismiss** on the terminal's notice that input was not sent works: a tap or click on it went
+  through to the terminal under it and the notice stayed.
+  ([#508](https://github.com/devswha/herdr-web-ui/pull/508))
+- The Claude usage meter shows a model's own weekly limit, such as Fable's, which Anthropic
+  reports only in its list of limits; the Opus and Sonnet weeks are still read as before.
+  ([#532](https://github.com/devswha/herdr-web-ui/pull/532) by @bertkiefer)
+- A Claude or Codex question asked right after a message that began with a number ("1. …") shows
+  as a question card in the chat again. The sent message, still on screen above the question, was
+  read as an option of its own, so the question fell back to a card of arrow keys. Option
+  descriptions that wrap over two lines are shown whole, not cut off at the first line.
+  ([#517](https://github.com/devswha/herdr-web-ui/pull/517) by @kilhyeonjun)
+- With `HERDR_WEB_TAILSCALE_SERVE_ONLY=1`, which declares `tailscale serve` the only way in, your
+  own phone lands in the app as soon as it opens the `tailscale serve` address, with no pairing
+  code, on a tailnet that one Tailscale login owns and that has no tagged node on it. Before,
+  `tailscale serve` states no login for some of those requests, and every request without one was
+  taken for a tagged node's and asked to pair. Off by default, such a request still pairs. Another
+  Tailscale login is still refused, a tagged node still pairs, Funnel stays closed, a LAN client
+  that claims the same headers still gains nothing, and a configured token is still required of
+  everything but a paired device.
+  ([#525](https://github.com/devswha/herdr-web-ui/pull/525) by @jetmobsol)
+
+## [0.3.52] - 2026-10-06
+
+### Added
+- A PC whose connect or reconnect is refused on the bridge version check now offers
+  **Update bridge and connect** in its dialog, so a PC that was never registered — no sidebar
+  row, no saved key — can be updated and connected in one go, through the same approval list
+  a first install shows. ([#506](https://github.com/devswha/herdr-web-ui/pull/506) by @suho-han)
+- A lilac palette in Settings → Appearance → Colors: one quiet lavender with indigo ink and accent
+  in light, and the same hue at night in dark.
+  ([#443](https://github.com/devswha/herdr-web-ui/pull/443) by @WOULDU-pres)
+- New workspace's **Browse** filters the loaded folders in the current directory as you type.
+  Navigation clears the filter, and a truncated listing says when search covers only the first
+  500 folders. ([#430](https://github.com/devswha/herdr-web-ui/pull/430) by @suho-han)
+- The usage meters read OpenCode Go's limits too: its rolling session, the week and the month,
+  with the key OpenCode keeps in `~/.local/share/opencode/auth.json` (under `XDG_DATA_HOME`
+  when it is set) or the `OPENCODE_API_KEY` variable. An OpenCode key without a Go
+  subscription shows no meter.
+  ([#444](https://github.com/devswha/herdr-web-ui/pull/444) by @diogo7dias)
+
+### Changed
+- The README answers common questions about installation, Windows support, phone access,
+  privacy and deployment, in English, Korean, Japanese and Chinese.
+  ([#495](https://github.com/devswha/herdr-web-ui/pull/495))
+- The website says what it is for in its title and description (Claude Code and Codex from your
+  phone), answers seven common questions in a new FAQ section, and gives search engines a sitemap
+  and structured data for the app and the FAQ.
+  ([#497](https://github.com/devswha/herdr-web-ui/pull/497))
+- The website's headline is "Run herdr from anywhere.", and the page catches up with the app:
+  the Windows install command, pi among the native transcripts, the Alt key and a card for voice
+  input. Its figures now show the contributor count and the plugin's place by stars among herdr
+  plugin repositories, and the comparison with other phone clients was read again in October 2026.
+  ([#494](https://github.com/devswha/herdr-web-ui/pull/494))
+- On macOS a Codex pane's chat costs the server about a sixth of what it did on each poll (a
+  median of 16 ms instead of 103 ms, measured on two live Codex panes). The store a Codex process
+  writes to is remembered for its pid and arguments instead of being read with `ps` every 2 s,
+  and the rollout it has open is found with one `lsof` run for the pane's processes (a wrapper
+  and the binary are two) that skips the stat calls a name does not need.
+  ([#491](https://github.com/devswha/herdr-web-ui/pull/491) by @kilhyeonjun)
+- The app's startup script is a fifth smaller (408 kB to 331 kB gzipped, and 48 kB to 39 kB of
+  CSS): KaTeX, which draws math in the chat, loads with the first reply that has an expression.
+  Until it arrives, that expression shows in its source form, as it did when KaTeX could not read it.
+  ([#493](https://github.com/devswha/herdr-web-ui/pull/493) by @kilhyeonjun)
+
+### Fixed
+- A Claude Code pane started with its own `CLAUDE_CONFIG_DIR` (a launcher such as cac keeps one
+  store per environment) shows its chat. Before, only `~/.claude` was searched, so the chat was
+  unavailable and only the terminal worked. The store is read from the pane's Claude process, as
+  for Codex's `CODEX_HOME`, else from the server's own `CLAUDE_CONFIG_DIR`, else `~/.claude`.
+  On macOS the pane's session is also found from Claude's own process record when herdr's hook
+  has not reported one, as it already was on Linux. Node-based Claude processes reported by
+  their `argv0` title are recognized too.
+  ([#504](https://github.com/devswha/herdr-web-ui/pull/504) by @leo1oel)
+- With Language set to **System**, English stays selected when it is the browser's first
+  supported language, even if Japanese, Korean or Chinese appears later in its preferences.
+  Before, English was skipped in favor of a later supported language.
+  ([#496](https://github.com/devswha/herdr-web-ui/pull/496) by @snowykr)
+- An OmO pane's chat keeps a background task's title after the newest page moves past the prompt
+  that started the task, as 0.3.51 meant to. Before, the title was kept only when a transcript
+  deleted earlier had used the same inode (as Linux reuses them) and left its titles behind, and
+  such a transcript's titles could name another session's tasks with the same id.
+  ([#498](https://github.com/devswha/herdr-web-ui/pull/498) by @kilhyeonjun)
+- An OmO pane that asks you a question reads INPUT until you answer. Before, a question OmO
+  waits on read RUN, and one it asks without waiting (it keeps working, or ends its turn, with
+  the question folded over its input box) read RUN or DONE.
+  ([#488](https://github.com/devswha/herdr-web-ui/pull/488))
+- A question OmO asks without waiting gets its card in the chat: tap an option, or type a reply
+  to answer it. Before, the chat showed no card for it, so an option could only be picked in the
+  terminal. ([#488](https://github.com/devswha/herdr-web-ui/pull/488))
+- A Claude, omp or pi pane that has just started opens its chat on the greeting ("What should
+  Claude do in …?"), as an OmO pane already did. Before, until the first message the chat
+  showed the terminal's text or an empty line instead, so a new workspace or worktree never
+  greeted you. ([#500](https://github.com/devswha/herdr-web-ui/pull/500))
+- `/model` sent from a Claude Code pane's chat shows Claude's model list as a card: tap a model,
+  or type its number, and that pane's session switches to it. Before, the chat showed nothing
+  while the terminal waited on the list, so a model could only be picked there. The card picks
+  for this session only (Claude's `s` key). Saving a model as the default for new sessions stays
+  in the terminal, where Enter on the list does it. The card offers the rows Claude draws (ten of
+  a longer list, fewer in a short pane) and says how many more the terminal lists.
+  ([#501](https://github.com/devswha/herdr-web-ui/pull/501))
+- `/model` sent from a Codex pane's chat shows Codex's lists as cards, one after the other: the
+  models, then the reasoning levels of the model you pick. The level you pick applies to that
+  pane's session only (Codex's `s` key). Saving a default stays in the terminal, where Enter
+  does it. Open "More reasoning…" in the terminal; once open, its Max and Ultra options can also
+  be picked for this session from the chat. Before, the chat showed nothing while the terminal
+  waited on the list.
+  ([#503](https://github.com/devswha/herdr-web-ui/pull/503))
+
+### Maintenance
+- Browser regressions run on macOS as well as Linux, with portable fixtures and bounded
+  readiness checks. ([#499](https://github.com/devswha/herdr-web-ui/pull/499) by @kilhyeonjun)
+- Isolated test panes start at a shell prompt even where zsh includes its new-user wizard.
+  ([#502](https://github.com/devswha/herdr-web-ui/pull/502))
+- The website serves the Google Search Console ownership verification file.
+  ([#505](https://github.com/devswha/herdr-web-ui/pull/505))
+
+## [0.3.51] - 2026-10-06
+
+### Added
+- **Open here** on a held pane explicitly takes it from another web bridge or standalone
+  `herdr terminal attach`. A displaced bridge waits with the same button; it never takes the pane
+  back automatically. Available on supporting bridges, for interact connections only.
+  ([#368](https://github.com/devswha/herdr-web-ui/pull/368) by @WOULDU-pres)
+
+- The terminal's key bar on a touch screen has an **Alt** key beside Ctrl. Like Ctrl it holds for
+  one key: Alt then a letter, Backspace or Enter sends ESC before it, and Alt then an arrow sends
+  Alt+arrow. **Settings → Appearance → Key bar** turns Alt off or adds Shift+Tab, Home/End,
+  PgUp/PgDn, Ctrl+D, Ctrl+Z, `|`, `~` and `/`, each in a fixed place in the row. Esc, Tab, Ctrl,
+  the arrows and Ctrl+C stay as they were. ([#487](https://github.com/devswha/herdr-web-ui/pull/487))
+
+### Fixed
+- A tab strip you scrolled yourself to look at other tabs stays where you left it when a
+  typeface arrives late and redraws the tabs' names at another width. Before, the strip
+  brought the open tab back into view then; it still does so until you have scrolled it.
+  ([#479](https://github.com/devswha/herdr-web-ui/pull/479))
+- On macOS, a gjc pane's chat finds its session from the terminal breadcrumb gjc leaves. Before,
+  the process start time it is matched by was read as UTC, so on any other time zone every fresh
+  breadcrumb looked hours old and was passed over. Process start times, which Codex, OmO and gjc
+  panes are matched by, are now read on macOS too (they were only read from Linux `/proc`).
+  ([#484](https://github.com/devswha/herdr-web-ui/pull/484) by @kilhyeonjun)
+- The chat of a Codex pane started with its own `CODEX_HOME` (a launcher that keeps one store
+  per profile) shows its conversation. Before, the server looked for every rollout under its own
+  `CODEX_HOME` or `~/.codex`, found none for that pane and fell back to the terminal scrollback.
+  The store is now read from the pane's Codex process (its environment), for the conversation,
+  images, tool output and queued questions; a configured Codex home still wins.
+  ([#486](https://github.com/devswha/herdr-web-ui/pull/486) by @kilhyeonjun)
+- The chat shows the card for a question Claude Code asks with `AskUserQuestion` in three
+  layouts it missed: options that carry a preview (drawn in a box to the right of the options,
+  with a notes line and an unnumbered "Chat about this"), a question asked while Claude keeps a
+  task list under its panel (`3 tasks (0 done, 3 open)` and a row per task), and a named
+  session's rule drawn under the question with no task list. Before, the first showed the
+  fallback card and the other two were taken for answered questions, so the chat showed none.
+  ([#485](https://github.com/devswha/herdr-web-ui/pull/485) by @kilhyeonjun)
+- A table in the chat that is wider than the reply scrolls sideways in its own box. Before, it
+  squeezed every column to fit, down to a letter or two, so words and file paths broke after
+  any letter. A column is now never narrower than its longest word.
+  ([#481](https://github.com/devswha/herdr-web-ui/pull/481) by @aNNdii)
+- In the chat of an OmO pane, a background task that ends shows where OmO reported it: a
+  card that says how many tasks ended, and for each its summary, whether it finished, failed
+  or was cancelled, the agent and model it ran as, how long it took, its turns, tool calls and
+  tokens, and its answer on request. Before, the chat showed nothing when a task ended, and
+  what the agent did after it ran on in the same block as if nothing had come in. The `task`
+  row reads the summary the call gave its task instead of its short description, and opened
+  it lists each task it started with its agent and prompt, instead of its raw input or a
+  checklist of "task 1", "task 2" nobody ticks.
+  ([#477](https://github.com/devswha/herdr-web-ui/pull/477) by @nahwan-kim)
+- In the chat of an OmO, omp, gjc or pi pane, an answer stays an answer when the agent wakes
+  again after it on its own, for a monitor's event or a background command that ended. Before,
+  what it did after the wake-up ran into the same turn, and the answer, a whole review for
+  example, was folded away under "Worked for" while the terminal showed it.
+  ([#483](https://github.com/devswha/herdr-web-ui/pull/483))
+
+## [0.3.50] - 2026-10-06
+
+### Changed
+- The app brings its own typefaces instead of counting on the ones a device has: Pretendard for
+  the interface and the chat, and JetBrains Mono for code in the chat and the interface, so a
+  phone or a PC without them draws Latin text and Korean in the same letters as one with them.
+  Japanese and Chinese are not the same everywhere: Pretendard has kana and only a few hundred
+  ideographs, so kanji and Chinese text are still drawn in the device's own font, and a Japanese
+  line mixes the two. Nothing is fetched from the internet: the files come from your own PC
+  with the app, a page downloads only the pieces of
+  Pretendard its text needs (about 90 KB for a chat in English, about 200 KB more once Korean
+  is on the page), and each piece is kept for offline use after that. The terminal is untouched: its
+  font, its **Terminal font** setting and its grid are as before, and a **Chat font** you chose
+  still comes first. In the chat, answers, your own messages and what the agent says while it
+  works are a step larger (15px at the default **Chat font size**, which still scales
+  everything) on a looser line; bold is a semibold; inline code sits a little under its line and
+  code blocks are a step larger with more room; the message box is typed at the same size with
+  a mouse and stays 16px on touch; the empty chat's question is a larger line. Tool rows, times
+  and other small labels keep their size.
+  ([#473](https://github.com/devswha/herdr-web-ui/pull/473))
+- In the chat's message box the agent's mark, the model, the reasoning level and the context
+  ring sit together in one quiet pill, and the model is shown by its name where the id is a
+  regular one: `claude-opus-5-5` reads **Opus 5.5**, `claude-sonnet-5` **Sonnet 5**, `gpt-5.6`
+  **GPT-5.6**, `gpt-5.6-sol` **GPT-5.6-Sol**, `glm-5.3` **GLM-5.3**, and the level follows as **High**. No name is ever
+  guessed: any other id (a dated snapshot, a suffix such as `gpt-5.6-sol-max`, another provider's
+  prefix, another vendor, a spelling that is not the vendor's own such as `claude-sonnet-5-05`) is
+  shown exactly as received, in the code font. Behind a name the id
+  as received is in the name's tooltip and is read by a screen reader; on a touch screen it is
+  not shown yet. A pane that records no reasoning level shows the name alone. The pill only shows the model, it is not a button yet. Where the
+  pill does not fit beside Queue (seen on a 390px phone) it steps aside whole while Queue is
+  showing, and the context ring stays.
+  ([#467](https://github.com/devswha/herdr-web-ui/pull/467))
+- In the chat, the line with the model sits inside the message box, as its last row, instead of
+  above it, on a phone as on a desktop. It shows the agent's mark, background tasks, the model,
+  the reasoning level as one word (`high`) and the context ring. The agent's written name and the
+  READY / RUN / INPUT word are no longer drawn there (a screen reader still reads them): the
+  header names the pane, and Stop, the working row and the approval card say the state. DONE is
+  still drawn, since nothing else in the chat says a turn ended and has not been seen. Where
+  the box is narrow, beside the sidebar for one, the background-task chip shows its count
+  before the model's name is cut. In dark themes Queue loses its outline.
+  ([#456](https://github.com/devswha/herdr-web-ui/pull/456))
+- The chat's message box is laid out like a chat app's: a rounder card with the message on top
+  at the card's full width, and one row of controls under it. On the left a **+** button
+  attaches files (it was a paperclip) and the background-task chip follows it; on the right are
+  the model, the reasoning level and the context ring, then one round button. Send is an arrow
+  pointing up, and Stop is the same circle in the same place, so only the glyph changes when a
+  turn starts and ends. While the agent works, Queue appears once the box holds text or a
+  file that is still uploading; with an empty box Stop is the only button, and Queue still holds a message only
+  when you press it, after which the keyboard's focus is back in the message box. Where the two
+  do not fit side by side (a phone, or a long model name beside the sidebar) the model's name
+  steps aside while Queue is showing, so neither is cut; without Queue the reasoning level
+  steps aside before the name loses a letter. While reconnecting, "Reconnecting… message held here, never queued" is said once: in
+  the empty box, and under the model once there is a draft, on a phone too, where it used to be
+  hidden. It is no longer cut with an ellipsis, and neither is "Uploading file…"; Queue is not
+  shown while not connected, and a disabled Stop loses its colour. With a mouse, the bar that
+  resizes the box shows when the pointer is over the box, while dragging, on keyboard focus
+  and while a height is set by hand; on a touch screen it is always shown.
+  ([#465](https://github.com/devswha/herdr-web-ui/pull/465))
+- The chat is wider on a large screen: the conversation and the message box follow the pane,
+  at least 820px and at most 960px wide, 71% of the pane between. A laptop window keeps the
+  820px it had and a large monitor grows to 960px. Settings → Chat → **Chat width** chooses
+  **Narrow** (820px, as before), **Default**, **Wide** (1152px) or **Full**, the whole pane.
+  The held messages, the approval card and the background-task list keep the same column.
+  Phones and narrow panes look the same as before.
+  ([#463](https://github.com/devswha/herdr-web-ui/pull/463))
+- Held messages above the message box are quiet rows instead of a tinted box: one line above
+  them, a clock with the sentence the box already showed ("Held until the agent is ready", and
+  "· 2 messages" from two), then each message on its own row with **Send now** and **Discard**
+  beside it. A message is still edited in place and still goes out only when you press
+  **Send now**. The rows are as wide as the message box at every window width, and the list
+  scrolls after two and a half rows. When the agent is ready, the clock and **Send now** take
+  the accent colour. While an approval card is open, or in a phone window 600px tall or less (an
+  Android phone with its keyboard up), the rows fold into that one line; tap it to open them. On
+  a phone, **Discard** is an X, and the message box keeps the same side margin as the
+  conversation.
+  ([#466](https://github.com/devswha/herdr-web-ui/pull/466))
+- In the chat, an agent's question, approval or plan no longer sits at the end of the
+  conversation: its card is docked directly above the message box, on the same column, so what
+  is asked and where you answer are one block and the conversation scrolls freely behind it.
+  Held messages stay above it, folded to their one line. The card is plainer: no shadow, its
+  title is the one thing in red (the "INPUT NEEDED" badge is still read by a screen reader),
+  and the options are flat rows with their number as a key, all of equal weight. A command or
+  plan to approve stays in the card's code box and is the only part that shrinks when room is
+  short (six lines, down to two); the card itself is at most 60% of the window, or six rows on a
+  phone with its keyboard up, and scrolls beyond that with Confirm always in sight. The message
+  box says "Type 1–3 to choose…" (or "Type 1–3 or your own reply…") in place of "Answer above:
+  type 1–3 to choose…", which was cut on a phone. While the agent waits for you, the open work
+  block reads "Needs you" with a still red dot in place of "Working…". Answering works as
+  before: a press on an option, a typed number followed by Confirm, or your own reply; Enter in
+  an empty box answers nothing. After a press with a mouse or keyboard, focus goes to the
+  message box, on a tablet or a touch-screen laptop too; a tap never moves it there. The card keeps following Settings → Chat font size and Chat font, and on a phone
+  with its keyboard up a tap on the card's text, or a drag down it, puts the keyboard away as
+  on the conversation.
+  ([#468](https://github.com/devswha/herdr-web-ui/pull/468),
+  [#475](https://github.com/devswha/herdr-web-ui/pull/475))
+
+- In chat, a tool row reads as what the agent did: "Read src/metrics.ts", "Edited
+  src/pages/Reports.tsx", "Ran pnpm test", in place of an icon, the tool's id and a slash. The
+  rows start on the same left edge as the block's header and the prose. The tool's own id
+  (`exec`, `Bash`, `apply_patch`) is the row's tooltip and the first line of the row once
+  opened; a tool without a verb keeps its id in the row. While the agent works, what it says
+  between tool calls is in the answer's size and colour instead of small and dim.
+  ([#457](https://github.com/devswha/herdr-web-ui/pull/457))
+
+- The chat transcript is quieter. A finished turn folds its work under one dim "Worked for" row
+  and only the running turn stays open; a block you open, fold or work inside stays as you left
+  it, and a turn that ended without an answer keeps its words in view. The line
+  above your messages is gone, answers sit closer to their prompt, and your bubble has even
+  corners (no edge in the dark amber, report and charcoal palettes). File paths and links are
+  underlined quietly and take the accent color on hover or focus. With a mouse, a code block's
+  language and copy button appear in its corner on hover, a message's time and copy sit beside
+  the bubble, and an answer has one copy button with "Plain text" beside it; touch keeps the
+  code strip and the MD and TXT buttons.
+  ([#458](https://github.com/devswha/herdr-web-ui/pull/458))
+
+- A chat whose conversation was read and holds no messages yet asks "What should Omo do in
+  my-project?" over the message box, with the PC and the full path under it, instead of a dim
+  "No conversation yet" line in the middle of an empty pane. In a desktop window the question
+  and the message box sit in the middle of the pane until the first message is sent; on a phone
+  the box stays at the bottom. The question is not asked while the agent is working or waiting
+  for an answer, or while a message is held for it. A pane without an agent, or one whose
+  conversation could not be read, looks as before. That still includes a new Claude Code or
+  Codex pane: neither writes its conversation before the first message, so the chat shows the
+  terminal output until then.
+  ([#460](https://github.com/devswha/herdr-web-ui/pull/460))
+
+- The header is one line at every width: the pane's title, then PC › workspace › folder beside
+  it. The folder shows as its last name, and only when the title, the PC or the workspace does
+  not already say it; where the line has no room for the whole of it, it is left out rather than
+  cut. The full path is in the header's tooltip and at the top of the new **⋯** menu.
+  ([#461](https://github.com/devswha/herdr-web-ui/pull/461))
+- **New tab**, **Browse files** and **Alerts** are the items of one **⋯** menu in the header, in
+  place of three buttons; on a phone it also opens the command palette, whose own button left
+  the phone header. Keyboard shortcuts are unchanged. The Alerts item says this device's state
+  in words (**On in the app**, **On in this tab**, **On, pushed to this device**, **Off on this
+  device**), and the **⋯** button carries a dot while alerts are off on this device. This
+  reverses the old bell, whose outline lit while alerts were on.
+  ([#461](https://github.com/devswha/herdr-web-ui/pull/461))
+- The connection chip shows only while the app is reconnecting or disconnected; **live** is no
+  longer written out. In a window narrower than 900px the chip is its pulsing dot.
+  ([#461](https://github.com/devswha/herdr-web-ui/pull/461))
+- From 769px wide the sidebar has its own top row, with its toggle and the search, and the chat
+  has no bar above it: the conversation scrolls under a short fade. The header is 46px there in
+  the comfortable density too. Phones keep their bar. The update notice and a PC's "update the
+  bridge" line are drawn over the pane, not across the window.
+  ([#461](https://github.com/devswha/herdr-web-ui/pull/461))
+
+- The sidebar's footer ends at Settings and the plan meters: the "herdr web ui v…" line and the
+  herdr version beside it are gone from under them. Both versions are read in Settings, in every
+  state: **Updates** always opens with the running app version, and **herdr** shows the running
+  herdr version also where herdr cannot be updated from the app, such as on Windows. A tab that
+  has not been reloaded since the server updated says which version it still runs.
+  ([#462](https://github.com/devswha/herdr-web-ui/pull/462))
+
+### Fixed
+- An answer tapped in the chat for a row the cursor is not on looks at the screen again before
+  it presses Enter (or the first key that does more than move the cursor). A menu answered in
+  the terminal while the answer was moving the cursor could be replaced by another menu, which
+  then took the Enter; the answer now stops with "the prompt changed" unless the screen still
+  shows the card's menu with the cursor on its row, having pressed only ↑ and ↓. It also stops
+  once the agent is back at work under it. And a question asked again with the same text is a
+  card of its own where the app can see that the first asking ended (it was answered from the
+  app, the agent went back to work, or the prompt left the screen), so a typed pick waiting for
+  Confirm, or the card still open on another device, no longer answers the second asking. Not
+  covered: the keys after the first one that does more than move (the text and Enter of a typed
+  answer, the later ticks of a multiple choice), and a prompt answered in a terminal and asked
+  again word for word with nothing the app can see in between. Remote PCs get this with the
+  next `remote-vN` runtime.
+  ([#470](https://github.com/devswha/herdr-web-ui/pull/470))
+- The installed app opens without a network right after an update that renewed its offline
+  store, as this one does. The old store used to be emptied the moment the new version took
+  over, so until the app had been opened online once more, a reload with no connection showed
+  the browser's error page. The old store is now kept until the new one holds the app.
+  ([#473](https://github.com/devswha/herdr-web-ui/pull/473))
+- Ctrl+Enter typed into the live terminal reaches Claude Code as Ctrl+Enter, so a message typed
+  while it works is sent at once instead of waiting in its queue. The terminal sent plain Enter; it
+  now sends the key the way the pane's program asked for (modifyOtherKeys), also to a device that
+  opens the pane later, and keeps Enter for programs that asked for nothing. A phone's input line
+  and a Windows mirror pane send Enter as before.
+  ([#471](https://github.com/devswha/herdr-web-ui/pull/471) by @WOULDU-pres)
+- A draft in the message box keeps its full height when the window or the pane is resized, or
+  the chat width changes: the box used to keep the height of its old line breaks until the next
+  key press. ([#463](https://github.com/devswha/herdr-web-ui/pull/463))
+- With a browser font size other than 16px (from 11.4px up), the Default chat width is never
+  wider than Wide.
+  Its widest was a fixed 960px while Wide follows the font size, so at a 13px font Wide (936px)
+  made the chat narrower than Default on a large monitor. Default's widest now follows the font
+  size too (960px at 16px, 1200px at 20px), and it is never narrower than Narrow's 820px: under
+  an 11.4px font that 820px is itself wider than Wide.
+  ([#474](https://github.com/devswha/herdr-web-ui/pull/474))
+- An update asked for in the first moments after the app starts, or right after another update,
+  waits until the start is over. It used to stop the app in the middle of its start-up check,
+  and the app then fell back to the source checkout or did not come up.
+  ([#455](https://github.com/devswha/herdr-web-ui/pull/455))
+- A PDF on a remote PC opens from the file viewer on Android. Chrome there shows it as an
+  **Open** button, and opening it answered `invalid_origin` ("Use PC controls from this app")
+  instead of the file; a PDF on the app's own PC already opened.
+  ([#448](https://github.com/devswha/herdr-web-ui/pull/448) by @nahwan-kim)
+- In one tab of the app, the alert sound chimes once for alerts that come together from several
+  panes, instead of sounding over itself. A pane that needs input right after one that finished
+  still chimes, once the first chime ends. Two open tabs each chime, as before.
+  ([#439](https://github.com/devswha/herdr-web-ui/pull/439) by @WOULDU-pres)
+- In the terminal on macOS, Cmd+Left and Cmd+Right move to the beginning and end of the
+  input line, using the same terminal keys as Ctrl+A and Ctrl+E.
+  ([#437](https://github.com/devswha/herdr-web-ui/pull/437) by @WOULDU-pres)
+- The DAG viewer pane omo-herdr-dag opens beside an OmO pane no longer appears in the
+  sidebar or the tab strip: an OmO workspace with its viewer shows as a single pane, as it does
+  without one. The viewer can still be opened from the command palette.
+  ([#447](https://github.com/devswha/herdr-web-ui/pull/447) by @nahwan-kim)
+- Attaching a file over 8 MB says so at once, with its size and the limit, instead of uploading
+  it first and answering `/api/pane/image failed (413)`. Past about 96 MB that message gave no
+  reason at all.
+  ([#446](https://github.com/devswha/herdr-web-ui/pull/446))
+- Switching to another pane no longer shows the previous pane's chat for a moment before the
+  new one loads.
+  ([#422](https://github.com/devswha/herdr-web-ui/pull/422) by @Haeminway1)
+- Remote bridge updates use Windows' native tar even when Git's tar comes first on PATH.
+  Independently managed web servers are directed to their own update controls before any
+  remote bundle is installed, instead of repeatedly attempting an update that cannot own them.
+  ([#424](https://github.com/devswha/herdr-web-ui/pull/424) by @islee23520)
+- Chat reads a running GJC session in a pane herdr names no agent for, also when the pane still
+  carries an earlier Codex session report. It used to follow that report, ask the wrong agent
+  and fail to load.
+  ([#423](https://github.com/devswha/herdr-web-ui/pull/423) by @Kinetic27)
+
+## [0.3.49] - 2026-10-04
+
+### Added
+- `HERDR_WEB_PASTE_DIR` saves pasted and attached files to one directory instead of
+  `.herdr-web-ui/` in each pane's project. It is read by the server, for the panes of its own
+  PC; a remote PC keeps the default.
+  ([#357](https://github.com/devswha/herdr-web-ui/pull/357) by @hank-warren)
+- The Antigravity plan meter appears on Linux, where the CLI has no keychain and keeps its
+  sign-in in `~/.gemini/antigravity-cli/antigravity-oauth-token` (or under
+  `ANTIGRAVITY_APP_DATA_DIR`). When a keychain item and the file both exist, the later-expiring
+  one is used, as the Claude meter already does.
+  ([#399](https://github.com/devswha/herdr-web-ui/pull/399) by @diogo7dias)
+- **Settings → Appearance → Colors → Catppuccin**: the [Catppuccin](https://catppuccin.com/palette/) palette,
+  Mocha in dark and Latte in light, laid out as Catppuccin's Zed theme does. Latte's accent and
+  agent-state colors are darkened just enough to stay readable on its light surfaces.
+  ([#414](https://github.com/devswha/herdr-web-ui/pull/414) by @aNNdii)
+- Settings → Alerts → Sound makes an open tab chime when a pane needs input or finishes. It is
+  the page's own audio, so it is heard when a macOS Focus or Do Not Disturb silences system
+  notifications. Off until chosen; the tab needs one tap or key before it may play.
+  ([#346](https://github.com/devswha/herdr-web-ui/pull/346) by @WOULDU-pres)
+
+### Fixed
+- On an Android phone, dragging down at the top of a chat no longer reloads the app. The drag
+  was handed on to the page, where Chrome takes it for pull-to-refresh, so reading back
+  through a conversation kept ending in a reload.
+  ([#413](https://github.com/devswha/herdr-web-ui/pull/413))
+- The app starts on a PC where port 7317 cannot be opened. On Windows with Hyper-V, WSL2 or Docker
+  that port can sit in a range Windows reserves, and the first install ended in "did not start
+  within 25 seconds" with nothing listening. With no `PORT` set, the app now takes the next of
+  17317, 27317, 37317 and 47317 that opens, says which, and keeps it for later starts. A `PORT`
+  you set is never changed: a start says at once that it cannot be opened, and why.
+  ([#415](https://github.com/devswha/herdr-web-ui/pull/415))
+- A start that fails says what the server said: the installers and the Windows start showed only
+  where the log was. A server that exits is reported at once instead of after 20 seconds.
+  ([#415](https://github.com/devswha/herdr-web-ui/pull/415))
+- A notice the agent's runtime puts into a chat is titled by what it says. Every one read
+  **Background result delivered**, also OmO's model-profile warning and gjc's incoming messages.
+  Only a background result keeps that title; any other notice shows its own first line.
+  ([#418](https://github.com/devswha/herdr-web-ui/pull/418), [#344](https://github.com/devswha/herdr-web-ui/pull/344) by @Haeminway1)
+- The bell says what this device does. It read as off while in-app alerts still dropped in,
+  on a browser that had not been asked for notification permission, and it was missing where
+  notifications are blocked or unsupported (plain http). It now reads **Alerts on in the app
+  only** there, and turns those alerts off and on. The first tap on a device that has not
+  answered the permission question still asks it.
+  ([#416](https://github.com/devswha/herdr-web-ui/pull/416))
+
+## [0.3.48] - 2026-10-04
+
+### Added
+- **New worktree** has an **Agent** picker, as New workspace does: the agent you choose starts in
+  the new checkout, and Shell starts none. It opens on the agent you last started. An agent that
+  cannot start leaves the worktree there, with the reason and an **Open** button. Remote PCs
+  start the agent with their next bridge update; until then they make the worktree with a shell.
+  ([#401](https://github.com/devswha/herdr-web-ui/pull/401))
+
+### Changed
+- A new release is installed from the line that announces it: **Update** starts the install
+  there, in place of **View update** and a second button in Settings. The line then shows the
+  install's step and a bar (downloading, installing dependencies, checking, building,
+  restarting), as Settings → Updates does, and ends on **Reload app**. An install that fails
+  offers **Try again** and **Details**.
+  ([#397](https://github.com/devswha/herdr-web-ui/pull/397))
+- On a phone the in-app alert is one line, as wide as its text: the pane's name, then what
+  happened. It was a two-line card across the screen, over the top of the conversation.
+  ([#406](https://github.com/devswha/herdr-web-ui/pull/406))
+- A plan meter beside Settings shows the limit you choose, not the one closest to running out:
+  **Settings → Subscription usage → Limit shown** is **Weekly** (the default) or **Session**, the
+  short limit that is 5 hours on Claude and Codex. Every account shows that limit, so the numbers
+  compare; a plan without it shows its nearest limit as before. Accounts you have not arranged
+  keep the order the server lists them in instead of moving as their usage does, and **Nearest
+  limit first** is gone with that sorting.
+  ([#408](https://github.com/devswha/herdr-web-ui/pull/408), [#343](https://github.com/devswha/herdr-web-ui/pull/343) by @Haeminway1)
+- The plan meters no longer have a place at the top of the sidebar. **Settings → Subscription
+  usage → Where** is gone and the meters stay beside Settings, where a tap still lists every
+  limit with its reset time. A device that had chosen the top goes back to the chips.
+  ([#407](https://github.com/devswha/herdr-web-ui/pull/407))
+
+### Fixed
+- On an iPhone the image viewer's controls and the composer stay inside the usable screen: the
+  viewer is bounded by the safe-area insets and the keyboard's height, the keyboard is told from
+  the viewport's geometry rather than from focus alone, and in-app alerts stay below the header.
+  ([#400](https://github.com/devswha/herdr-web-ui/pull/400) by @Haeminway1)
+- A Linux or macOS PC whose herdr was lost to a restart or a kill connects again. herdr leaves
+  its socket file behind, the bridge took that file for a running herdr and did not start, and
+  **Update** ended in "Bridge did not start" each time. The bridge now starts herdr when nothing
+  listens on that socket. PCs get this with their next bridge update.
+  ([#405](https://github.com/devswha/herdr-web-ui/pull/405))
+- The Windows installer tries herdr's download once more when it fails, and says so when it fails
+  again: herdr's installer gives up on a connection that stays under 1 KB/s for 30 seconds, and
+  the install ended there with a message about security software.
+  ([#403](https://github.com/devswha/herdr-web-ui/pull/403))
+- Claude conversations on Linux can be read without the Herdr integration hook when Claude's
+  native PID record identifies the live interactive session. Reused PIDs, invalid records and
+  multiple Claude processes stay unresolved instead of selecting a same-directory conversation.
+  ([#376](https://github.com/devswha/herdr-web-ui/pull/376) by @WOULDU-pres)
+- Codex conversations recognize renamed executables and recover missing Linux process arguments,
+  preserving resume and process-bound session identity when an answer is no longer on screen.
+  ([#376](https://github.com/devswha/herdr-web-ui/pull/376) by @WOULDU-pres)
+- Reading a Codex conversation on a phone no longer scrolls the same idle agent's
+  terminal on the desktop as the conversation refreshes.
+  ([#393](https://github.com/devswha/herdr-web-ui/pull/393) by @JJLiebig)
+- A question card is read from the bottom of the pane even when its terminal was scrolled up
+  into its history. A scrolled omo or pi pane showed every later question as the last-resort card
+  with only Enter and Esc, since the menu drawn at the bottom was out of the scrolled view.
+  ([#402](https://github.com/devswha/herdr-web-ui/pull/402) by @nahwan-kim)
+- The line saying a PC needs a bridge update (or setup approval) to reconnect can be closed. A PC
+  whose bridge could not be updated kept it open on every screen, which on a phone took a row
+  for good. The PC's row in the sidebar still says what it needs, and the line returns the next
+  time that PC needs something after having connected.
+  ([#397](https://github.com/devswha/herdr-web-ui/pull/397))
+
+## [0.3.47] - 2026-10-03
+
+### Added
+- A tab is renamed and closed from the tab strip, as herdr's prefix+shift+t and prefix+shift+x.
+  With a mouse: an **x** on the open tab and on the one under the pointer, a double-click on the
+  name to type a new one, a right-click for a menu with **Rename tab** and **Close tab**. With
+  keys on a focused tab: F2 and Delete. On a phone the open tab carries a chevron that opens
+  the same menu. A close asks first only when an agent in the tab is still working or the tab
+  is the workspace's last one, which closes the workspace with it. Remote PCs get the two with
+  their next bridge update.
+  ([#391](https://github.com/devswha/herdr-web-ui/pull/391))
+
+### Changed
+- **New session** is **New workspace**: the `+` on a PC's header, the button of an empty PC, the
+  command palette action and the Settings → Shortcuts row create a herdr workspace, and say so
+  now, beside **New tab**. The dialog's buttons are **Start**, **Open** and **Close dialog** in
+  both of its forms. The shortcut and saved settings are unchanged.
+  ([#389](https://github.com/devswha/herdr-web-ui/pull/389))
+- **New worktree** opens with a branch and a name already filled in, as herdr's own form does:
+  a `worktree/brave-valley-07f8` style branch, selected so typing replaces it, and a name that
+  follows the branch until you change it.
+  ([#388](https://github.com/devswha/herdr-web-ui/pull/388))
+
+### Fixed
+- In the iPhone home screen app, a dialog with a text field stays above the keyboard: the command
+  palette, and the other bottom sheets, ended at the bottom of the screen, behind the keyboard, and
+  a palette with few results was hidden whole.
+  ([#395](https://github.com/devswha/herdr-web-ui/pull/395))
+- On a phone the header shows the pane's title again: the desktop **New tab** button was not
+  hidden there, took the title's room, and pushed a narrow phone's page wider than its screen.
+  ([#392](https://github.com/devswha/herdr-web-ui/pull/392))
+- The tab strip keeps the open tab in view when a pane is opened from the sidebar, the palette
+  or an alert, its `+` stays at the end of the strip however many tabs there are, and on a touch
+  screen a split tab's pane picker no longer overlaps the tab's name.
+  ([#392](https://github.com/devswha/herdr-web-ui/pull/392))
+- A tab herdr names by its number reads **Tab n** by its place in the strip: after a tab before
+  it closed, it showed as a bare number.
+  ([#391](https://github.com/devswha/herdr-web-ui/pull/391))
+- Picking a pane that opens in the chat lens, while a pane in the terminal lens is open, no longer
+  resizes the terminal other devices share. The chat lens was already leaving the size alone when
+  the page opened on the pane; a switch from the sidebar still fitted it to this device once.
+  ([#390](https://github.com/devswha/herdr-web-ui/pull/390))
+
+## [0.3.46] - 2026-10-03
+
+### Added
+- A workspace row's **⋯** menu has **New worktree** and **Open worktree…**, as herdr's own
+  worktree keys do. New worktree checks a branch out as a git worktree under herdr's worktree
+  folder and opens it as a workspace next to the repository's; Open worktree… lists the
+  repository's other checkouts and opens one, or goes back to the workspace it is already open
+  in. Remote PCs get the two with their next bridge update.
+  ([#383](https://github.com/devswha/herdr-web-ui/pull/383))
+- In the By workspace view a repository's worktree workspaces sit under its row, as herdr's own
+  sidebar keeps them. A worktree row's menu ends in **Delete worktree checkout…**, which deletes
+  the folder and closes the workspace but keeps the branch; a checkout with unsaved changes is
+  refused first, in git's words, with **Delete anyway** as the second step. Closing a repository
+  workspace over open worktrees says so and closes them with it.
+  ([#384](https://github.com/devswha/herdr-web-ui/pull/384))
+- **New tab**, as herdr's prefix+c: a workspace row's **⋯** menu, the header's **New tab** button
+  on a desktop, the command palette and the tab strip's `+` open the session dialog as *New tab*,
+  with the folder fixed to the workspace's and the agent and an optional tab name to choose. The
+  tab opens in the workspace with its agent started the way a new session's is. Remote PCs get
+  it with their next bridge update. The server half starts from
+  [#362](https://github.com/devswha/herdr-web-ui/pull/362) by @WOULDU-pres.
+  ([#386](https://github.com/devswha/herdr-web-ui/pull/386))
+- A tab strip over the pane, as herdr's tab row, once a workspace has more than one pane: one
+  entry per tab with the agent state as a dot, the open one underlined; a tab herdr still names
+  by its number reads **Tab 2**. A tab opens the pane last viewed in it, and a tab split into
+  several panes in the TUI has a picker of them beside its name.
+  ([#386](https://github.com/devswha/herdr-web-ui/pull/386))
+
+### Changed
+- The sidebar lists one row per workspace, as herdr's Spaces sidebar does, instead of a header
+  with a row per pane. The row shows the workspace's current pane (the selected one, else the one
+  last viewed there, else the one herdr has in front) and the roll-up of its agents' states; its
+  other panes are reached from the tab strip, the command palette and **Needs you**. Workspace
+  headers, numbers and folds are gone; folder folds stay. **Rename pane** renames the pane the
+  row shows, and a close asks first, as before.
+  ([#386](https://github.com/devswha/herdr-web-ui/pull/386))
+
+### Fixed
+- Settings → Updates no longer leaves **Check for updates** and **Update and restart** disabled
+  when the answer to a click arrives while the page is hidden, as when a phone sends the app to
+  the background. The status poll pauses with the page; the click's answer now lands anyway.
+  ([#381](https://github.com/devswha/herdr-web-ui/pull/381))
+- The Windows installer finishes on a PC that has no Bun yet. Bun's own installer left the
+  PowerShell session without the system PATH, so the next step stopped with `git` not recognized
+  or herdr's `program not found`, and installing Bun by hand first was the only way through.
+  ([#385](https://github.com/devswha/herdr-web-ui/pull/385))
+
+## [0.3.45] - 2026-10-03
+
+### Added
+- **Settings → herdr → Update herdr** updates herdr itself from the app, on the PC the app runs
+  on (Linux and macOS). herdr refuses `herdr update` typed into one of its panes, and every
+  terminal in the app is a pane, so the server runs it instead: it installs the newest herdr and
+  moves the running panes onto it. Panes and agents keep running, and open terminals reconnect.
+  A newer herdr installed from a shell is picked up the same way.
+  ([#373](https://github.com/devswha/herdr-web-ui/pull/373))
+
+### Changed
+- Each sidebar row has one `⋯` button in place of a hover pencil and a two-click X. Its menu
+  renames the workspace or the pane and closes the row: a close that takes the workspace with it
+  (a one-pane row, or **Close workspace** on a workspace header) asks first, as herdr's
+  `ui.confirm_close` does, and a pane that leaves its workspace standing closes at once. On a
+  phone the menu is a bottom sheet.
+  ([#379](https://github.com/devswha/herdr-web-ui/pull/379))
+- The sidebar has no top bar. A session starts from the `+` on its PC's header, as before, or from
+  the **New session** button an empty PC now shows; Mod+Shift+N and the palette still open it on
+  the selected PC. **Add PC** moved to Settings → Remote PCs, above the bridge auto-update switch,
+  and the command palette has it too.
+  ([#378](https://github.com/devswha/herdr-web-ui/pull/378))
+- In the sidebar's By workspace view, a workspace with one pane is a single row again, as it was
+  before 0.3.44: no numbered header above it, and the row carries the reorder handle and names
+  its workspace on its second line. A workspace with several panes keeps its header. A fold made
+  on a one-pane workspace in 0.3.44 no longer hides its row.
+  ([#371](https://github.com/devswha/herdr-web-ui/pull/371))
+- On a desktop the terminal no longer has a bar under it holding one keyboard button. The input
+  line or direct typing is still chosen in Settings → Terminal input mode, and a touch screen
+  keeps the button in its key bar.
+  ([#372](https://github.com/devswha/herdr-web-ui/pull/372))
+
+### Fixed
+- An open terminal no longer says "terminal ended" when herdr hands its panes to a new server,
+  as `herdr update --handoff` and `herdr server live-handoff` do. The pane is still running, so
+  the terminal attaches to it again for everyone viewing it.
+  ([#370](https://github.com/devswha/herdr-web-ui/pull/370))
+- Cmd+Backspace on macOS sends Ctrl+U in the live terminal, deleting the input back to
+  the start of the line instead of a single character. Pending IME text keeps its order.
+  ([#347](https://github.com/devswha/herdr-web-ui/pull/347) by @WOULDU-pres)
+- Opening a pane in the chat lens leaves its terminal at the size it has. A phone's chat lens, its
+  keyboard included, no longer narrows the pane for a desktop showing it; switching to the terminal
+  lens still fits the pane to that device. A remote PC gets this with its next bridge update.
+  ([#363](https://github.com/devswha/herdr-web-ui/pull/363) by @WOULDU-pres)
+- An OmO pane that has not been asked anything yet, or has just run `/new`, shows an empty chat
+  instead of "Conversation unavailable". OmO writes its session file only with the first message,
+  so the chat found no conversation until then and offered the terminal output instead.
+  ([#360](https://github.com/devswha/herdr-web-ui/pull/360) by @nahwan-kim)
+- An answer tapped on a prompt card for a screen the app does not know goes through while the
+  agent's working line ticks on that screen. The card's id took in the line's spinner, time and
+  token count, so a tap after each tick was refused with "the prompt changed" and took several
+  tries. Anything else that changes on the screen still refuses the answer.
+  ([#377](https://github.com/devswha/herdr-web-ui/pull/377), [#365](https://github.com/devswha/herdr-web-ui/pull/365) by @Haeminway1)
+
+## [0.3.44] - 2026-10-03
+
 ### Added
 - On the personal fork, Devin CLI panes with an unambiguous native session show the
   active conversation branch and tool activity in Chat from the read-only SQLite store.
@@ -30,6 +907,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - The top usage panel shows larger percentages, remaining-capacity colors and compact reset
   countdowns with their local time. Expired reset times stay hidden until fresh usage arrives.
   ([#336](https://github.com/devswha/herdr-web-ui/pull/336) by @Haeminway1)
+- Pane titles that contain a directory show its last folder, and matching workspace and folder
+  names appear once in the sidebar and command palette, including Windows paths.
+  ([#337](https://github.com/devswha/herdr-web-ui/pull/337) by @Haeminway1)
+- In the sidebar's By workspace view, a pane row no longer repeats the workspace its header names.
+  Its second line shows the folder only when neither the title nor the workspace already says it.
+  ([#358](https://github.com/devswha/herdr-web-ui/pull/358))
 
 ### Fixed
 - GJC conversations are resolved from the foreground process directory when it differs from
@@ -39,13 +922,41 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   Native Android/Gboard checks also fixed stale editor text after Backspace breaking the next
   Hangul word. Secret entry now refuses a held or unready attachment and failed PTY writes.
   ([#334](https://github.com/devswha/herdr-web-ui/pull/334))
+- New session in the browser demo opens the new session instead of leaving a blank page.
+  ([#355](https://github.com/devswha/herdr-web-ui/pull/355))
 - Terminal input keeps multi-character IME commits and emoji while disconnected, waits for the
   attachment before sending keys, and reports input failures. Unsent input lines survive pane,
   lens and mode changes; late acknowledgements preserve replacement edits. Composition keeps
   its Enter and Send button, and terminal key-bar taps wait until it finishes.
   ([#334](https://github.com/devswha/herdr-web-ui/pull/334))
+- The background tasks list stays below the app header on a short screen, such as a phone held
+  sideways, and scrolls inside the room above the message box.
+  ([#354](https://github.com/devswha/herdr-web-ui/pull/354))
 - The mobile message box sits closer to the home indicator while retaining its base spacing.
   ([#335](https://github.com/devswha/herdr-web-ui/pull/335) by @Haeminway1)
+- Adding or reconnecting a remote PC says when herdr is not running or not answering there,
+  instead of only `Bridge verification failed (500)`.
+  ([#353](https://github.com/devswha/herdr-web-ui/pull/353))
+- Shift+Enter in the live terminal sends the same newline chord as Alt+Enter, instead of plain
+  Enter that submits an agent's message. Pending IME text is sent before the newline chord.
+  ([#339](https://github.com/devswha/herdr-web-ui/pull/339) by @WOULDU-pres)
+- On Windows, and from an install path with a space or a non-ASCII character, the app page loads
+  instead of the "not built yet" notice. The Windows installer replaces a copy from a release
+  without Windows support, and says so when a release cannot run there.
+  ([#356](https://github.com/devswha/herdr-web-ui/pull/356))
+- On an iPhone home screen app, a text field that keeps its focus with the keyboard down no
+  longer leaves a status-bar band under the message box.
+  ([#349](https://github.com/devswha/herdr-web-ui/pull/349) by @Haeminway1)
+- After `/new` in an OmO pane, the chat stops showing the conversation before it: OmO writes the
+  new session's file only with its first message, and until then the chat shows what a fresh OmO
+  shows. ([#351](https://github.com/devswha/herdr-web-ui/pull/351) by @WOULDU-pres)
+- On a Windows PC, an omo pane shows omo's mark instead of Claude's, and its chat finds the
+  conversation: process words with `bun.exe`, backslashes and a drive letter read as omo, and the
+  session folder is named as omo's engine names a Windows folder.
+  ([#342](https://github.com/devswha/herdr-web-ui/pull/342) by @Haeminway1)
+- The chat lens finds an omo pane's conversation when its process keeps its sessions outside
+  `~/.omo/agent` (`OMO_CODING_AGENT_DIR`, `SENPI_CODING_AGENT_DIR` or `PI_CODING_AGENT_DIR`).
+  ([#350](https://github.com/devswha/herdr-web-ui/pull/350) by @Haeminway1)
 
 ## [0.3.43] - 2026-10-02
 
@@ -1429,7 +2340,17 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.3.43...HEAD
+[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/devswha/herdr-web-ui/compare/v0.3.52...v0.4.0
+[0.3.52]: https://github.com/devswha/herdr-web-ui/compare/v0.3.51...v0.3.52
+[0.3.51]: https://github.com/devswha/herdr-web-ui/compare/v0.3.50...v0.3.51
+[0.3.50]: https://github.com/devswha/herdr-web-ui/compare/v0.3.49...v0.3.50
+[0.3.49]: https://github.com/devswha/herdr-web-ui/compare/v0.3.48...v0.3.49
+[0.3.48]: https://github.com/devswha/herdr-web-ui/compare/v0.3.47...v0.3.48
+[0.3.47]: https://github.com/devswha/herdr-web-ui/compare/v0.3.46...v0.3.47
+[0.3.46]: https://github.com/devswha/herdr-web-ui/compare/v0.3.45...v0.3.46
+[0.3.45]: https://github.com/devswha/herdr-web-ui/compare/v0.3.44...v0.3.45
+[0.3.44]: https://github.com/devswha/herdr-web-ui/compare/v0.3.43...v0.3.44
 [0.3.43]: https://github.com/devswha/herdr-web-ui/compare/v0.3.42...v0.3.43
 [0.3.42]: https://github.com/devswha/herdr-web-ui/compare/v0.3.41...v0.3.42
 [0.3.41]: https://github.com/devswha/herdr-web-ui/compare/v0.3.40...v0.3.41

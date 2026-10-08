@@ -5,17 +5,46 @@ import { join } from "node:path";
 import { describeProgress } from "../src/lib/bridgeProgress.ts";
 import type { SetupJob } from "../shared/machines.ts";
 import { paneNotificationTag } from "../shared/notify-policy.ts";
-import { machinePath, paneStorageId, REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
+import { BRIDGE_PROTOCOL, machinePath, paneStorageId, REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
 import { canSendSecret, sameOrigin, shellQuote, validateTarget } from "./machine-security.ts";
 import { handleMachineRequest, MACHINE_PROXY_PATH } from "./machine-api.ts";
+import type { BridgeDescriptor } from "./bridge.ts";
+import { createServer } from "./index.ts";
 import { MachineManager } from "./machines.ts";
 import { detectHost, psQuote, UNSUPPORTED_HOST, windowsBridgeFiles } from "./remote-host.ts";
-import { decodeClixml, type SshConnection } from "./ssh.ts";
+import { decodeClixml, SshConnection } from "./ssh.ts";
 import { terminalAttachSupported } from "./herdr/client.ts";
 import { attachableIdentity, isRealNode, sidecarAvailable } from "./pty/sidecar.ts";
 import { CompletionTracker } from "./completion.ts";
 import type { PushService } from "./push.ts";
 import { recentSshOutput } from "./ssh.ts";
+
+describe("independently managed bridge updates", () => {
+  it("requires the owning app's update controls before installing a remote bundle", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-bridge-owner-"));
+    const manager = new MachineManager(dir, {} as PushService, {} as CompletionTracker, async () => { throw new Error("local offline"); });
+    const socket = "/home/u/.config/herdr/herdr.sock";
+    const descriptor = { pid: process.pid, port: 7317, token: "a".repeat(64), socket_path: socket, bridge_protocol: 1, bundle_version: "older", managed_remote: false };
+    const commands: string[] = [];
+    const ssh = { run: async (script: string) => {
+      commands.push(script);
+      if (script.includes("uname")) return `Linux\nx86_64\n/home/u\n/home/u/.config\n/usr/bin/herdr\nbundle-older\n${JSON.stringify(descriptor)}\n`;
+      if (script.includes("socket=")) return socket;
+      if (script.includes("--version")) return "herdr 0.9.3";
+      if (script.includes("kill -0")) return "live";
+      throw new Error("Unexpected remote mutation");
+    } } as unknown as SshConnection;
+    const prepare = (manager as unknown as { prepare(runtime: unknown, job?: unknown): Promise<void> }).prepare.bind(manager);
+    const runtime = { generation: 0, ssh, machine: { target: { destination: "pc" } } };
+    try {
+      await expect(prepare(runtime)).rejects.toMatchObject({ action: "setup" });
+      await expect(prepare(runtime, { update: true, auto: true, public: { installations: [] }, abort: new AbortController() })).rejects.toMatchObject({ action: "setup" });
+      descriptor.managed_remote = true;
+      await expect(prepare(runtime)).rejects.toMatchObject({ action: "update_bridge" });
+      expect(commands.every(script => script.includes("uname") || script.includes("socket=") || script.includes("--version") || script.includes("kill -0"))).toBe(true);
+    } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
 
 describe("machine boundaries", () => {
   it("separates equal pane IDs while preserving historical local storage", () => {
@@ -39,8 +68,8 @@ describe("machine boundaries", () => {
     expect(canSendSecret(new Request("http://127.0.0.1/api/machines"))).toBe(true);
   });
   it("proxies only pane/workspace data and never remote management credentials", () => {
-    for (const path of ["auth", "push", "updates/install", "machines/setup", "bridge", "../auth", "pane/../../auth", "pane/prompt/answer/extra"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
-    for (const path of ["session", "agents", "pane/files", "pane/image", "pane/prompt/answer", "workspace/create"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
+    for (const path of ["auth", "push", "updates/install", "machines/setup", "bridge", "../auth", "pane/../../auth", "pane/prompt/answer/extra", "tab/move", "tab/close/extra"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
+    for (const path of ["session", "agents", "pane/files", "pane/image", "pane/prompt/answer", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
   });
 });
 
@@ -157,6 +186,66 @@ describe("SSH output during setup", () => {
     expect(recentSshOutput("\x1b[31mred\x1b[0m\r\n\n  \nspinner\rdone\x07\n")).toBe("red\nspinner\ndone");
     expect(recentSshOutput("x".repeat(5000)).length).toBe(2048);
     expect(recentSshOutput("")).toBe("");
+  });
+});
+
+// A first connect that finds another version's bridge fails before the PC is ever registered,
+// so the sidebar has no row to put the update button on: the job has to carry the action itself.
+// ssh's run() is answered in place of a PC (a PATH-swapped fake cannot serve it: spawned runs
+// never see the swapped PATH), so setup() fails inside its own catch — where the action is set.
+describe("a first connect that finds a bridge of another version", () => {
+  const socket = "/home/u/.config/herdr/herdr.sock";
+  const descriptor = { pid: 4242, port: 29431, token: "a".repeat(64), socket_path: socket, bridge_protocol: 1, bundle_version: "0", managed_remote: true };
+  const real = { start: SshConnection.prototype.start, run: SshConnection.prototype.run, close: SshConnection.prototype.close };
+  afterEach(() => { Object.assign(SshConnection.prototype, real); });
+
+  it("fails the job with action_required, which the dialog's poll reads", async () => {
+    SshConnection.prototype.start = async () => {};
+    SshConnection.prototype.run = (async (script: string) => {
+      if (script.includes("uname")) return `Linux\nx86_64\n/home/u\n/home/u/.config\n\n${JSON.stringify(descriptor)}\n`;
+      if (script.includes("socket=")) return socket;
+      if (script.includes("kill -0")) return "live";
+      throw new Error("Unexpected remote mutation");
+    }) as typeof real.run;
+    SshConnection.prototype.close = () => {};
+    const dir = mkdtempSync(join(tmpdir(), "herdr-stale-bridge-"));
+    const manager = new MachineManager(dir, {} as PushService, new CompletionTracker(null));
+    try {
+      const started = manager.setup({ destination: "stale-pc" });
+      for (let i = 0; i < 100 && !["failed", "connected"].includes(manager.job(started.id)?.phase ?? ""); i += 1) await Bun.sleep(25);
+      const job = manager.job(started.id)!;
+      expect(job.phase).toBe("failed");
+      expect(job.error).toContain("different version");
+      expect(job.action_required).toBe("update_bridge");
+      // the dialog polls this route: the action has to be in its answer, not only on the manager
+      const response = await handleMachineRequest(new Request(`http://localhost:7317/api/machines/setup/${started.id}`, { headers: { origin: "http://localhost:7317" } }), manager);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ phase: "failed", action_required: "update_bridge" });
+      // and the PC was never registered, so the job is the dialog's only signal
+      expect(manager.list().map((machine) => machine.kind)).toEqual(["local"]);
+    } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("sends a newer bridge of an independently managed web server to that server's own Settings", async () => {
+    const independent = { ...descriptor, bridge_protocol: BRIDGE_PROTOCOL, bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1), managed_remote: false };
+    SshConnection.prototype.start = async () => {};
+    SshConnection.prototype.run = (async (script: string) => {
+      if (script.includes("uname")) return `Linux\nx86_64\n/home/u\n/home/u/.config\n\n${JSON.stringify(independent)}\n`;
+      if (script.includes("socket=")) return socket;
+      if (script.includes("kill -0")) return "live";
+      throw new Error("Unexpected remote mutation");
+    }) as typeof real.run;
+    SshConnection.prototype.close = () => {};
+    const dir = mkdtempSync(join(tmpdir(), "herdr-independent-bridge-"));
+    const manager = new MachineManager(dir, {} as PushService, new CompletionTracker(null));
+    try {
+      const started = manager.setup({ destination: "independent-pc" });
+      for (let i = 0; i < 100 && !["failed", "connected"].includes(manager.job(started.id)?.phase ?? ""); i += 1) await Bun.sleep(25);
+      const job = manager.job(started.id)!;
+      // this app cannot update that server, so "update this app" is not the way out here
+      expect(job).toMatchObject({ phase: "failed", action_required: "setup" });
+      expect(job.error).toContain("independently managed");
+    } finally { manager.stop(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
 
@@ -280,5 +369,81 @@ describe("a pane's read state on the local PC", () => {
       manager.stop();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// verify() runs inside a setup that needs a real SSH host. Here its SSH forward is a loopback
+// relay, and the bridge is a real server whose herdr is absent, or a stand-in with a fixed answer.
+describe("bridge verification failures", () => {
+  const TOKEN = "a".repeat(64);
+  const GENERIC = (status: number) => `Bridge verification failed (${status}). Reconnect after checking the remote bridge.`;
+  const socketBefore = process.env["HERDR_SOCKET"];
+  const stops: (() => void)[] = [];
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const stop of stops.splice(0)) stop();
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    if (socketBefore === undefined) delete process.env["HERDR_SOCKET"]; else process.env["HERDR_SOCKET"] = socketBefore;
+  });
+  const temp = () => { const dir = mkdtempSync(join(tmpdir(), "herdr-bridge-verify-")); dirs.push(dir); return dir; };
+  /** a bridge whose herdr socket is `socket` */
+  function bridge(socket: string): number {
+    process.env["HERDR_SOCKET"] = socket;
+    const server = createServer({ port: 0, hostname: "127.0.0.1", token: TOKEN, stateDir: temp(), machines: false, registerBridge: false, tailscaleOwner: null });
+    stops.push(() => server.stop());
+    return server.port!;
+  }
+  /** a bridge that answers /api/bridge with one fixed response */
+  function answering(status: number, body: string): number {
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(body, { status }) });
+    stops.push(() => server.stop(true));
+    return server.port!;
+  }
+  /** what the person adding the PC is told when verification of the bridge on `port` fails */
+  async function told(port: number, socket = "/home/u/.config/herdr/herdr.sock"): Promise<string> {
+    const manager = new MachineManager(temp(), {} as PushService, {} as CompletionTracker);
+    stops.push(() => manager.stop());
+    const ssh = { forward: async (local: number, remote: number) => {
+      const relay = Bun.serve({ port: local, hostname: "127.0.0.1", fetch: (request) => fetch(`http://127.0.0.1:${remote}${new URL(request.url).pathname}`, { headers: request.headers }) });
+      stops.push(() => relay.stop(true));
+    } } as unknown as SshConnection;
+    const descriptor: BridgeDescriptor = { port, token: TOKEN, pid: process.pid, socket_path: socket, bridge_protocol: 0, bundle_version: "" };
+    const verify = (manager as unknown as { verify(ssh: SshConnection, descriptor: BridgeDescriptor, socket: string): Promise<unknown> }).verify.bind(manager);
+    return verify(ssh, descriptor, socket).then(() => "verified", (error: Error) => error.message);
+  }
+
+  it("says herdr is not running when the bridge finds no socket", async () => {
+    const dir = temp();
+    const socket = join(dir, "herdr.sock");
+    const port = bridge(socket);
+    const response = await fetch(`http://127.0.0.1:${port}/api/bridge`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    const body = await response.json() as { error: { code: string; message: string } };
+    expect({ status: response.status, code: body.error.code }).toEqual({ status: 404, code: "socket_missing" });
+    expect(body.error.message).not.toContain(dir);
+    const message = await told(port, socket);
+    expect(message).toContain("herdr is not running");
+    expect(message).not.toContain(dir);
+  });
+
+  it("says herdr is not answering when the socket is there without a daemon", async () => {
+    const dir = temp();
+    const socket = join(dir, "herdr.sock");
+    writeFileSync(socket, "");
+    const message = await told(bridge(socket), socket);
+    expect(message).toContain("herdr is not answering");
+    expect(message).not.toContain(dir);
+  });
+
+  it("reads a missing socket from the 500 an installed older bridge still answers", async () => {
+    const old = JSON.stringify({ error: { code: "internal_error", message: "ENOENT: no such file or directory, stat '/home/u/.config/herdr/herdr.sock'" } });
+    const message = await told(answering(500, old));
+    expect(message).toContain("herdr is not running");
+    expect(message).not.toContain("/home/u");
+  });
+
+  it("keeps the status-only message for any other answer, without repeating its text", async () => {
+    expect(await told(answering(500, JSON.stringify({ error: { code: "internal_error", message: "EACCES: permission denied, stat '/home/u/x'" } })))).toBe(GENERIC(500));
+    expect(await told(answering(503, "<html>proxy</html>"))).toBe(GENERIC(503));
+    expect(await told(answering(500, "null"))).toBe(GENERIC(500));
   });
 });

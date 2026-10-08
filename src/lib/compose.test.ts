@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { agentDisplayLabel, composerMessage, terminalOnlyCommand, composerPayload, composerStatusWord, contextLeftPercent, formatTokens, imageMention, insertMention, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote } from "./compose.ts";
+import { agentDisplayLabel, composerDelivery, composerMessage, terminalOnlyCommand, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertMention, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped } from "./compose.ts";
 
 describe("composerMessage and submitNote", () => {
   it("keeps the message as written for agent.prompt: inner newlines stay, the composer's own trailing ones go", () => {
@@ -13,6 +13,16 @@ describe("composerMessage and submitNote", () => {
     expect(submitNote("submit_timeout", "x")).toMatch(/^Not sent: .*nothing was typed/);
     expect(submitNote("disconnected", "x")).toMatch(/^Not confirmed: .*Check the terminal/);
     expect(submitNote("pane_not_found", "pane w1:p9 not found")).toBe("Not sent: pane w1:p9 not found");
+  });
+
+  it("knows a refusal that typed nothing from a message that may have reached the pane", () => {
+    expect(["submit_timeout", "agent_blocked", "read_only"].map(submitNotTyped)).toEqual([true, true, true]);
+    expect(["disconnected", "timeout", "submit_failed"].map(submitNotTyped)).toEqual([false, false, false]);
+    expect(["pending_input_unsupported", "invalid_delivery", "invalid_submit_text", "agent_not_ready", "pending_limit"].map(submitNotTyped)).toEqual([true, true, true, true, true]);
+    expect(["pane_not_found", "retired_submit_id"].map(submitNotTyped)).toEqual([true, true]);
+    expect(submitNote("pending_input_unsupported", "x")).toBe("Update this PC to send messages in the next turn. Your draft stayed here.");
+    expect(submitNotTyped("submit_changed")).toBe(false);
+    expect(submitNotTyped("pending_uncertain")).toBe(false);
   });
 });
 
@@ -102,6 +112,51 @@ describe("composer presentation helpers", () => {
     expect(composerStatusWord("blocked")).toBe("INPUT");
     expect(composerStatusWord("done")).toBe("DONE");
     expect(composerStatusWord("paused")).toBe("READY");
+  });
+
+  it("makes the status row compact by the card's width, not the window's", () => {
+    // a phone's card, and a laptop's with the sidebar open in a 940px window
+    expect(composerStatusCompact(374)).toBe(true);
+    expect(composerStatusCompact(588)).toBe(true);
+    expect(composerStatusCompact(COMPOSER_STATUS_COMPACT_BELOW - 1)).toBe(true);
+    // the threshold itself, a 1024px window with the sidebar open, and the full 820px card
+    expect(composerStatusCompact(COMPOSER_STATUS_COMPACT_BELOW)).toBe(false);
+    expect(composerStatusCompact(672)).toBe(false);
+    expect(composerStatusCompact(820)).toBe(false);
+    // a card that is not laid out yet has no width: it is not called narrow
+    expect(composerStatusCompact(0)).toBe(false);
+  });
+
+  it("uses one Stop or Send control and queues all agents' working-turn messages", () => {
+    expect(composerSendShown({ working: true, text: "" })).toBe(false);
+    expect(composerSendShown({ working: true, text: " \n" })).toBe(false);
+    expect(composerSendShown({ working: true, text: "check the tests" })).toBe(true);
+    expect(composerSendShown({ working: false, text: "" })).toBe(true);
+    for (const agent of ["codex", "claude", "pi", "omo"]) {
+      expect(composerDelivery(agent, "working")).toBe("queue");
+      for (const state of ["idle", "blocked", "done", "unknown"] as const) expect(composerDelivery(agent, state)).toBe("immediate");
+    }
+    expect(composerDelivery(null, "working")).toBe("immediate");
+  });
+
+  it("says the reconnecting sentence in the status content only once there is a draft", () => {
+    // the empty box's placeholder says it
+    expect(composerStatusHint({ uploading: false, connected: false, text: "" })).toBe(null);
+    expect(composerStatusHint({ uploading: false, connected: false, text: " " })).toBe("offline");
+    expect(composerStatusHint({ uploading: false, connected: false, text: "draft" })).toBe("offline");
+    expect(composerStatusHint({ uploading: false, connected: true, text: "draft" })).toBe(null);
+    expect(composerStatusHint({ uploading: true, connected: true, text: "" })).toBe("uploading");
+    // an upload caught by a dropped connection: the box is empty, so the placeholder says why
+    expect(composerStatusHint({ uploading: true, connected: false, text: "" })).toBe("uploading");
+    // with a draft the placeholder is gone: the reconnecting sentence is the one said (the tile says Uploading)
+    expect(composerStatusHint({ uploading: true, connected: false, text: "draft" })).toBe("offline");
+  });
+
+  it("removes the effort word before shortening the model", () => {
+    expect(composerModelDraw({ modelClipped: false, effortClipped: false })).toBe("full");
+    expect(composerModelDraw({ modelClipped: false, effortClipped: true })).toBe("no-effort");
+    expect(composerModelDraw({ modelClipped: true, effortClipped: true })).toBe("no-effort");
+    expect(composerModelDraw({ modelClipped: true, effortClipped: false })).toBe("no-effort");
   });
 
   it("turns machine agent ids into labels", () => {

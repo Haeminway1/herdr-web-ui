@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, splitTurn, workSummary, workNow, formatElapsed } from "./workBlocks.ts";
+import { formatElapsed, formatWorkDuration, splitTurn, workFailed, workNow, workStartsOpen, workSummary } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -34,6 +34,47 @@ describe("splitTurn", () => {
   });
 });
 
+describe("workStartsOpen", () => {
+  const commentary = (value: string) => ({ ...text(value), phase: "commentary" as const });
+  const final = (value: string) => ({ ...text(value), phase: "final_answer" as const });
+
+  it("is open while the turn runs, whatever it holds", () => {
+    expect(workStartsOpen(true, [tool("read"), text("done")])).toBe(true);
+    expect(workStartsOpen(true, [tool("bash")])).toBe(true);
+  });
+
+  it("folds a settled turn: its answer stays outside the fold", () => {
+    expect(workStartsOpen(false, [thinking("hm"), tool("read"), text("looking…"), tool("edit"), text("done")])).toBe(false);
+    expect(workStartsOpen(false, [commentary("Checking."), tool("exec_command"), final("All good.")])).toBe(false);
+    // an action after the answer hides no words
+    expect(workStartsOpen(false, [commentary("Checking."), tool("exec_command"), final("Done"), tool("cleanup")])).toBe(false);
+  });
+
+  it("keeps a settled turn open when its words are followed by an action and no answer: the fold would hide all of them", () => {
+    expect(workStartsOpen(false, [text("on it"), tool("bash")])).toBe(true);
+    // a todo update after the closing summary is not even counted in the header
+    expect(workStartsOpen(false, [tool("read"), text("Here is the full answer."), tool("TodoWrite")])).toBe(true);
+  });
+
+  it("keeps a settled turn open when it ends in Codex commentary: folding would hide its last text", () => {
+    expect(workStartsOpen(false, [tool("exec_command"), commentary("Still investigating")])).toBe(true);
+    expect(workStartsOpen(false, [commentary("Checking the second request.")])).toBe(true);
+    // reasoning recorded after the last words does not hide them either
+    expect(workStartsOpen(false, [tool("exec_command"), commentary("Still investigating"), thinking("hm")])).toBe(true);
+  });
+
+  it("keeps a settled turn open when commentary comes after its final answer: the answer is not the end", () => {
+    expect(workStartsOpen(false, [tool("exec_command"), final("Done."), commentary("Resumed: still looking")])).toBe(true);
+    expect(workStartsOpen(false, [tool("exec_command"), final("Done."), commentary("Resumed"), tool("exec_command")])).toBe(true);
+  });
+
+  it("stays folded when the turn did nothing readable", () => {
+    expect(workStartsOpen(false, [])).toBe(false);
+    expect(workStartsOpen(false, [thinking("hm")])).toBe(false);
+    expect(workStartsOpen(false, [tool("bash"), text("  ")])).toBe(false);
+  });
+});
+
 describe("workSummary", () => {
   it("counts by what the reader cares about, singular and plural", () => {
     expect(workSummary([tool("Edit"), tool("Write"), tool("read"), tool("Bash"), tool("WebFetch")])).toBe("2 edits · 1 file read · 1 command · 1 other tool");
@@ -57,10 +98,20 @@ describe("formatWorkDuration", () => {
   });
 });
 
-describe("workSummary failures", () => {
-  it("says how many calls failed, last", () => {
-    const failed: ConversationPart = { kind: "tool", name: "Bash", summary: "", input: "", output: "", error: true };
-    expect(workSummary([{ kind: "tool", name: "Edit", summary: "", input: "", output: "" }, failed, failed])).toBe("1 edit · 2 commands · 2 failed");
+describe("workFailed", () => {
+  const failed: ConversationPart = { kind: "tool", name: "Bash", summary: "", input: "", output: "", error: true };
+
+  it("counts the calls that failed, apart from the summary a narrow header cuts short", () => {
+    const parts = [tool("Edit"), failed, failed];
+    expect(workSummary(parts)).toBe("1 edit · 2 commands");
+    expect(workFailed(parts)).toBe(2);
+    expect(workFailed([tool("Edit"), thinking("x"), text("y")])).toBe(0);
+  });
+
+  it("counts a failed call the summary does not count", () => {
+    const parts: ConversationPart[] = [{ ...failed, name: "TodoWrite" }];
+    expect(workSummary(parts)).toBe("");
+    expect(workFailed(parts)).toBe(1);
   });
 });
 
@@ -119,4 +170,14 @@ describe("what a running turn is doing", () => {
     expect(formatElapsed(0, 192_000)).toBe("3m 12s");
     expect(formatElapsed(0, 45_000)).toBe("45s");
   });
+});
+
+it("says the open block waits for the user while the agent is blocked, and only then", async () => {
+  const { isWaitingWorkTurn } = await import("./workBlocks.ts");
+  expect(isWaitingWorkTurn(true, "blocked")).toBe(true);
+  // a question in Codex's queue: Codex keeps working
+  expect(isWaitingWorkTurn(true, "working")).toBe(false);
+  // a settled turn keeps "Worked for …" whatever the pane's status
+  expect(isWaitingWorkTurn(false, "blocked")).toBe(false);
+  expect(isWaitingWorkTurn(true, undefined)).toBe(false);
 });

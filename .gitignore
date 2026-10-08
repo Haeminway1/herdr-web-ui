@@ -6,6 +6,8 @@ evidence/
 .omo/
 .gjc/
 .herdr-web-ui/
+# a check run's herdr config and state, when CHECK_DIR keeps it in the checkout (scripts/check.ts)
+.ci/
 
 remote-bundles/
 
@@ -20,3 +22,5 @@ _film/
 
 # desktop shell packages (desktop/package.mjs)
 desktop/out/
+# one-off screenshot and probe scripts kept inside the repo so imports resolve
+scripts/*.tmp.ts

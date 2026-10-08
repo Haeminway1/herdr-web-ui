@@ -1,6 +1,7 @@
 /** Input lifecycle adversarial cases, using an owned pane and intercepted submits. */
 import assert from "node:assert/strict";
 import type { Browser } from "playwright-core";
+import { openSettingsPage } from "./settings-page.ts";
 
 export async function checkTerminalInput(browser: Browser, origin: string, pane: string, otherPane: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -32,7 +33,14 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     });
   });
   const line = page.getByRole("textbox", { name: "Terminal input line", exact: true });
-  const direct = page.getByRole("button", { name: "Type straight into the terminal", exact: true });
+  // A desktop has no key bar: the input mode is a Settings choice there.
+  const setMode = async (mode: "line" | "direct") => {
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Terminal");
+    await page.getByRole("combobox", { name: "Terminal input mode", exact: true }).selectOption(mode);
+    await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  };
+  const remountLine = async () => { await setMode("direct"); await setMode("line"); };
   const until = async (check: () => boolean | Promise<boolean>) => {
     const deadline = Date.now() + 10_000;
     while (!(await check())) { assert(Date.now() < deadline, "input regression timed out"); await new Promise((r) => setTimeout(r, 25)); }
@@ -40,9 +48,10 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
   try {
     await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
     await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+    assert.equal(await page.locator(".key-bar").isVisible(), false, "a desktop shows no key bar under the terminal");
+    assert.equal(await page.getByRole("button", { name: "Type straight into the terminal", exact: true }).count(), 0);
     await line.fill("draft 한글 😀");
-    await direct.click();
-    await direct.click();
+    await remountLine();
     assert.equal(await line.inputValue(), "draft 한글 😀");
     await page.reload();
     await line.waitFor();
@@ -58,16 +67,14 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     await page.getByRole("button", { name: "Send to the terminal", exact: true }).click();
     await page.waitForTimeout(100);
     assert.equal(sent.length, 0, "unfinished composition must not submit via button");
-    // Leaving during composition must not leave the mode/key guard stuck.
+    // Leaving during composition must not leave the composition guard stuck.
     await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
     await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
-    await direct.click();
-    await direct.click();
+    await remountLine();
     await line.waitFor();
     await page.getByRole("button", { name: "Send to the terminal", exact: true }).click();
     await until(() => !!acknowledge);
-    await direct.click();
-    await direct.click();
+    await remountLine();
     assert.equal(await page.getByRole("button", { name: "Send to the terminal", exact: true }).isDisabled(), true, "pending send survives remount");
     await line.fill("");
     await line.fill("draft 한글 😀");
@@ -76,24 +83,27 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     assert.equal(await line.inputValue(), "draft 한글 😀", "late ack cannot erase replacement text");
     assert.equal(sent.length, 1);
 
-    await page.keyboard.press("Control+Shift+Comma");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Shortcuts");
     const shortcut = page.getByRole("combobox", { name: "Command palette", exact: true });
     await shortcut.selectOption("p");
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
-    await page.keyboard.press("Control+Shift+p");
+    await page.keyboard.press("ControlOrMeta+Shift+p");
     await page.getByRole("dialog", { name: "Command palette", exact: true }).waitFor();
     await page.keyboard.press("Escape");
-    await page.keyboard.press("Control+Shift+Comma");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Shortcuts");
     await shortcut.selectOption("off");
     await page.getByRole("combobox", { name: "Next pane", exact: true }).selectOption("p");
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
     await line.focus();
     const selectionBefore = await page.evaluate(() => localStorage.getItem("herdr-web-ui:selection"));
-    await page.keyboard.press("Control+Shift+p");
+    await page.keyboard.press("ControlOrMeta+Shift+p");
     await until(async () => (await page.evaluate(() => localStorage.getItem("herdr-web-ui:selection"))) !== selectionBefore);
     await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
     await line.waitFor();
-    await page.keyboard.press("Control+Shift+Comma");
+    await page.keyboard.press("ControlOrMeta+Shift+Comma");
+    await openSettingsPage(page, "Shortcuts");
     await page.getByRole("button", { name: "Reset shortcuts", exact: true }).click();
     if (process.env.UI_EVIDENCE_DIR) {
       const { mkdirSync } = await import("node:fs");
@@ -106,13 +116,13 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
       await page.setViewportSize({ width: 1280, height: 800 });
     }
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
-    await page.keyboard.press("Control+Shift+k");
+    await page.keyboard.press("ControlOrMeta+Shift+k");
     await page.getByRole("dialog", { name: "Command palette", exact: true }).waitFor();
     await page.keyboard.press("Escape");
 
     // A screen can arrive before attachment readiness; do not send or auto-replay typing.
     delayReady = true;
-    await direct.click();
+    await setMode("direct");
     await page.reload();
     await page.locator(".xterm-helper-textarea").waitFor();
     await until(() => !!ready);

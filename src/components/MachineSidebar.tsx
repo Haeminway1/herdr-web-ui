@@ -1,23 +1,22 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Download, Monitor, Plus, Settings, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Monitor, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
 import type { Machine, MachineState, MachineUpdate } from "../../shared/machines.ts";
 import { MachineContext } from "../lib/machineContext.tsx";
 import { answerMachineSetup, machineRequest } from "../lib/api.ts";
 import { describeProgress } from "../lib/bridgeProgress.ts";
+import { keepDismissed, noticeKey, readDismissed, waitingMachines, writeDismissed } from "../lib/machineNotice.ts";
 import type { AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
 import { Sidebar } from "./Sidebar.tsx";
+import { AgentSidebar } from "./AgentSidebar.tsx";
 import { AttentionInbox } from "./NeedsInput.tsx";
-import { UsageMeters, UsagePanel } from "./UsageMeters.tsx";
+import { DashboardUsage, UsageMeters, UsagePanel } from "./UsageMeters.tsx";
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
 import { DashboardSidebar } from "./DashboardSidebar.tsx";
-import { DashboardUsage } from "./UsageMeters.tsx";
 
-declare const __APP_VERSION__: string;
-
-/** The PC header's state word; "connected" is the quiet default and shows as a dot alone. */
+/** The PC header's state word; "connected" is the quiet default and shows as a dot alone, every other state also writes its word under the name. */
 export const STATE_WORD: Readonly<Record<MachineState, string>> = {
   connecting: "Connecting…",
   connected: "Connected",
@@ -26,39 +25,48 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
   error: "Connection error",
 };
 
-interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId: string | null; actions: AppActions; version: string | null; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onAdd(): void; onSetup(machine: Machine, update?: boolean): void }
+interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId: string | null; actions: AppActions; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
   const { settings } = useSettings();
-  const { canInstall, installed, install, help } = useInstallPrompt();
-  const [installHelpOpen, setInstallHelpOpen] = useState(false);
-  // the new session opens on the selected PC, the same one Mod+Shift+N uses
+  // no top bar: a workspace starts from its PC's header, and Add PC lives in Settings → Remote PCs.
+  // The fork's opt-in project dashboard keeps its own New session bar (the session opens on the
+  // selected PC, the same one Mod+Shift+N uses), and the fork keeps the attention inbox and the
+  // plan-limit panel at the top of the list.
   const target = props.machines.find((machine) => machine.id === props.selectedMachineId);
-  return <div className={`sidebar-shell${settings.dashboardSidebar ? " is-dashboard" : ""}`}>
+  if (settings.dashboardSidebar) return <div className="sidebar-shell is-dashboard">
     <div className="sidebar-topbar sidebar-topbar-row">
       <button className="btn sidebar-new-session" disabled={target !== undefined && target.state !== "connected"} title={target ? t("New session on {name}", { name: target.name }) : t("New session")} onClick={props.actions.openNewSession}><Plus aria-hidden="true" />{t("New session")}</button>
-      <button className="btn btn-ghost sidebar-add-pc" onClick={props.onAdd}><Monitor aria-hidden="true" />{t("Add PC")}</button>
     </div>
-    {settings.dashboardSidebar ? <DashboardUsage /> : <UsagePanel />}
-    {settings.dashboardSidebar ? <DashboardSidebar {...props} renderMachineControls={(machine) => <MachineGroup {...props} machine={machine} dashboard />} /> : <div className="machine-list" aria-label={t("PCs and workspaces")}>
+    <DashboardUsage />
+    <DashboardSidebar {...props} renderMachineControls={(machine) => <MachineGroup {...props} machine={machine} dashboard />} />
+    <SidebarFooter actions={props.actions} />
+  </div>;
+  return <div className="sidebar-shell">
+    <UsagePanel />
+    <div className="machine-list" aria-label={t("PCs and workspaces")}>
       <AttentionInbox machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} onSelect={props.onSelect} />
       {props.machines.map((machine) => <MachineGroup key={machine.id} {...props} machine={machine} />)}
       {!props.machines.length && <p className="tree-state" role="status">{t("Loading PCs…")}</p>}
-    </div>}
-    <footer className="sidebar-footer">
+    </div>
+    <AgentSidebar machines={props.machines} selectedMachineId={props.selectedMachineId} selectedPaneId={props.selectedPaneId} stateWord={(machine) => t(STATE_WORD[machine.state])} onSelect={props.onSelect} />
+    <SidebarFooter actions={props.actions} />
+  </div>;
+}
+
+function SidebarFooter({ actions }: { actions: AppActions }) {
+  const t = useT();
+  const { canInstall, installed, install, help } = useInstallPrompt();
+  const [installHelpOpen, setInstallHelpOpen] = useState(false);
+  return <footer className="sidebar-footer">
       {/* browsers without an install prompt (iOS, plain HTTP) get the steps instead */}
       {!installed && <button className="btn btn-ghost sidebar-footer-action" aria-expanded={canInstall ? undefined : installHelpOpen} onClick={() => { if (canInstall) void install(); else setInstallHelpOpen(!installHelpOpen); }}><Download aria-hidden="true" />{t("Install app")}</button>}
       {!installed && !canInstall && installHelpOpen && <p className="sidebar-install-help" role="status">{help}</p>}
       <div className="sidebar-footer-row">
-        <button className="btn btn-ghost sidebar-footer-action" title={t("Settings (⌘⇧,)")} onClick={props.actions.openSettings}><Settings aria-hidden="true" />{t("Settings")}</button>
+        <button className="btn btn-ghost sidebar-footer-action" title={t("Settings (⌘⇧,)")} onClick={actions.openSettings}><Settings aria-hidden="true" />{t("Settings")}</button>
         <UsageMeters />
       </div>
-      <div className="sidebar-brandline">
-        <span className="sidebar-app-name">herdr web ui v{__APP_VERSION__}</span>
-        {props.version && <span className="pill">herdr {props.version}</span>}
-      </div>
-    </footer>
-  </div>;
+    </footer>;
 }
 
 function MachineGroup({ machine, dashboard = false, ...props }: Props & { machine: Machine; dashboard?: boolean }) {
@@ -78,19 +86,22 @@ function MachineGroup({ machine, dashboard = false, ...props }: Props & { machin
     setCollapsed(!collapsed);
     try { localStorage.setItem(`herdr-web-ui:pc-collapsed:${machine.id}`, collapsed ? "0" : "1"); } catch {}
   };
-  return <section className={`machine-group${props.selectedMachineId === machine.id ? " is-current" : ""}`} aria-label={t("PC {name}", { name: machine.name })}>
+  // the PC's name is the head of its workspaces, and the caret beside its + the one fold over them
+  return <section className={`machine-group${props.selectedMachineId === machine.id ? " is-current" : ""}${online ? "" : " is-offline"}`} aria-label={t("PC {name}", { name: machine.name })}>
     {!dashboard && <header className="machine-header">
-      <button className="machine-toggle" aria-expanded={!collapsed} onClick={toggle}>
-        {collapsed ? <ChevronRight className="machine-caret" aria-hidden="true" /> : <ChevronDown className="machine-caret" aria-hidden="true" />}
-        <Monitor className="machine-icon" aria-hidden="true" />
+      <div className="machine-title">
+        <span className="sidebar-mark" aria-hidden="true"><Monitor /></span>
         <span className="machine-name">{machine.name}</span>
         {/* the computer this app's server runs on; on a phone "this PC" read as the phone */}
         {machine.kind === "local" && <span className="machine-kind" title={t("The computer this app runs on")}>{t("Host")}</span>}
         <span className={`machine-dot is-${machine.state}`} title={t(STATE_WORD[machine.state])} aria-hidden="true" />
-      </button>
-      <button className="sidebar-row-action" disabled={!online} aria-label={t("New session on {name}", { name: machine.name })} title={t("New session")} onClick={() => props.onNew(machine.id)}><Plus aria-hidden="true" /></button>
-      {machine.kind === "ssh" && <button className="sidebar-row-action" aria-label={t("Manage {name}", { name: machine.name })} title={t("Manage PC")} aria-expanded={editing} onClick={() => { setEditing(!editing); setConfirmDelete(false); }}><SlidersHorizontal aria-hidden="true" /></button>}
+      </div>
+      {machine.kind === "ssh" && <button className="sidebar-row-action machine-manage" aria-label={t("Manage {name}", { name: machine.name })} title={t("Manage PC")} aria-expanded={editing} onClick={() => { setEditing(!editing); setConfirmDelete(false); }}><SlidersHorizontal aria-hidden="true" /></button>}
+      {/* the fold over this PC's workspaces sits beside the + */}
+      <button className="sidebar-row-action machine-toggle" aria-expanded={!collapsed} aria-label={collapsed ? t("Expand {name}", { name: machine.name }) : t("Collapse {name}", { name: machine.name })} title={collapsed ? t("Expand {name}", { name: machine.name }) : t("Collapse {name}", { name: machine.name })} onClick={toggle}>{collapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}</button>
+      <button className="sidebar-row-action machine-new" disabled={!online} aria-label={t("New workspace on {name}", { name: machine.name })} title={t("New workspace")} onClick={() => props.onNew(machine.id)}><Plus aria-hidden="true" /></button>
     </header>}
+    {/* the dashboard draws the PC's own header; only its Manage PC control comes from here */}
     {dashboard && machine.kind === "ssh" && <button type="button" className="btn btn-ghost" aria-label={t("Manage {name}", { name: machine.name })} aria-expanded={editing} onClick={() => { setEditing(!editing); setConfirmDelete(false); }}>{t("Manage PC")}</button>}
     {/* connected is the norm and says nothing new; every other state is spelled out */}
     {machine.action_required || machine.updating ? <MachineActionNotice machine={machine} onSetup={props.onSetup} /> : (!dashboard || machine.error) && <p className={`machine-state is-${machine.state}${online ? " visually-hidden" : ""}`} role="status" title={machine.error ?? undefined}>
@@ -104,7 +115,7 @@ function MachineGroup({ machine, dashboard = false, ...props }: Props & { machin
     </div>}
     {error && <p className="machine-error" role="alert">{error}</p>}
     {!dashboard && !collapsed && <div className={online ? "" : "machine-offline"} {...(!online ? { inert: "" } : {})}>
-      {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}><Sidebar embedded snapshot={machine.snapshot} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} version={null} /></MachineContext.Provider>}
+      {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}><Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} /></MachineContext.Provider>}
     </div>}
   </section>;
 }
@@ -151,12 +162,19 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
       {error && <p className="machine-error" role="alert">{error}</p>}
     </div>;
   }
+  // another app's bridge runs on this PC: neither an update from here nor an approval fixes that,
+  // so it is named as what it is, with the server's reason and a plain reconnect
+  if (machine.action_required === "bridge_conflict") return <div className="machine-action" role="alert">
+    <p className="machine-action-text"><strong>{t("Bridge connection conflict")}</strong><span>{t("Update the apps connected to this PC to the same version, or disconnect the other app, then reconnect here. Sessions keep running.")}</span>{machine.error && <span className="machine-action-reason">{machine.error}</span>}</p>
+    <button type="button" className="btn btn-primary" onClick={() => onSetup(machine, false)}>{t("Reconnect")}</button>
+  </div>;
   const update = machine.action_required === "update_bridge";
   return <div className="machine-action" role="alert">
     <p className="machine-action-text">
       <strong>{t(update ? "Bridge update needed" : "Setup needed")}</strong>
       <span>{t(update ? "This PC runs a bridge from a different version of herdr web ui. Update it to reconnect; herdr sessions keep running." : "Reconnecting needs your approval on this PC.")}</span>
-      {update && machine.error && !/different version/.test(machine.error) && <span className="machine-action-reason">{machine.error}</span>}
+      {/* the two generic reasons only repeat the sentence above */}
+      {machine.error && !/different version|setup needs approval/.test(machine.error) && <span className="machine-action-reason">{machine.error}</span>}
     </p>
     {update ? <div className="machine-action-buttons">
       <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(() => machineRequest(`/${encodeURIComponent(machine.id)}/update-bridge`, "POST"))}>{t("Update bridge")}</button>
@@ -170,6 +188,13 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
 /** The app-wide line for PCs that wait on the user, so a closed drawer on a phone still says so. */
 export function MachineActionBanner({ machines, onSetup }: { machines: Machine[]; onSetup(machine: Machine, update?: boolean): void }) {
   const t = useT();
+  // a PC that cannot be updated right now would hold this line open for good: it can be closed,
+  // and the PC's own row in the sidebar keeps saying what it needs
+  const [dismissed, setDismissed] = useState(readDismissed);
+  useEffect(() => {
+    const kept = keepDismissed(dismissed, machines);
+    if (kept.length !== dismissed.length) { setDismissed(kept); writeDismissed(kept); }
+  }, [machines, dismissed]);
   const running = machines.find((machine) => machine.updating);
   if (running?.updating) {
     const view = describeProgress(running.updating.progress);
@@ -177,13 +202,15 @@ export function MachineActionBanner({ machines, onSetup }: { machines: Machine[]
       <span>{t("Updating the bridge on {name}", { name: running.name })}{view ? ` · ${t(view.label)}${view.percent === null ? "" : ` ${view.percent}%`}` : "…"}</span>
     </div>;
   }
-  const waiting = machines.filter((machine) => machine.action_required);
+  const waiting = waitingMachines(machines, dismissed);
   const first = waiting[0];
   if (!first) return null;
+  const conflict = first.action_required === "bridge_conflict";
   const update = first.action_required === "update_bridge";
   const others = waiting.length > 1 ? t(" (+{n} more)", { n: waiting.length - 1 }) : "";
   return <div className="update-notice" role="status">
-    <span>{t(update ? "{name} needs a bridge update to reconnect{others}." : "{name} needs setup approval to reconnect{others}.", { name: first.name, others })}</span>
-    <button type="button" className="btn" onClick={() => update ? void machineRequest(`/${encodeURIComponent(first.id)}/update-bridge`, "POST").catch(() => onSetup(first, true)) : onSetup(first, false)}>{t(update ? "Update bridge" : "Set up…")}</button>
+    <span>{t(conflict ? "{name} has a bridge connection conflict{others}." : update ? "{name} needs a bridge update to reconnect{others}." : "{name} needs setup approval to reconnect{others}.", { name: first.name, others })}</span>
+    <button type="button" className="btn" onClick={() => update ? void machineRequest(`/${encodeURIComponent(first.id)}/update-bridge`, "POST").catch(() => onSetup(first, true)) : onSetup(first, false)}>{t(conflict ? "Reconnect" : update ? "Update bridge" : "Set up…")}</button>
+    <button type="button" className="icon-button update-notice-dismiss" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={() => { const next = [...dismissed, ...waiting.map(noticeKey)]; setDismissed(next); writeDismissed(next); }}><X /></button>
   </div>;
 }

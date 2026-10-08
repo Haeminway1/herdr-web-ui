@@ -3,8 +3,10 @@
 Report concrete failing scenarios and regressions before style suggestions. A passing
 AI review is advisory; CI and maintainer review determine whether a PR can merge.
 
-- This app bridges herdr-owned PTYs. Never use `--takeover`, load node-pty in Bun,
-  or rebuild terminal output from viewport snapshots. Keep xterm scrollback at zero.
+- This app bridges herdr-owned PTYs. Never load node-pty in Bun or rebuild an attached terminal's
+  output from viewport snapshots (only a mirrored pane, `server/mirror.ts`, is drawn that way). Keep xterm scrollback at zero.
+- `--takeover` is never automatic: an attach, a retry or a reconnect waits for the holder.
+  Only a user's explicit request for that pane, from an interact connection, may take it.
 - Observe connections cannot input, send keys or resize. Enforce this on the server.
 - Never queue terminal input across disconnections. Only control frames replay.
 - Concurrent attaches share pending creation; detach/close during creation must cancel
@@ -26,5 +28,6 @@ AI review is advisory; CI and maintainer review determine whether a PR can merge
   `package.json` scripts and dependency changes. Workflows must keep read-only PR
   permissions and never add a `pull_request_target` trigger.
 
-[CONTRIBUTING.md](../CONTRIBUTING.md) is the process contributors follow. Maintainers may
-keep local AGENTS.md notes, but a PR is held only to rules committed in this repository.
+[CONTRIBUTING.md](../CONTRIBUTING.md) is the process contributors follow. The
+[AGENTS.md](../AGENTS.md) files give these invariants with their reasons and the conventions
+of each directory. A PR is held only to rules committed in this repository.

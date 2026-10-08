@@ -20,9 +20,12 @@
   cursor: pointer;
 }
 
-.usage-strip:hover,
-.usage-strip[aria-expanded="true"] {
-  background: var(--bg-hover);
+.usage-strip[aria-expanded="true"] { background: var(--bg-hover); }
+
+/* beside Settings in the sidebar's footer: the same half fill under a pointer */
+@media (hover: hover) {
+  .usage-strip:hover { background: var(--side-hover); }
+  .usage-strip[aria-expanded="true"]:hover { background: var(--bg-hover); }
 }
 
 .usage-chip {
@@ -82,7 +85,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  /* up to just under the sidebar's top bar; the rest scrolls */
+  /* up to near the top of the sidebar; the rest scrolls */
   max-height: calc(var(--app-height, 100dvh) - 160px);
   overscroll-behavior: contain;
   padding: var(--space-2) var(--space-3) var(--space-3);

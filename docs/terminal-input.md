@@ -5,13 +5,14 @@ input boundary; the terminal screen is still rendered from the attach stream.
 
 ## Input modes and drafts
 
-Settings → Appearance → Terminal input mode offers Automatic, Input line and Direct typing.
+Settings → Terminal → Terminal input mode offers Automatic, Input line and Direct typing.
 Automatic keeps the existing device preference: a touch screen uses the input line unless the
-user previously chose direct typing; a fine pointer uses direct typing. The keyboard button
-switches modes on desktop and touch screens. Settings → Shortcuts can change each app action's
-Mod+Shift key or return its keys to the terminal. The hold-to-dictate binding remains fixed.
-Conflicts include the legacy New session alias, and Reset restores the defaults. Browser-reserved
-keys still depend on the browser and installed-app mode.
+user previously chose direct typing; a fine pointer uses direct typing. The key bar's keyboard
+button switches modes too, on a touch screen only: a desktop changes the mode in Settings.
+Settings → Shortcuts can change each app action's Mod+Shift key or return its keys to the
+terminal. The hold-to-dictate binding remains fixed. Conflicts include the legacy New workspace
+alias, and Reset restores the defaults. Browser-reserved keys still depend on the browser and
+installed-app mode.
 
 The input line keeps its unsent text per `paneStorageId(machineId, paneId)`, including across
 lens changes and reloads. Storage refusal falls back to memory for view changes. Pending sends
@@ -20,11 +21,54 @@ acknowledgement removes only an unchanged sent prefix; replacement text stays ev
 to equal the text sent before it. Editing remains available while disconnected; sending does not.
 Passwords continue to use the separate non-persistent secret-input path.
 
+Chat Send during work asks a `pending-input` bridge to retain an identified message until the
+current response ends. The same server ID is claimed by automatic delivery or a pending row's
+explicit send-now action. The bridge checks its original connection, attachment, agent and
+visible prompt before input and Enter; each automatic next message also waits for evidence that
+the preceding turn started and finished, and an explicit send refused in between does not end that wait. It never sends native Tab and then resends that text.
+Pending acceptance is distinct from a committing-key receipt. Connection loss, pane separation
+and observe mode pause the pending list; reconnect or reload cannot rearm it. Losing a pane
+lease permanently cancels its in-flight send, even if that connection rejoins the same attachment
+or returns to interact before Enter. A queue request that arrives after the agent finishes uses
+the same guarded paste-and-Enter path; one that finds no agent in front of the pane is refused,
+and nothing is typed into the program there; one that finds an earlier message still waiting takes
+its place behind it. The checks read the pane's live screen, not a viewport scrolled into its
+history, and leave a model list alone even when no reader could read it, since Enter there saves
+a default. An uncertain delivery never retries automatically. Secret
+input remains outside this path, and legacy held messages retain their explicit Send now/Discard
+recovery. Older bridges cannot silently turn a working queue request into immediate input. Send now delivers through the existing paste-and-Enter
+path; each agent controls when it consumes that input. It is not a native app-server steering API.
+
 Direct input arriving before readiness or during a disconnect is held for explicit Send/Discard.
 An IME may commit several code points at once, so printable chunks (including emoji) are retained.
-Control sequences are counted as discarded, never saved for later execution. No draft is replayed
-on reconnect. The input-line and chat Send buttons preserve an active composition, and the key bar
+Control sequences are left out, never saved for later execution, and not counted: xterm's own
+answers to a program (cursor position, focus, mouse) arrive the same way. Send transmits the held
+text alone, without an Enter typed meanwhile. The draft holds 1,024 characters; text past that is
+left out whole and the notice says some input was left out, also when nothing else is held. No
+draft is replayed on reconnect. The input-line and chat Send buttons preserve an active composition, and the key bar
 waits for composition to finish. Leaving the input clears its composition guard.
+
+The key bar defaults to Esc, Tab, Ctrl, Alt, Shift, Enter, the arrows and ^C.
+Settings → Terminal → Key bar → Edit key bar opens the complete list: add or remove keys, move each key up or
+down, and register a custom combination such as Ctrl+W. The catalog includes editing keys and
+F1–F12; a custom combination can use any single printable character, including space and `+`.
+Existing extra-key preferences migrate to the same visible order. Restore defaults returns the
+original bar; an empty list stays empty. The keyboard mode button stays first on touch screens.
+Ctrl, Alt and Shift stay held until tapped again and can be combined. Removing a modifier button
+clears its held state immediately. Ordinary key buttons use the held modifiers, while saved
+combinations send exactly their configured modifiers without changing the held state.
+Direct typing and arrow buttons send logical key chords; Herdr encodes them for the
+PTY's keyboard protocol. Home/End, Page and Delete/Insert keys use CSI navigation through the attach
+stream because Herdr's RPC key parser lacks those names. Paste, IME commits and terminal reports pass through unchanged.
+The input line and chat composer send their text as typed. Changing panes, leaving the
+terminal view or disconnecting clears the held modifiers.
+
+On macOS, Cmd+Left and Cmd+Right in direct typing send Ctrl+A and Ctrl+E, moving to the
+beginning and end of the input line in shells and agents that use those bindings.
+Pending IME text is sent first. Additional modifiers retain xterm's behavior; the input line
+and chat composer keep their native text editing. Ctrl+Left and Ctrl+Right are sent as xterm
+sends them on every platform, so a program in the pane that binds them (tmux, an editor) still
+receives them; Option+Left and Option+Right move by word.
 
 ## Readiness and failures
 
@@ -54,6 +98,10 @@ The new readiness frame is also implemented in the website demo transport.
   contract tests separately verify real delivery.
 - `bun run test:ui`: includes those checks plus the existing mobile, clipboard, secret-entry,
   reconnect, prompt, queue and viewport checks. `UI_EVIDENCE_DIR` saves screenshots.
+- `bun run build && bun scripts/terminal-command-arrows-regression.ts`: Cmd+Left/Right line
+  movement, exact bytes and real readline cursor positions, IME ordering, repeat, modifier,
+  unchanged Ctrl+arrows, Windows and Linux checks.
+  Uses Chromium with a simulated Mac platform, not native macOS Safari or an OS IME.
 - `bun scripts/file-viewer-regression.ts`: existing navigation and touch regressions.
 
 Synthetic composition events exercise event handling, not a real Samsung/Gboard/iOS IME.

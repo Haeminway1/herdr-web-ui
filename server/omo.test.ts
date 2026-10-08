@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane } from "../shared/protocol.ts";
-import { heldSessionIds, isOmoProcess, omoAgentDir, omoSessionFolder, omoCandidates, omoTranscriptsOfCwd, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
+import { heldRuntime, heldSessionIds, isOmoProcess, omoAgentDir, omoSessionFolder, omoCandidates, omoTranscriptsOfCwd, selectOmoTranscript, type OmoRuntime } from "./omo.ts";
 import { processStartedAt } from "./process-start.ts";
 import { parseOmpTranscript } from "./transcript-records.ts";
 
@@ -121,17 +121,24 @@ it("reads only the live process's own holder records, never a reused pid's lefto
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+it("shows no earlier conversation after /new, while the session held now has no file yet", () => {
+  // the process started at 10s and wrote /fresh.jsonl; /new then made it hold a session not written yet
+  const afterNew = heldRuntime(runtime("a"), ["new-session"], files);
+  expect(selectOmoTranscript("a", files, [runtime("a")], 20_000)).toBe("/fresh.jsonl");
+  expect(selectOmoTranscript("a", files, [afterNew], 20_000)).toBeNull();
+  expect(selectOmoTranscript("a", files, [heldRuntime(runtime("a", 10_000, [], ["fresh-session"]), ["new-session"], files)], 20_000)).toBeNull();
+  // its first message writes the file, and the chat follows it
+  const written = [...files, { path: "/new.jsonl", id: "new-session", createdAt: 15_000 }];
+  expect(selectOmoTranscript("a", written, [heldRuntime(runtime("a"), ["new-session"], written)], 20_000)).toBe("/new.jsonl");
+  // holding nothing changes nothing
+  expect(heldRuntime(runtime("a", 10_000, ["/old.jsonl"]), [], files)).toEqual(runtime("a", 10_000, ["/old.jsonl"]));
+});
+
 it("does not pin a launch session id after a new unclaimed session appears", () => {
   const newer = [...files, { path: "/new.jsonl", id: "new-session", createdAt: 15_000 }];
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, [], ["old-session"])], 20_000)).toBeNull();
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, ["/old.jsonl"], ["old-session"])], 20_000)).toBe("/old.jsonl");
   expect(selectOmoTranscript("a", newer, [runtime("a", 10_000, [], ["old-session"]), runtime("b", 14_000, ["/new.jsonl"])], 20_000)).toBe("/old.jsonl");
-});
-
-it("names a cwd's session folder as omo's engine does, a Windows cwd included", () => {
-  expect(omoSessionFolder("/home/u/dev/app")).toBe("--home-u-dev-app--");
-  expect(omoSessionFolder("C:\\Users\\me\\dev\\app")).toBe("--C--Users-me-dev-app--");
-  expect(omoSessionFolder("C:/Users/me/app")).toBe("--C--Users-me-app--");
 });
 
 it("finds omo's agent directory where the process's environment moved it", () => {
@@ -186,4 +193,10 @@ it("binds an omo pane whose launcher moved its agent directory out of ~/.omo", (
     expect(omoCandidates(cwd, home)).toEqual([]);
     expect(omoCandidates(cwd, home, [], [join(home, ".omo", "agent"), agentDir]).map((file) => file.path)).toEqual([path]);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("names a cwd's session folder as omo's engine does, a Windows cwd included", () => {
+  expect(omoSessionFolder("/home/u/dev/app")).toBe("--home-u-dev-app--");
+  expect(omoSessionFolder("C:\\Users\\me\\dev\\app")).toBe("--C--Users-me-dev-app--");
+  expect(omoSessionFolder("C:/Users/me/app")).toBe("--C--Users-me-app--");
 });

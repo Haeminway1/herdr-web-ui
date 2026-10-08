@@ -77,12 +77,13 @@ function Provider({ usage, now, count }: { usage: ProviderUsage; now: number; co
 
 /**
  * The plan limits of the subscriptions signed in on the server's PC, beside Settings: per
- * provider its logo and the limit closest to running out; the whole strip opens every limit
+ * provider its logo and the limit chosen in Settings (week or session); the whole strip opens every limit
  * with its reset time.
  */
 export function UsageMeters() {
   const t = useT();
   const { settings } = useSettings();
+  // the fork keeps the top panel (UsagePanel): the strip shows only where it was placed
   const footer = settings.showUsage && settings.usagePlacement === "footer";
   const { report, loading, refresh } = useUsage(footer);
   const [open, setOpen] = useState(false);
@@ -90,7 +91,7 @@ export function UsageMeters() {
   const rootRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLButtonElement>(null);
 
-  // moved to the top of the list, the popover closes: its clock and listener go with it
+  // turned off in Settings, the popover closes: its clock and listener go with it
   useEffect(() => { if (!footer) setOpen(false); }, [footer]);
   useEffect(() => {
     if (!open) return;

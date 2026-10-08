@@ -10,8 +10,9 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
-import { Clock, FileText, Paperclip, SendHorizontal, Square, X } from "lucide-react";
+import { ArrowUp, FileText, Plus, Square, X } from "lucide-react";
 
 import "./Composer.css";
 
@@ -21,6 +22,10 @@ import { composerDrafts } from "../lib/composerDraft.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import {
   agentDisplayLabel,
+  composerModelDraw,
+  composerSendShown,
+  composerStatusCompact,
+  composerStatusHint,
   composerStatusWord,
   contextLeftPercent,
   formatTokens,
@@ -30,8 +35,11 @@ import {
   rankSlashCommands,
   terminalOnlyCommand,
 } from "../lib/compose.ts";
+import { modelLabel } from "../lib/modelName.ts";
+import { useFacesArrived } from "../lib/fontFaces.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "../lib/mentions.ts";
 import { quickReplyButtons, useSettings } from "../lib/settings.ts";
+import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, providerForAgent, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { composerFileName, desktopFileNames } from "../lib/desktop.ts";
@@ -51,11 +59,12 @@ export interface ComposerProps {
   /** an OmO pane's running background tasks: the status line opens their list */
   backgroundTasks?: number;
   metadata?: ConversationMetadata | null;
-  queueMode?: boolean;
   /** replaces the placeholder: how a message answers the agent's waiting prompt */
   answerHint?: string | null;
   /** what the agent suggests typing next (Claude's grey input text): the placeholder, taken with Tab */
   suggestion?: string | null;
+  /** an empty chat's greeting: it stands over the composer's column and takes no row of its own */
+  greeting?: ReactNode;
   /** true: sent, clear the box; a string: keep the text and say why; a promise settles to either */
   onSend: (text: string) => boolean | string | Promise<boolean | string>;
   onAbort: () => void;
@@ -147,17 +156,25 @@ async function cachedPaneCommands(paneId: string, machineId: string, fetchComman
 /**
  * What is left of the context, as a ring filled by what is used (as Codex's app shows it):
  * red when little is left. The number is on hover, and on a tap beside the ring (a touch
- * screen has no hover). A window the transcript does not name draws no ring.
+ * screen has no hover). A window the transcript does not name draws no ring. Whether the number
+ * is open is the composer's to keep: its text takes room in the row the model label is fitted to.
  */
-function ContextRing({ context }: { context: NonNullable<ConversationMetadata["context"]> }) {
+function ContextRing({ context, shown, readOnly = false, onToggle }: { context: NonNullable<ConversationMetadata["context"]>; shown: boolean; readOnly?: boolean; onToggle: () => void }) {
   const t = useT();
-  const [shown, setShown] = useState(false);
   const left = contextLeftPercent(context);
   if (left === null || context.window === null) return null;
   const label = t("Context {percent}% left", { percent: left });
   const detail = t("{used} of {window} tokens", { used: formatTokens(context.used), window: formatTokens(context.window) });
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
+  if (readOnly) return <span className={`composer-context composer-context-readonly${left <= 20 ? " is-low" : ""}`}>
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <circle className="composer-context-track" cx="8" cy="8" r={radius} />
+      <circle className="composer-context-used" cx="8" cy="8" r={radius}
+        strokeDasharray={`${circumference * (100 - left) / 100} ${circumference}`} transform="rotate(-90 8 8)" />
+    </svg>
+    <span className="visually-hidden">{label} · {detail}</span>
+  </span>;
   return (
     <button
       type="button"
@@ -165,7 +182,7 @@ function ContextRing({ context }: { context: NonNullable<ConversationMetadata["c
       aria-label={`${label} · ${detail}`}
       title={`${label} · ${detail}`}
       aria-expanded={shown}
-      onClick={() => setShown((open) => !open)}
+      onClick={onToggle}
     >
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <circle className="composer-context-track" cx="8" cy="8" r={radius} />
@@ -175,6 +192,19 @@ function ContextRing({ context }: { context: NonNullable<ConversationMetadata["c
       {shown && <span className="composer-context-text">{label}</span>}
     </button>
   );
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia?.(query).matches === true);
+  useEffect(() => {
+    const media = window.matchMedia?.(query);
+    if (!media) return;
+    const refresh = () => setMatches(media.matches);
+    refresh();
+    media.addEventListener("change", refresh);
+    return () => media.removeEventListener("change", refresh);
+  }, [query]);
+  return matches;
 }
 
 /** Chat-style input surface with pane-local drafts, command/file completion, and image mentions. */
@@ -187,9 +217,9 @@ export function Composer({
   backgroundTasks = 0,
   metadata,
   work = null,
-  queueMode = false,
   answerHint = null,
   suggestion = null,
+  greeting = null,
   onSend,
   onAbort,
   onUploadImage,
@@ -198,7 +228,19 @@ export function Composer({
   const machineId = useMachineId();
   const { fetchPaneCommands, fetchPaneFiles } = useMachineApi();
   const { settings } = useSettings();
+  const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
+  const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
+  const { report: usageReport } = useUsage(usageEnabled);
+  const usage = usageEnabled && usageReport !== null ? composerUsage(usageReport.providers, agent, settings.usageOrder, settings.usageHidden) : undefined;
+  const usageWindows = usage === undefined ? [] : statusWindows(usage);
+  const usageLimit = usageWindows[0];
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const statusRef = useRef<HTMLDivElement | null>(null);
+  const hintRef = useRef<HTMLSpanElement | null>(null);
+  /** the card's own width: a narrow one shows the task chip's count */
+  const [cardWidth, setCardWidth] = useState(0);
+  const [contextShown, setContextShown] = useState(false);
   const composingRef = useRef(false);
   // the chat lens's input surface takes the keyboard when it appears (a pane switch remounts
   // it), as the grid does in the terminal lens: a pane picked from the drawer is typed into
@@ -235,6 +277,8 @@ export function Composer({
   const [manualHeight, setManualHeight] = useState<number | null>(readComposerHeight);
   /** the box's rendered height, for the grip to announce while the height is automatic */
   const [autoHeight, setAutoHeight] = useState(0);
+  /** the box's width: its text rewraps when the lane does (Settings → Chat width, a resized pane), and the automatic height with it */
+  const [boxWidth, setBoxWidth] = useState(0);
   /** the automatic height of an empty box (the textarea's CSS min-height): the grip's floor */
   const [minHeight, setMinHeight] = useState(0);
   const [heightLimit, setHeightLimit] = useState(composerHeightLimit);
@@ -299,7 +343,13 @@ export function Composer({
     };
   }, []);
 
-  useLayoutEffect(() => {
+  // The app's faces swap in after the first paint (fonts/fonts.css, font-display: swap) and are
+  // not as wide as the fallback they replace. No box changes size for that, so nothing else
+  // would measure again: each face's arrival (lib/fontFaces.ts) renders the composer once more, which sizes the message
+  // box (below) and fits the model label (fitStatus) with the face that is drawn.
+  const facesLoaded = useFacesArrived();
+
+  const sizeTextarea = useCallback(() => {
     const element = textareaRef.current;
     if (!element) return;
     const floor = Math.round(parseFloat(getComputedStyle(element).minHeight)) || 0;
@@ -312,7 +362,82 @@ export function Composer({
     element.style.height = `${element.scrollHeight}px`;
     const height = Math.round(element.getBoundingClientRect().height);
     setAutoHeight((current) => current === height ? current : height);
-  }, [text, manualHeight, placeholder]);
+  }, [manualHeight]);
+
+  useLayoutEffect(sizeTextarea, [sizeTextarea, text, placeholder, boxWidth, facesLoaded]);
+
+  // SettingsProvider writes --chat-scale in a passive effect. Measure on the next frame,
+  // after that CSS is applied, so a draft rewraps without waiting for another keystroke.
+  useEffect(() => {
+    const frame = requestAnimationFrame(sizeTextarea);
+    return () => cancelAnimationFrame(frame);
+  }, [sizeTextarea, settings.chatFontSize, settings.density]);
+
+  useEffect(() => {
+    const element = textareaRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => setBoxWidth(element.clientWidth));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  /**
+   * Two things the controls row asks of the layout itself, since what fits depends on the
+   * model's name, the mic, the chip and the language, not on a width.
+   * - The model label: measured with everything drawn, then drawn as composerModelDraw says
+   *   (stepped out whole while Queue shows, the effort word alone without it). Stepping out is
+   *   CSS on the mark's attribute, so the label is still read. It runs after every render of the
+   *   composer, which is why the context ring's open number is this component's state: opening it
+   *   takes room from the label without changing the card's size.
+   * - The sentence is never cut. Where it does not fit beside the model it wraps to a line of its
+   *   own (CSS); there it is marked, so it takes the whole line and drops the dot that separated
+   *   it from the model. The sentence alone wraps: the rest stays one row (.composer-status-meta),
+   *   so beside a sentence too the label is measured clipped and steps out, not onto more lines.
+   */
+  const fitStatus = useCallback((): void => {
+    const status = statusRef.current;
+    if (!status) return;
+    status.removeAttribute("data-model");
+    status.removeAttribute("data-hint-alone");
+    status.removeAttribute("data-meta-empty");
+    const clipped = (selector: string): boolean => {
+      const item = status.querySelector<HTMLElement>(selector);
+      return item !== null && item.scrollWidth > item.clientWidth;
+    };
+    const draw = composerModelDraw({
+      modelClipped: clipped(".composer-model"),
+      effortClipped: clipped(".composer-reasoning"),
+    });
+    if (draw !== "full") status.setAttribute("data-model", draw);
+    const hint = hintRef.current;
+    if (!hint) return;
+    // with the label stepped out and no ring, the row beside the sentence draws nothing: it gives
+    // up its box, or it would keep an empty line over the sentence
+    const meta = status.querySelector<HTMLElement>(".composer-status-meta")?.getBoundingClientRect();
+    if (!meta || meta.width <= 1) status.setAttribute("data-meta-empty", "");
+    const line = hint.getBoundingClientRect();
+    const beside = meta !== undefined && meta.width > 1 && meta.bottom > line.top && meta.top < line.top + line.height / 2 && meta.right <= line.left + 1;
+    if (!beside) status.setAttribute("data-hint-alone", "");
+  }, []);
+  useLayoutEffect(fitStatus);
+
+  // the card's own width decides, not the window's: a sidebar or a narrow lane shrinks the card
+  // in a wide window. Measured before the first paint, so a phone never draws the words first.
+  // A resize fits the row on the next frame: marking it inside the observer's own callback can
+  // change the card's height there, which the browser reports as a ResizeObserver loop
+  useLayoutEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    let frame = 0;
+    setCardWidth(Math.round(surface.getBoundingClientRect().width));
+    const observer = new ResizeObserver(() => {
+      setCardWidth(Math.round(surface.getBoundingClientRect().width));
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(fitStatus);
+    });
+    observer.observe(surface);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, []);
 
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -408,6 +533,7 @@ export function Composer({
   const dictation = useDictation({
     mode: "chat",
     connected,
+    phone: mobile,
     polish: settings.voicePolishChat,
     keywords: () => [...(agent ? [agentLabel] : []), ...commands.map((command) => command.name)],
     box: textareaRef,
@@ -568,7 +694,7 @@ export function Composer({
     }
   }, [attachments, connected, dictation.forget, draftKey, onSend, sending, text, uploading]);
 
-  /** A quick reply goes the way a typed message does (queued mid-turn, an answer to an open menu), and leaves the box alone. */
+  /** A quick reply follows the same delivery policy as Send, and leaves the box alone. */
   const sendQuick = useCallback((reply: string) => {
     if (!connected || sending) return;
     setNote(null);
@@ -609,8 +735,14 @@ export function Composer({
           return;
         }
       }
-      if (event.key === "Escape" && trigger) {
+      if (event.key === "Escape" && trigger && !menuDismissed) {
         setMenuDismissed(true);
+        return;
+      }
+      // a draft puts Send where Stop was: Escape is then the Stop the agent's own input has
+      if (event.key === "Escape" && connected && agentStatus === "working" && textRef.current.trim().length > 0) {
+        event.preventDefault();
+        onAbort();
         return;
       }
       // Tab takes the suggestion into the empty box, as in Claude's own input
@@ -627,7 +759,7 @@ export function Composer({
       event.preventDefault();
       send();
     },
-    [choices, menuOpen, offered, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, trigger],
+    [agentStatus, choices, connected, menuDismissed, menuOpen, offered, onAbort, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, trigger],
   );
 
   // a desktop shell names files from this computer by their path instead (lib/desktop.ts)
@@ -667,33 +799,24 @@ export function Composer({
   );
 
   const isWorking = agentStatus === "working";
+  const statusCompact = composerStatusCompact(cardWidth);
+  const sendShown = composerSendShown({ working: isWorking, text });
+  const hint = composerStatusHint({ uploading, connected, text });
+  const model = metadata?.model ? modelLabel(metadata.model) : null;
+  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort);
+  const usageDetail = usageWindows.map((window) => {
+    const reset = formatResetIn(window.resets_at, Date.now());
+    return `${windowLabel(window)} ${meterText(window, settings.usageCount)}${reset ? ` · ${t("Resets in {time}", { time: reset })}` : ""}`;
+  }).join("\n");
+  const usageCaption = usageLimit === undefined ? "" : `${usageLimit.kind === "session" ? "5h" : windowLabel(usageLimit)} ${formatPercent(meterPercent(usageLimit, settings.usageCount))}`;
+  const usageAccessible = usage === undefined ? "" : `${t("Subscription usage")}: ${usageName(usage)}, ${usageDetail.replaceAll("\n", ", ")}`;
+  const hintText = hint === null ? null : t(hint === "uploading" ? "Uploading file…" : "Reconnecting… message held here, never queued");
   const menuId = `composer-menu-${paneId}`;
 
   return (
-    <div className="composer" role="group" aria-label={t("Message composer")}>
-      <div className="composer-status" role="status" data-status={agentStatus ?? "unknown"}>
-        {agent && <AgentMark agent={agent} size={14} />}
-        <span className="composer-agent-label">{agentLabel}</span>
-        <span className="composer-status-separator" aria-hidden="true">·</span>
-        <strong>{t(composerStatusWord(agentStatus))}</strong>
-        {agentStatus === "working" && work && <WorkLine work={work} />}
-        <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} />
-        {(metadata?.model || metadata?.reasoning_effort) && <span className="composer-model-info" aria-label={t("Model and reasoning")}>
-          <span className="composer-model" title={metadata.model ?? t("Model not available")}>{metadata.model ?? t("Model —")}</span>
-          <span className="composer-reasoning" title={metadata.reasoning_effort ? t("Reasoning effort: {effort}", { effort: metadata.reasoning_effort }) : t("Reasoning effort not available")}>
-            <span className="composer-reasoning-full">{t("Reasoning {effort}", { effort: metadata.reasoning_effort ?? "—" })}</span>
-            <span className="composer-reasoning-short" aria-hidden="true">{metadata.reasoning_effort ?? "—"}</span>
-          </span>
-        </span>}
-        {metadata?.context && <ContextRing context={metadata.context} />}
-        {(uploading || !connected) && (
-          <span className="composer-status-hint">
-            <span aria-hidden="true">·</span> {t(uploading ? "Uploading file…" : "Reconnecting… message held here, never queued")}
-          </span>
-        )}
-      </div>
-
-      {/* no Tab key on a phone: the suggestion can be a chip there that fills the box, once chosen in Settings */}
+    <div className="composer" role="group" aria-label={t("Message composer")} data-dictating={dictation.voice.state !== "idle" ? "" : undefined}>
+      {greeting}
+      {/* no Tab key on a phone: the suggestion is a chip there that fills the box, unless Settings turns it off */}
       {settings.showSuggestionChip && offered !== null && text === "" && (
         <div className="composer-quick composer-suggestion-row">
           <button type="button" className="composer-quick-reply composer-suggestion" title={t("Use the suggestion")} onClick={() => setTextAndCaret(offered, offered.length)}>
@@ -720,7 +843,9 @@ export function Composer({
       )}
 
       <div
+        ref={surfaceRef}
         className={`composer-surface${dragging ? " is-dragging" : ""}`}
+        data-compact={statusCompact ? "" : undefined}
         onDragEnter={(event) => {
           event.preventDefault();
           setDragging(true);
@@ -732,7 +857,7 @@ export function Composer({
         onDrop={onDrop}
       >
         <div
-          className="composer-resize"
+          className={`composer-resize${manualHeight !== null ? " is-sized" : ""}`}
           role="separator"
           aria-orientation="horizontal"
           aria-label={t("Resize message box")}
@@ -869,25 +994,63 @@ export function Composer({
             disabled={!connected || uploading}
             onClick={() => fileInputRef.current?.click()}
           >
-            <Paperclip aria-hidden="true" />
+            <Plus aria-hidden="true" />
           </button>
           {dictation.shown && <MicButton dictation={dictation} />}
+          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} />
+        </div>
+        {/* between the two control groups of the card's last row. The agent's name, its separator and the
+            state word are read, not drawn: the mark and the header name the agent, and Stop, the live row and
+            the prompt card say the state. All state words stay available to assistive tech only.
+            Where the model label does not fit, it steps out and is still read (fitStatus marks data-model) */}
+        <div ref={statusRef} className="composer-status" role="status" data-status={agentStatus ?? "unknown"}
+          data-offline={connected ? undefined : ""} data-hint={hint ?? undefined}>
+          {/* everything but the sentence: one row that never wraps, also where the sentence takes a line of its own */}
+          <span className="composer-status-meta">
+            <span className="composer-agent-label visually-hidden">{agentLabel}</span>
+            <span className="composer-status-separator visually-hidden" aria-hidden="true">·</span>
+            <strong className="visually-hidden">{t(composerStatusWord(agentStatus))}</strong>
+            {/* the mark, the model, the level and the context ring as one quiet pill. It only shows: no role,
+                no focus, nothing to press but the ring inside it. A pane that names no model draws no pill
+                (.is-bare): the mark, a level if it has one, and the ring stand in the row as they are */}
+            <span className={`composer-pill${metadata?.model ? "" : " is-bare"}`}>
+              {agent && <AgentMark agent={agent} size={14} />}
+              {modelShown && <span className="composer-model-info" aria-label={t("Model and reasoning")}>
+                {/* a name only for an id modelLabel can name for certain; any other id is drawn as received, in the identifier face */}
+                <span className={`composer-model${model ? model.named ? "" : " is-id" : " is-none"}`} title={metadata?.model ?? t("Model not available")}>{model?.text ?? t("Model —")}</span>
+                {/* behind a name the id as received is still read; a touch cannot reach the title */}
+                {model?.named && <span className="composer-model-id visually-hidden">{metadata?.model}</span>}
+                {/* no level recorded: nothing is drawn for it, no dot and no dash; the sentence is still read */}
+                <span className={`composer-reasoning${metadata?.reasoning_effort ? "" : " visually-hidden"}`} title={metadata?.reasoning_effort ? t("Reasoning effort: {effort}", { effort: metadata.reasoning_effort }) : t("Reasoning effort not available")}>
+                  <span className="composer-reasoning-full visually-hidden">{t("Reasoning {effort}", { effort: metadata?.reasoning_effort ?? "—" })}</span>
+                  {metadata?.reasoning_effort && <>
+                    <span className="composer-reasoning-dot" aria-hidden="true">·</span>
+                    <span className="composer-reasoning-short" aria-hidden="true">{metadata.reasoning_effort}</span>
+                  </>}
+                </span>
+              </span>}
+              {metadata?.context && <ContextRing context={metadata.context} shown={contextShown} readOnly={mobile} onToggle={() => setContextShown((open) => !open)} />}
+              {usage !== undefined && usage.problem === null && usageLimit !== undefined && <span
+                className={`composer-usage${usageLimit.used_percent >= HIGH_PERCENT ? " is-high" : ""}${usage.problem ? " has-problem" : ""}`}
+                title={`${usageName(usage)}\n${usageDetail}`}
+              >
+                <span aria-hidden="true">{usageCaption}</span>
+                <span className="visually-hidden">{usageAccessible}</span>
+              </span>}
+            </span>
+            {/* fork: how long the running turn has worked and what it does now, after the pill */}
+            {agentStatus === "working" && work && <WorkLine work={work} />}
+            {/* the chip is a button in the left controls; its count is still said here, where a change is announced */}
+            {backgroundTasks > 0 && <span className="composer-task-count visually-hidden">{t(backgroundTasks === 1 ? "{n} background task" : "{n} background tasks", { n: backgroundTasks })}</span>}
+          </span>
+          {hintText !== null && (
+            <span ref={hintRef} className="composer-status-hint" title={hintText}>
+              <span className="composer-status-hint-dot" aria-hidden="true">· </span>{hintText}
+            </span>
+          )}
         </div>
         <div className="composer-controls composer-controls-right">
-          {queueMode && (
-            <button
-              type="button"
-              className="composer-queue-button"
-              aria-label={t("Queue message")}
-              title={t("Queue as the next message")}
-              disabled={!connected || uploading || sending || text.trim().length === 0}
-              onClick={send}
-            >
-              <Clock aria-hidden="true" />
-              {t("Queue")}
-            </button>
-          )}
-          {isWorking ? (
+          {!sendShown ? (
             <button
               type="button"
               className="composer-action composer-stop"
@@ -898,18 +1061,18 @@ export function Composer({
             >
               <Square aria-hidden="true" />
             </button>
-          ) : !queueMode ? (
+          ) : (
             <button
               type="button"
               className="composer-action composer-send"
               aria-label={t("Send message")}
               title={t("Send message")}
               disabled={!connected || uploading || sending || text.trim().length === 0}
-              onClick={send}
+              onClick={() => send()}
             >
-              <SendHorizontal aria-hidden="true" />
+              <ArrowUp aria-hidden="true" />
             </button>
-          ) : null}
+          )}
         </div>
       </div>
       {note && <div className="composer-note" role="alert">{note}</div>}
@@ -919,7 +1082,7 @@ export function Composer({
       {!note && terminalOnly !== null && (
         <div className="composer-hint">{t("{command} opens a tree the chat cannot show. It runs in the terminal — tap the terminal button at the top of the screen to choose a branch.", { command: `/${terminalOnly}` })}</div>
       )}
-      {/* above the whole composer: inside the surface it would cover the agent status line */}
+      {/* above the whole composer: inside the surface it would cover the text being dictated */}
       {dictation.shown && <VoiceRecordingPill dictation={dictation} align="start" />}
     </div>
   );

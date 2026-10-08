@@ -6,7 +6,8 @@ import { herdrRpc, paneRead, sessionSnapshot, workspaceClose, workspaceCreate } 
 
 /** Its own XDG config isolates the global plugin registry as well as the owned herdr panes. */
 it("herdr loads the Phone setup entrypoint and keeps its QR and code visible in a pane", async () => {
-  const root = mkdtempSync(join(tmpdir(), "herdr-phone-pane-"));
+  // the session socket lives under root: macOS's temp dir is too deep for a socket path (104 bytes)
+  const root = mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "herdr-phone-pane-"));
   const source = join(import.meta.dir, "..");
   const config = join(root, "config");
   const plugin = join(root, "plugin");
@@ -32,7 +33,7 @@ it("herdr loads the Phone setup entrypoint and keeps its QR and code visible in 
   };
   const app = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === "/api/health") return Response.json({ ok: true });
+    if (path === "/api/health") return Response.json({ ok: true, herdr: { version: "0.9.3", protocol: 1 }, auth: { required: false, authenticated: true } });
     if (path === "/api/access") return Response.json({ port: app.port, tailscale: { serving_url: "https://demo.example.ts.net" } });
     if (path === "/api/devices/pair/start") return Response.json({ code: "123456" });
     return new Response(null, { status: 404 });

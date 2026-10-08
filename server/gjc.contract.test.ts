@@ -20,6 +20,15 @@ afterAll(async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
+/** Paths a process holds open: /proc on Linux, lsof on macOS. */
+function heldPaths(pid: number): string[] {
+  if (process.platform === "linux") {
+    return readdirSync(`/proc/${pid}/fd`).flatMap((fd) => { try { return [readlinkSync(`/proc/${pid}/fd/${fd}`)]; } catch { return []; } });
+  }
+  const lsof = Bun.spawnSync(["/usr/sbin/lsof", "-nP", "-a", "-p", String(pid), "-Fn"], { stdout: "pipe", stderr: "ignore" });
+  return lsof.stdout.toString().split("\n").filter((line) => line.startsWith("n")).map((line) => line.slice(1));
+}
+
 async function pane(paths: string[], screen = "", cwd = home): Promise<string> {
   const created = await workspaceCreate({ cwd: home, label: "herdr-web-ui-test-gjc-binding" });
   workspaces.push(created.workspace.workspace_id);
@@ -29,7 +38,7 @@ async function pane(paths: string[], screen = "", cwd = home): Promise<string> {
     const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; argv?: string[] }[] } }>("pane.process_info", { pane_id: id });
     const process = info.process_info?.foreground_processes?.find((p) => p.argv?.includes(script));
     if (process) {
-      const held = readdirSync(`/proc/${process.pid}/fd`).flatMap((fd) => { try { return [readlinkSync(`/proc/${process.pid}/fd/${fd}`)]; } catch { return []; } });
+      const held = heldPaths(process.pid);
       if (paths.every((path) => held.includes(path))) return id;
     }
     await Bun.sleep(50);
@@ -37,7 +46,8 @@ async function pane(paths: string[], screen = "", cwd = home): Promise<string> {
   throw new Error("GJC stand-in did not open its descriptors");
 }
 
-it("reads the foreground GJC session after its process changes directory, not another session in the pane cwd", async () => {
+// the stand-in is found by the file it holds open (/proc): on macOS gjc leaves a terminal breadcrumb instead
+it.skipIf(process.platform !== "linux")("reads the foreground GJC session after its process changes directory, not another session in the pane cwd", async () => {
   const cwd = join(home, "project");
   mkdirSync(cwd);
   const path = join(dir, "foreground.jsonl"), other = join(dir, "pane-cwd.jsonl");
@@ -67,7 +77,53 @@ it("reads the foreground GJC session after its process changes directory, not an
   }
 });
 
-it("binds same-cwd panes to their own files regardless of which transcript was modified last", async () => {
+for (const stale of [false, true]) {
+  it.skipIf(process.platform !== "linux")(`reads a running GJC transcript when herdr names no agent for the pane${stale ? " and still holds an earlier Codex session report" : ""}`, async () => {
+    const path = join(dir, `routing-${stale ? "stale" : "unknown"}.jsonl`);
+    writeFileSync(path, JSON.stringify({ type: "session", cwd: home }) + "\n" + JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "GJC owns this answer" }] } }) + "\n");
+    const id = await pane([path]);
+    if (stale) await herdrRpc("pane.report_agent_session", { pane_id: id, source: "herdr:codex", agent: "codex", seq: Date.now(), agent_session_id: "01a0f16d-c20a-7a02-a880-e89b68155802" });
+    const metadata = (await sessionSnapshot()).panes.find((p) => p.pane_id === id)!;
+    expect(metadata.agent ?? null).toBeNull();
+    if (stale) expect(metadata.agent_session?.agent).toBe("codex");
+    const oldHome = process.env["HOME"], oldSocket = process.env["HERDR_SOCKET"];
+    process.env["HERDR_SOCKET"] = herdrSocketPath();
+    process.env["HOME"] = home;
+    try {
+      const conversation = await paneConversation(id);
+      expect(conversation.source).toBe("gjc-transcript");
+      expect(conversation.turns[0]!.parts[0]).toMatchObject({ kind: "text", text: "GJC owns this answer" });
+    } finally {
+      if (oldHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = oldHome;
+      if (oldSocket === undefined) delete process.env["HERDR_SOCKET"]; else process.env["HERDR_SOCKET"] = oldSocket;
+    }
+  });
+}
+
+it("follows the agent herdr names for a pane: a gjc process in it does not take the chat", async () => {
+  const path = join(dir, "routing-labelled.jsonl");
+  writeFileSync(path, JSON.stringify({ type: "session", cwd: home }) + "\n" + JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "GJC owns this answer" }] } }) + "\n");
+  const id = await pane([path]);
+  await herdrRpc("pane.report_agent", { pane_id: id, source: "manual", agent: "codex", state: "idle" });
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if ((await sessionSnapshot()).panes.find((p) => p.pane_id === id)?.agent === "codex") break;
+    await Bun.sleep(50);
+  }
+  expect((await sessionSnapshot()).panes.find((p) => p.pane_id === id)!.agent).toBe("codex");
+  const oldHome = process.env["HOME"], oldSocket = process.env["HERDR_SOCKET"];
+  process.env["HERDR_SOCKET"] = herdrSocketPath();
+  process.env["HOME"] = home;
+  try {
+    // the Codex route has no rollout for this pane and says so; it is not handed to gjc
+    await expect(paneConversation(id)).rejects.toBeInstanceOf(ConversationUnavailable);
+  } finally {
+    if (oldHome === undefined) delete process.env["HOME"]; else process.env["HOME"] = oldHome;
+    if (oldSocket === undefined) delete process.env["HERDR_SOCKET"]; else process.env["HERDR_SOCKET"] = oldSocket;
+  }
+});
+
+// binding by open file reads /proc: on macOS gjc is found by its terminal breadcrumb instead
+it.skipIf(process.platform !== "linux")("binds same-cwd panes to their own files regardless of which transcript was modified last", async () => {
   const a = join(dir, "a.jsonl"), b = join(dir, "b.jsonl");
   for (const path of [a, b]) writeFileSync(path, JSON.stringify({ type: "session", cwd: home }) + "\n");
   const first = await pane([a]), second = await pane([b]);
@@ -83,7 +139,7 @@ it("binds same-cwd panes to their own files regardless of which transcript was m
   await expect(gjcTranscriptPath(first, "/different-cwd", home)).rejects.toThrow(ConversationUnavailable);
 });
 
-it("binds a pane whose session holds a subagent's file open to the session, not the subagent", async () => {
+it.skipIf(process.platform !== "linux")("binds a pane whose session holds a subagent's file open to the session, not the subagent", async () => {
   const session = join(dir, "parent.jsonl"), subagent = join(dir, "parent", "0-Worker.jsonl");
   mkdirSync(join(dir, "parent"));
   for (const path of [session, subagent]) writeFileSync(path, JSON.stringify({ type: "session", cwd: home }) + "\n");

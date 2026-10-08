@@ -1,12 +1,16 @@
 import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
   AgentKind,
+  ConversationResponse,
+  CreateWorktreeRequest,
+  CreateTabRequest,
+  CreateWorkspaceRequest,
   DirectoryListing,
   FileInfo,
-  ConversationResponse,
   HealthAuth,
   InteractivePrompt,
   OmoActivity,
+  OpenWorktreeRequest,
   PairedDevice,
   PairingCode,
   PaneAttention,
@@ -14,15 +18,22 @@ import type {
   PromptAnswer,
   PushKey,
   RemoteAccess,
+  RemoveWorktreeRequest,
   SessionSnapshot,
   SlashCommand,
+  TabCreated,
   UsageReport,
   WorkspaceCreated,
+  WorktreeListing,
+  WorktreeOpened,
+  WorktreeRemoved,
 } from "../../shared/protocol.ts";
 import type { PaneScrollInfo } from "../../shared/herdr-api.generated.ts";
-import type { UpdateCommand, UpdateStatus } from "../../shared/update.ts";
+import { readInstalledNotes, readUpdateNotes, type HerdrUpdateStatus, type InstalledNotes, type UpdateCommand, type UpdateNotes, type UpdateStatus } from "../../shared/update.ts";
 import type { AlertPrefs } from "../../shared/notify-policy.ts";
 import type { VoiceConfigUpdate, VoiceStatus } from "../../shared/voice.ts";
+import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
+import { t } from "./i18n.ts";
 
 /** Settings → Phone: what Tailscale on the server's PC already serves, or the command to run. */
 export function fetchRemoteAccess(): Promise<RemoteAccess> {
@@ -38,8 +49,29 @@ export function fetchUpdateStatus(): Promise<UpdateStatus> {
   return getJson<UpdateStatus>("/api/updates");
 }
 
+/** What the available update brings. A server older than the notes answers with an error. */
+export async function fetchUpdateNotes(): Promise<UpdateNotes> {
+  return readUpdateNotes(await getJson<unknown>("/api/updates/notes"));
+}
+
+/** What the last update brought. A server older than the question answers with an error. */
+export async function fetchInstalledNotes(): Promise<InstalledNotes> {
+  return readInstalledNotes(await getJson<unknown>("/api/updates/installed"));
+}
+
 export async function requestUpdate(command: UpdateCommand): Promise<void> {
   const url = `/api/updates/${command}`;
+  const response = await fetch(url, { method: "POST", headers: { "x-herdr-update": "1" } });
+  if (!response.ok) throw await errorFrom(url, response);
+}
+
+/** Settings → Updates: herdr itself, on the PC the server runs on. */
+export function fetchHerdrUpdate(): Promise<HerdrUpdateStatus> {
+  return getJson<HerdrUpdateStatus>("/api/herdr/update");
+}
+
+export async function requestHerdrUpdate(): Promise<void> {
+  const url = "/api/herdr/update";
   const response = await fetch(url, { method: "POST", headers: { "x-herdr-update": "1" } });
   if (!response.ok) throw await errorFrom(url, response);
 }
@@ -52,12 +84,15 @@ export async function requestUpdate(command: UpdateCommand): Promise<void> {
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string | null;
+  /** the server's own words, without the URL and status the message starts with */
+  readonly detail: string;
 
   constructor(url: string, status: number, detail: string, code: string | null) {
     super(`${url} failed (${status}): ${detail}`);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.detail = detail;
   }
 }
 
@@ -213,13 +248,36 @@ function base64FromBytes(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** Megabytes to one decimal, rounded up: a file just over the limit never reads as the limit itself. */
+const megabytes = (bytes: number): string => `${Math.ceil((bytes / (1024 * 1024)) * 10) / 10} MB`;
+
+/** A file over the attachment limit. Its message is what the person reads: the file, its size, the limit. */
+export class AttachmentTooLargeError extends Error {
+  readonly fileName: string;
+  readonly size: number;
+
+  constructor(fileName: string, size: number) {
+    super(t("Too large to attach: {name} ({size}). A file can be up to {limit}.", { name: fileName, size: megabytes(size), limit: megabytes(MAX_ATTACHMENT_BYTES) }));
+    this.name = "AttachmentTooLargeError";
+    this.fileName = fileName;
+    this.size = size;
+  }
+}
+
+/** Throws for a file the server would refuse, before any of it is read or sent. */
+export function assertAttachable(file: Blob): void {
+  if (file.size > MAX_ATTACHMENT_BYTES) throw new AttachmentTooLargeError(file instanceof File && file.name ? file.name : file.type || "file", file.size);
+}
+
 /**
  * POST /api/pane/image: stores one pasted or file-picked image next to the pane and
  * resolves to the absolute path the prompt should reference (the composer inserts
- * `@path`). ApiError 413 image_too_large / 415 unsupported_media_type on bad input.
+ * `@path`). AttachmentTooLargeError for a file over the limit, with nothing sent;
+ * ApiError 413 image_too_large from a server whose limit is lower.
  */
 /** Any file: an image is stored as a paste, anything else under its own (sanitised) name. */
 export async function uploadPaneImage(paneId: string, image: Blob, machineId = "local"): Promise<string> {
+  assertAttachable(image);
   const data_base64 = base64FromBytes(new Uint8Array(await image.arrayBuffer()));
   const response = await fetch(machinePath(machineId, "pane/image"), {
     method: "POST",
@@ -318,11 +376,7 @@ export function fileUrl(path: string, paneId: string | null, machineId = "local"
   return machinePath(machineId, `fs/file?${fileQuery(path, paneId)}${download ? "&download=1" : ""}`);
 }
 
-export interface CreateWorkspaceRequest {
-  cwd?: string | null;
-  label?: string | null;
-  agent?: { kind: string; name?: string; args?: string[] } | null;
-}
+export type { CreateTabRequest, CreateWorkspaceRequest } from "../../shared/protocol.ts";
 
 /**
  * POST /api/workspace/create: a new herdr workspace (and an agent started in its root
@@ -334,6 +388,39 @@ export async function createWorkspace(request: CreateWorkspaceRequest, machineId
   return (await response.json()) as WorkspaceCreated;
 }
 
+/** POST /api/worktree/create: a git worktree of the workspace's repository, opened as a workspace grouped with it. */
+export async function createWorktree(request: CreateWorktreeRequest, machineId = "local"): Promise<WorktreeOpened> {
+  const response = await sendJson(machinePath(machineId, "worktree/create"), "POST", request);
+  return (await response.json()) as WorktreeOpened;
+}
+
+/** GET /api/worktree/list: every checkout of the workspace's repository, with the workspace each is open in. */
+export function listWorktrees(workspaceId: string, machineId = "local"): Promise<WorktreeListing> {
+  return getJson<WorktreeListing>(`${machinePath(machineId, "worktree/list")}?workspace_id=${encodeURIComponent(workspaceId)}`);
+}
+
+/** POST /api/worktree/open: an existing checkout as a workspace; the one it already has when it is open. */
+export async function openWorktree(request: OpenWorktreeRequest, machineId = "local"): Promise<WorktreeOpened> {
+  const response = await sendJson(machinePath(machineId, "worktree/open"), "POST", request);
+  return (await response.json()) as WorktreeOpened;
+}
+
+/** POST /api/tab/create: another tab in an existing workspace, with the same agent launch. */
+export async function createTab(request: CreateTabRequest, machineId = "local"): Promise<TabCreated> {
+  const response = await sendJson(machinePath(machineId, "tab/create"), "POST", request);
+  return (await response.json()) as TabCreated;
+}
+
+/** POST /api/tab/rename: the tab's name in herdr; an empty one is refused. */
+export async function renameTab(tabId: string, label: string, machineId = "local"): Promise<void> {
+  await sendJson(machinePath(machineId, "tab/rename"), "POST", { tab_id: tabId, label });
+}
+
+/** POST /api/tab/close: the tab and every pane in it; a workspace's last tab takes the workspace with it. */
+export async function closeTab(tabId: string, machineId = "local"): Promise<void> {
+  await sendJson(machinePath(machineId, "tab/close"), "POST", { tab_id: tabId });
+}
+
 export async function renameWorkspace(workspaceId: string, label: string, machineId = "local"): Promise<void> {
   await sendJson(machinePath(machineId, "workspace/rename"), "POST", { workspace_id: workspaceId, label });
 }
@@ -343,8 +430,15 @@ export async function moveWorkspace(workspaceId: string, insertIndex: number, ma
   await sendJson(machinePath(machineId, "workspace/move"), "POST", { workspace_id: workspaceId, insert_index: insertIndex });
 }
 
-export async function closeWorkspace(workspaceId: string, machineId = "local"): Promise<void> {
-  await sendJson(machinePath(machineId, "workspace/close"), "POST", { workspace_id: workspaceId });
+/** closeGroup takes the repository's open worktree workspaces with it; herdr refuses to close over them otherwise. */
+export async function closeWorkspace(workspaceId: string, machineId = "local", closeGroup = false): Promise<void> {
+  await sendJson(machinePath(machineId, "workspace/close"), "POST", { workspace_id: workspaceId, ...(closeGroup ? { close_group: true } : {}) });
+}
+
+/** POST /api/worktree/remove: deletes the checkout and closes its workspace; the branch stays. */
+export async function removeWorktree(request: RemoveWorktreeRequest, machineId = "local"): Promise<WorktreeRemoved> {
+  const response = await sendJson(machinePath(machineId, "worktree/remove"), "POST", request);
+  return (await response.json()) as WorktreeRemoved;
 }
 
 /** GET /api/pane/commands: the slash commands the pane's agent understands (built-in + custom). */
