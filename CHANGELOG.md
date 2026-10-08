@@ -45,6 +45,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   Code refuses says why in the chat instead of only in the terminal. `/goal` is also among the
   commands the message box suggests.
   ([#583](https://github.com/devswha/herdr-web-ui/pull/583))
+- Settings opened over a file preview is visible above it; Escape and Back close Settings
+  first, preserving the preview and its history entry until the file itself is closed.
+  ([#568](https://github.com/devswha/herdr-web-ui/pull/568))
 
 ## [0.4.0] - 2026-10-08
 
