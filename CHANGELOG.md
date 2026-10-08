@@ -15,6 +15,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - A GitHub release opens with its patch notes, short lines under New features, Improvements and
   Bug fixes as an install shows them, with the full changelog folded underneath.
 
+### Fixed
+- macOS Safari direct terminal input preserves Korean syllables when the input method
+  replaces text without emitting composition events, including after switching from English.
+  ([#524](https://github.com/devswha/herdr-web-ui/pull/524) by @suho-han)
+
 ## [0.4.1] - 2026-10-08
 
 ### Added
