@@ -42,6 +42,8 @@ export class ComposerDraftStore {
       if (unconfirmed !== null) {
         this.set(key, text ? `${unconfirmed}\n${text}` : unconfirmed);
         this.forget(key);
+        // its lease went with that page: the message back in the box can be sent again now
+        try { if (this.inFlight(key)?.sent === unconfirmed) this.storage().removeItem(SENDING_PREFIX + key); } catch { /* private mode */ }
         draft = { ...this.drafts.get(key)!, unconfirmed: true };
         this.drafts.set(key, draft);
       }
