@@ -515,7 +515,10 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
   let customIndex = rows.findIndex((row) => /^Type something\.?$/i.test(row.label));
   // typed into, the row shows the draft instead of "Type something.", and while it holds the
   // cursor the hint offers "ctrl+g to edit": that row is still the typed answer's
-  const drafted = customIndex < 0 && !preview && chatIndex > 1 && rows[chatIndex - 1]!.selected && /ctrl\+g to edit/i.test(wrapped(raw, hintIndex));
+  // Claude's own form only: the question named by its chip or tabs, a rule between that row and "Chat about this"
+  const drafted = customIndex < 0 && !preview && chatIndex > 1 && rows[chatIndex - 1]!.selected && /ctrl\+g to edit/i.test(wrapped(raw, hintIndex))
+    && lines.slice(rows[chatIndex - 1]!.lineIndex + 1, rows[chatIndex]!.lineIndex).some((line) => isDivider(line))
+    && (claudeTabs(lines, rows[0]!.lineIndex) !== null || claudeChip(lines, rows[0]!.lineIndex) !== null);
   if (drafted) customIndex = chatIndex - 1;
   if (preview) {
     // its notes are no answer of their own: no typed-answer row, the options are the menu

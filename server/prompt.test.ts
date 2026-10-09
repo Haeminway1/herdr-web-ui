@@ -4176,6 +4176,18 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
     expect(changed.id).not.toBe(harmless.id);
   });
 
+  test("a menu ending in Chat about this with no question chip or rule over it has no typed-answer row", () => {
+    const screen = [
+      "Choose an item",
+      "  1. Keep",
+      "❯ 2. Delete",
+      "  3. Chat about this",
+      "Enter to select · ↑/↓ to navigate · ctrl+g to edit in Vim · Esc to cancel",
+      "",
+    ].join("\n");
+    expect(parseInteractivePrompt("claude", screen)?.custom_option_index ?? null).toBeNull();
+  });
+
   // live on 2.1.295: the typed text went in after the draft, "neither, tell me their namesbuilder-c"
   test("a typed answer replaces the draft in the row instead of joining it", () => {
     const screen = [
