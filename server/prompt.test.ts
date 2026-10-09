@@ -4135,6 +4135,24 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
     expect(answerKeys(prompt, { option_index: 1 }).flatMap((step) => step.keys ?? [])).toEqual(["up", "enter"]);
   });
 
+  test("an answered approval above another program's bare Esc to cancel hint is no card", () => {
+    const screen = [
+      RULE,
+      " Bash command",
+      " sudo -v",
+      "",
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+      "",
+      " Esc to cancel · Tab to amend",
+      "Password:",
+      "Esc to cancel",
+      "",
+    ].join("\n");
+    expect(parseInteractivePrompt("claude", screen)).toBeNull();
+  });
+
   // live on 2.1.295: the typed text went in after the draft, "neither, tell me their namesbuilder-c"
   test("a typed answer replaces the draft in the row instead of joining it", () => {
     const screen = [
