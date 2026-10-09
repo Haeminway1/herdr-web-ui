@@ -1197,8 +1197,11 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
     const rules = lines.slice(0, questionIndex).flatMap((line, index) => index > callIndex && SOLID_RULE_RE.test(cleanLine(line)) ? [index] : []);
     const ruleIndex = callIndex >= 0 ? rules[0] ?? -1 : rules.at(-1) ?? -1;
     // a long command pushes the panel's rule and tool name off the top of the screen: the
-    // numbered rows and Claude's own key hint under them still say it is an approval
-    const scrolled = ruleIndex < 0 && callIndex < 0 && hintIndex > questionIndex && /^esc to cancel\b/i.test(cleanLine(lines[hintIndex]!));
+    // numbered rows and Claude's own key hint under them, with what is left of the panel above
+    // them (its `│` command block and the dashed rule under that), still say it is an approval
+    const above = lines.slice(0, questionIndex).map((line) => line.trim());
+    const scrolled = ruleIndex < 0 && callIndex < 0 && hintIndex > questionIndex && /^esc to cancel\b/i.test(cleanLine(lines[hintIndex]!))
+      && above.some((line) => /^│\s/.test(line)) && above.some((line) => /^╌{8,}$/.test(line));
     if (!scrolled && (ruleIndex < 0 || questionIndex - ruleIndex > 60)) return null;
     const panel = lines.slice(scrolled ? Math.max(0, questionIndex - 8) : ruleIndex + 1, questionIndex).map(cleanLine)
       .filter((line) => line && !isDivider(line) && !/^Tip:/i.test(line));

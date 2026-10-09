@@ -4153,6 +4153,11 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
     expect(parseInteractivePrompt("claude", screen)).toBeNull();
   });
 
+  test("a printed approval with no panel left above it is no card", () => {
+    const screen = ["Printed example", "Do you want to proceed?", "❯ 1. Yes", "  2. No", "Esc to cancel", ""].join("\n");
+    expect(parseInteractivePrompt("claude", screen)).toBeNull();
+  });
+
   // live on 2.1.295: the typed text went in after the draft, "neither, tell me their namesbuilder-c"
   test("a typed answer replaces the draft in the row instead of joining it", () => {
     const screen = [
