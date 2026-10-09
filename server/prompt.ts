@@ -1185,9 +1185,10 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
   const hintIndex = findLastIndex(lines, (_, index) => /esc to cancel/i.test(wrapped(lines, index)));
   const rows = parseNumberedRows(lines, questionIndex + 1, hintIndex > questionIndex ? hintIndex : lines.length);
   if (!sequentialRows(rows) || rows.length < 2 || rows.filter((row) => row.selected).length !== 1) return null;
-  // a hint of its own between the rows and the last one: the panel was answered, and what
-  // ends the screen now is another prompt ("Password:" over a bare "Esc to cancel")
-  if (lines.slice(rows[0]!.lineIndex, hintIndex).some((line) => /esc to cancel/i.test(cleanLine(line)))) return null;
+  // a hint of its own under the last row and over the last hint, whole or wrapped by a narrow
+  // pane: the panel was answered, and what ends the screen now is another prompt ("Password:"
+  // over a bare "Esc to cancel"); an option's own words may name the keys
+  if (/esc to\s+cancel/i.test(lines.slice(rows.at(-1)!.lineIndex + 1, hintIndex).map(cleanLine).join(" "))) return null;
   let title: string;
   let body: string;
   if (approvalIndex >= 0 && approvalIndex < questionIndex) {

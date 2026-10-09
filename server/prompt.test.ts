@@ -4153,6 +4153,42 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
     expect(parseInteractivePrompt("claude", screen)).toBeNull();
   });
 
+  test("an answered approval whose hint a narrow pane wrapped, above another bare hint, is no card", () => {
+    const screen = [
+      RULE,
+      " Bash command",
+      " sudo -v",
+      "",
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+      "",
+      " Esc to",
+      " cancel · Tab to amend",
+      "Password:",
+      "Esc to cancel",
+      "",
+    ].join("\n");
+    expect(parseInteractivePrompt("claude", screen)).toBeNull();
+  });
+
+  test("an option that names Esc to cancel in its own text keeps the approval a card", () => {
+    const screen = [
+      RULE,
+      " Bash command",
+      " echo Esc to cancel",
+      "",
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. Yes, and don’t ask again for: echo Esc to cancel:*",
+      "   3. No",
+      "",
+      " Esc to cancel · Tab to amend",
+      "",
+    ].join("\n");
+    expect(parseInteractivePrompt("claude", screen)?.options.length).toBe(3);
+  });
+
   test("a printed approval with no panel left above it is no card", () => {
     const screen = ["Printed example", "Do you want to proceed?", "❯ 1. Yes", "  2. No", "Esc to cancel", ""].join("\n");
     expect(parseInteractivePrompt("claude", screen)).toBeNull();
