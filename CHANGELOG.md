@@ -32,6 +32,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - The command palette opens on an empty search every time. It no longer shows the previous
   search's results for a moment, during which a quick Tab could highlight a different row than the
   one it focused. ([#631](https://github.com/devswha/herdr-web-ui/pull/631))
+- A chat message that ends with an attached file's `@` mention is sent again. Pasted last, the
+  mention left the agent's file suggestions open, and the Enter took a suggestion instead of
+  sending, so the message stayed in the terminal's input box.
+  ([#635](https://github.com/devswha/herdr-web-ui/pull/635))
 
 ## [0.4.2] - 2026-10-09
 
