@@ -13,6 +13,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   running ones, and a subagent that ends leaves a card in the chat with its answer instead of
   being hidden. They are read from the session's own `subagents/` files and its transcript.
   ([#527](https://github.com/devswha/herdr-web-ui/pull/527) by @kilhyeonjun)
+- A Claude Code pane's background commands are listed with its subagents and end with their
+  notification or a successful `TaskStop`/`KillShell`.
+  ([#534](https://github.com/devswha/herdr-web-ui/pull/534) by @kilhyeonjun)
 - **Settings → Voice input → Dictation language** picks the language dictation listens for. On Auto,
   a browser whose first language the app is not translated into (Hungarian, German, …) is heard in
   that language rather than in English; every other case listens for the app's language as before.
@@ -51,6 +54,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   agent reads as work in progress and not as a stutter. The arc is the same size and the turn
   still takes 1.6 s; only its eight 45° steps became forty-eight 7.5° ones.
   ([#622](https://github.com/devswha/herdr-web-ui/pull/622) by @iwangjie)
+- A Claude turn awaiting background work shows **BG**, even with **Quiet opened finishes** on,
+  instead of prematurely alerting "work finished". Automatic resumes share the first rest's
+  30-minute limit; a dev server started by the same prompt can hold the finish until that limit.
+  Work from an earlier prompt holds nothing, and restarting the bridge does not rehold an old
+  finish or send it again.
+  ([#534](https://github.com/devswha/herdr-web-ui/pull/534) by @kilhyeonjun)
 - The terminal announces itself: it is a labelled region named after the pane — "Terminal for
   Idempotent payments" — so a screen reader names the pane before its content. The label is
   translated and appears only in the terminal view, not over the chat.
