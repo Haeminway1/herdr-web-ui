@@ -659,7 +659,9 @@ One set for both themes: the card is island black wherever it shows.
   text button in the regular weight beside it. Otherwise the answer keeps two labelled buttons,
   glyph + MD and glyph + TXT; where the primary pointer is coarse each is a `--touch-target` target on a
   one-line row, as is a user turn's copy, and a skill list under a user turn clears that target.
-- Markdown supports headings, lists, links, quotes, tables, inline/fenced code and code-copy actions.
+- Markdown supports headings, lists (a task item `- [x]` / `- [ ]` shows a checked or empty box in
+  place of its bullet, not clickable), links, quotes, tables, inline/fenced code and code-copy
+  actions.
   A link keeps `--accent` and a file chip reads in `--text-strong` with a dotted underline; both
   underlines are `--text-dim` at rest and both take the accent on hover and focus-visible.
   Code blocks are `--radius-lg` and never scroll inside: one longer than 30 lines opens at its

@@ -19,6 +19,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   go where the line shows. Before, a long press on iOS showed the system's drag preview but
   dropped nothing. The row's ⋯ menu also has Move up and Move down.
   ([#679](https://github.com/devswha/herdr-web-ui/pull/679) by @jiunshinn)
+- A task list (`- [x] done`, `- [ ] open`) in the chat shows a checked or empty box in place of
+  its bullet, instead of the brackets.
+  ([#669](https://github.com/devswha/herdr-web-ui/pull/669) by @aNNdii)
 
 ### Changed
 - The chat's `/` command list also matches a word of a command's name, any part of it, its letters

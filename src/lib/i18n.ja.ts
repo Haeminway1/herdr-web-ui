@@ -455,6 +455,7 @@ export const JA: Record<string, string> = {
   "Copy code": "コードをコピー",
   "Show less": "折りたたむ",
   "Show all {n} lines": "{n} 行すべて表示",
+  "Empty task": "空のタスク",
 
   // ---- composer ----
   "Reconnecting… message held here, never queued": "再接続しています… メッセージはここに保持され、キューには入りません",
