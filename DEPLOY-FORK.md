@@ -35,7 +35,7 @@ look stays. Deleted upstream code the fork's UI still needs is restored, not dro
 (2026-10-08: v0.4.1 took upstream #521/#556 — workspaces + Agents list, By folder removed — as the
 default; the user lost the folder sidebar and the hover rename/close, and v0.4.2 put them back.)
 
-- Chat: native Devin CLI conversations; instant send (the bubble shows at once, beside upstream's
+- Chat: instant send (the bubble shows at once, beside upstream's
   pending follow-ups); the work-progress line in the composer status row (elapsed time and current
   tool); a prompt answer refused only because the card's id moved is retried on the same card;
   OmO's lead line as a `.chat-intent` chip and runtime notices as chrome.
@@ -55,6 +55,8 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   `AlertToasts`), the connected keyline bloom, the alert-history bell, native push taps routed to
   app windows only.
 - Appearance: Claude and Codex mark choices (`claudeMark`, `codexMark`).
+- Terminal: the phone key bar's default order, ^C last (`DEFAULT_KEY_BAR_ITEMS`; upstream #607 put it
+  third, reachable through the key bar settings).
 - Desktop shell (`desktop/`), identity overlay above.
 - Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
   the top-panel part of `usage-regression.ts`, `alert-sound-regression.ts` waiting for the toast.
