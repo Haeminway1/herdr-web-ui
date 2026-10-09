@@ -4375,3 +4375,31 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
       .toEqual(["ctrl+k", "ctrl+u", "text:builder-c", "enter"]);
   });
 });
+
+describe("a Claude approval while background agents run", () => {
+  test("its hint names the stop chord after Esc to cancel: still a card", () => {
+    const screen = [
+      "✻ Waiting for 1 background agent to finish",
+      "",
+      "─".repeat(80),
+      " Bash command · from the general-purpose agent",
+      " Run shell command",
+      "╌".repeat(80),
+      " │ systemctl --user start demo.service",
+      "╌".repeat(80),
+      " │ Permission rule Bash(systemctl --user start:*) requires confirmation for this command.",
+      " /permissions to update rules",
+      "",
+      " Do you want to proceed?",
+      "   1. Yes",
+      " ❯ 2. Yes, and don't ask again for: systemctl --user start demo.service",
+      "   3. No",
+      "",
+      " Esc to cancel · ctrl+x ctrl+k twice to stop background agents",
+      "",
+    ].join("\n");
+    const prompt = parseInteractivePrompt("claude", screen)!;
+    expect(prompt).toMatchObject({ kind: "approval", title: "Bash command · from the general-purpose agent", question: "Do you want to proceed?" });
+    expect(prompt.options.map((option) => option.label)).toEqual(["Yes", "Yes, and don't ask again for: systemctl --user start demo.service", "No"]);
+  });
+});
