@@ -7,6 +7,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Changed
+- The anonymous install and update counts now keep the country a message came from: two
+  letters such as `KR`, worked out by the receiver's host, and nothing finer. No IP address is
+  stored and the message itself is unchanged. The notice, Settings → About and the guide say so.
+  ([#663](https://github.com/devswha/herdr-web-ui/pull/663))
+
 ### Fixed
 - Codex Chat can read a new session with one short answer when its complete submitted
   first prompt and answer identify it unambiguously. Older conversations, unreadable
