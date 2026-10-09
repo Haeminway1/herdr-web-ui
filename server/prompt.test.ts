@@ -4189,6 +4189,25 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
     expect(parseInteractivePrompt("claude", screen)?.options.length).toBe(3);
   });
 
+  test("a command line that reads Tip: is part of a scrolled approval's asking", () => {
+    const scrolledApproval = (tip: string) => [
+      " │ cat <<EOF",
+      ` │ Tip: ${tip}`,
+      " │ EOF",
+      DASH,
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+      "",
+      " Esc to cancel · Tab to amend",
+      "",
+    ].join("\n");
+    const hello = parseInteractivePrompt("claude", scrolledApproval("hello"))!;
+    const changed = parseInteractivePrompt("claude", scrolledApproval("$(rm -rf important)"))!;
+    expect(changed.body).toContain("rm -rf important");
+    expect(changed.id).not.toBe(hello.id);
+  });
+
   test("a printed approval with no panel left above it is no card", () => {
     const screen = ["Printed example", "Do you want to proceed?", "❯ 1. Yes", "  2. No", "Esc to cancel", ""].join("\n");
     expect(parseInteractivePrompt("claude", screen)).toBeNull();

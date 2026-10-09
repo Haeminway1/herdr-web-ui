@@ -1213,8 +1213,10 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
       && above.some((line) => /^│\s/.test(line)) && above.some((line) => /^╌{8,}$/.test(line));
     if (!scrolled && (ruleIndex < 0 || questionIndex - ruleIndex > 60)) return null;
     // all of a scrolled panel is the body: a command line changed far above the question is another asking
-    const panel = lines.slice(scrolled ? 0 : ruleIndex + 1, questionIndex).map(cleanLine)
-      .filter((line) => line && !isDivider(line) && !/^Tip:/i.test(line));
+    // Claude's own tip is a line of the panel; a `│ Tip:` line is the command's
+    const panel = lines.slice(scrolled ? 0 : ruleIndex + 1, questionIndex)
+      .filter((line) => !/^Tip:/i.test(line.replace(ANSI_RE, "").trim())).map(cleanLine)
+      .filter((line) => line && !isDivider(line));
     if (panel.length === 0) return null;
     title = scrolled ? "Command approval" : panel[0]!;
     body = (scrolled ? panel : panel.slice(1)).join("\n");
