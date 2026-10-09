@@ -15,6 +15,10 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   where omp runs: the session file the pane's omp process holds open, or its terminal
   breadcrumb, names it. Long-running omp panes showed only the terminal text.
   ([#618](https://github.com/devswha/herdr-web-ui/pull/618) by @frankjoshua)
+- Chat message and code copy buttons work on plain-HTTP LAN addresses using the browser's
+  copy command when the Clipboard API is unavailable or refused. If neither method works,
+  the chat explains how to copy manually instead of reporting success or throwing an error.
+  ([#613](https://github.com/devswha/herdr-web-ui/pull/613) by @Kinetic27)
 - Claude Code 2.1.29x approvals and questions keep their card instead of falling back to the
   numbered one: an approval with the cursor on "Yes, and don't ask again" (its hint is
   `Esc to cancel` alone, so picking that row from the card failed with "The interactive prompt
