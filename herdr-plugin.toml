@@ -2,7 +2,7 @@
 # its own config and state beside the canonical devswha.herdr-web-ui install
 id = "haeminway1.herdr-web-ui"
 name = "herdr web ui (fork)"
-version = "0.4.202"
+version = "0.4.301"
 min_herdr_version = "0.9.0"
 description = "Browser and phone client for herdr: chat and live terminal for every agent pane, remote PCs over SSH, web push alerts"
 platforms = ["linux", "macos", "windows"]
@@ -17,14 +17,24 @@ command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "B
 platforms = ["windows"]
 
 [[build]]
+command = ["sh", "scripts/with-bun.sh", "install"]
+platforms = ["linux", "macos"]
+
+[[build]]
 command = ["bun", "install"]
+platforms = ["windows"]
+
+[[build]]
+command = ["sh", "scripts/with-bun.sh", "run", "build"]
+platforms = ["linux", "macos"]
 
 [[build]]
 command = ["bun", "run", "build"]
+platforms = ["windows"]
 
 # One-shot per herdr start: brings the bridge up if it is not already answering.
 [[startup]]
-command = ["bun", "scripts/plugin.ts", "start"]
+command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "start"]
 platforms = ["linux", "macos"]
 
 [[startup]]
@@ -35,7 +45,7 @@ platforms = ["windows"]
 id = "start"
 title = "Start herdr web ui"
 contexts = ["workspace"]
-command = ["bun", "scripts/plugin.ts", "start"]
+command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "start"]
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -49,7 +59,7 @@ platforms = ["windows"]
 id = "stop"
 title = "Stop herdr web ui"
 contexts = ["workspace"]
-command = ["bun", "scripts/plugin.ts", "stop"]
+command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "stop"]
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -63,7 +73,7 @@ platforms = ["windows"]
 id = "status"
 title = "herdr web ui status"
 contexts = ["workspace"]
-command = ["bun", "scripts/plugin.ts", "status"]
+command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "status"]
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -77,7 +87,7 @@ platforms = ["windows"]
 id = "phone"
 title = "Phone setup"
 placement = "zoomed"
-command = ["bun", "scripts/plugin.ts", "phone-setup"]
+command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "phone-setup"]
 platforms = ["linux", "macos"]
 
 [[panes]]
