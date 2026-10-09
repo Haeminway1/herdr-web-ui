@@ -18,6 +18,7 @@ import { AgentMark } from "./AgentMark.tsx";
 import { UsageMeters } from "./UsageMeters.tsx";
 import { folderName, placeLine } from "../lib/paneName.ts";
 import { useT } from "../lib/i18n.ts";
+import { paneStatus } from "../lib/status.ts";
 import { groupDirectories } from "../lib/directoryGroups.ts";
 import { useSettings, type SidebarGrouping } from "../lib/settings.ts";
 import { toggleResident, useResidents } from "../lib/residents.ts";
@@ -358,7 +359,7 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
                         )}
                       </span>
                       <span className="cl-pane-meta">
-                        {pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge status={pane.agent_status} />}
+                        {pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge status={paneStatus(pane as HerdrPane)} />}
                         <BackgroundBadge count={(pane as HerdrPane).background_tasks} />
                         <span className="cl-pane-subtitle">{byRepo ? displayTitle : byFolder ? workspace.label : placeLine(workspace.label, cwdBasename(pane.cwd))}</span>
                       </span>

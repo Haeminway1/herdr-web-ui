@@ -4,6 +4,7 @@ import type { Machine } from "../../shared/machines.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { timeAgo, useT } from "../lib/i18n.ts";
 import { attentionGroups, type AttentionEntry } from "../lib/attention.ts";
+import { paneStatus } from "../lib/status.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { displayPaneTitle, StatusBadge } from "./Sidebar.tsx";
 // fork: the inbox rows are the classic roster rows (ClassicSidebar.css), whatever sidebar is chosen
@@ -86,7 +87,7 @@ function InboxRow({ entry: { machine, pane, workspace }, selectedMachineId, sele
       <span className="cl-agent-mark-holder"><AgentMark agent={pane.agent ?? ""} size={22} /></span>
       <span className="cl-pane-copy">
         <span className="cl-pane-title">{displayPaneTitle(pane)}</span>
-        <span className="cl-pane-meta">{meta ?? <><StatusBadge status={pane.agent_status} /><span className="cl-pane-subtitle">{machine.name} · {workspace.label}</span></>}</span>
+        <span className="cl-pane-meta">{meta ?? <><StatusBadge status={paneStatus(pane)} /><span className="cl-pane-subtitle">{machine.name} · {workspace.label}</span></>}</span>
       </span>
     </button>
   </li>;

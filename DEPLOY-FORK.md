@@ -48,7 +48,8 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   workspaces + Agents list only as `sidebarLayout: "agents"` (automation browsers default to it
   so upstream's UI tests stay valid). The attention inbox above the PCs (Needs you / To read / Working; read state on the
   server, `attention.json`, `pane/seen` proxied for remote PCs; `NeedsInput.tsx`, which upstream
-  deleted in #521); the opt-in project dashboard sidebar (`dashboardSidebar`).
+  deleted in #521; a Claude turn held on its background work, upstream's `background_wait` from #534, is
+  Working and shows BG, not To read); the opt-in project dashboard sidebar (`dashboardSidebar`).
 - Usage: the plan-meter panel at the top of the sidebar (`usagePlacement: "top"`, the fork default,
   with `showUsage` on and palette `report`), folded to one line on a phone.
 - Alerts: the Dynamic Island on touch screens and toasts with a mouse (`Droplet.tsx`,

@@ -14,7 +14,7 @@ export interface AttentionGroups { needsInput: AttentionEntry[]; toRead: Attenti
 /** It finished after it was last opened (server/attention.ts), and is at rest now. */
 export function isUnread(pane: HerdrPane): boolean {
   const state = pane.attention;
-  if (!state?.finished_at || pane.agent_status === "working" || pane.agent_status === "blocked") return false;
+  if (!state?.finished_at || pane.agent_status === "working" || pane.agent_status === "blocked" || pane.background_wait) return false;
   return state.seen_at === null || Date.parse(state.seen_at) < Date.parse(state.finished_at);
 }
 
@@ -29,7 +29,7 @@ export function attentionGroups(machines: readonly Machine[]): AttentionGroups {
       for (const pane of panes as HerdrPane[]) {
         if (pane.workspace_id !== workspace.workspace_id) continue;
         if (isUnread(pane)) toRead.push({ machine, pane, workspace });
-        else if (pane.agent_status === "working") working.push({ machine, pane, workspace });
+        else if (pane.agent_status === "working" || pane.background_wait) working.push({ machine, pane, workspace });
       }
     }
   }

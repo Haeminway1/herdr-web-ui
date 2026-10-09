@@ -19,6 +19,7 @@ it("sorts what needs the user into input, to read (newest first) and working", (
     { pane_id: "read", agent_status: "done", attention: finished("2026-10-03T09:00:00Z", "2026-10-03T09:01:00Z") },
     { pane_id: "busy", agent_status: "working", attention: finished("2026-10-03T08:00:00Z") },
     { pane_id: "rest", agent_status: "idle" },
+    { pane_id: "bg", agent_status: "done", background_wait: true, attention: finished("2026-10-03T08:00:00Z") },
   ] as HerdrPane[]);
   const remote = machine("remote", [
     { pane_id: "newer", agent_status: "idle", attention: finished("2026-10-03T09:30:00Z", "2026-10-03T09:10:00Z") },
@@ -27,7 +28,7 @@ it("sorts what needs the user into input, to read (newest first) and working", (
   const ids = (list: typeof groups.toRead) => list.map(({ machine, pane }) => `${machine.id}/${pane.pane_id}`);
   expect(ids(groups.needsInput)).toEqual(["local/asks"]);
   expect(ids(groups.toRead)).toEqual(["remote/newer", "local/older"]);
-  expect(ids(groups.working)).toEqual(["local/busy"]);
+  expect(ids(groups.working)).toEqual(["local/busy", "local/bg"]);
 });
 
 it("leaves offline PCs and panes without a finish out", () => {
