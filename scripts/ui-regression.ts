@@ -18,10 +18,12 @@ import { checkSecretInput } from "./secret-input-regression.ts";
 import { checkTerminalCopy } from "./terminal-copy-regression.ts";
 import { checkUsageMeters } from "./usage-regression.ts";
 import { checkNotificationStartup } from "./notification-startup-regression.ts";
+import { checkNotificationView } from "./notification-view-regression.ts";
 import { checkMobileViewport } from "./mobile-viewport-regression.ts";
 import { checkMobileTabs } from "./mobile-tabs-regression.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
 import { checkTerminalInput } from "./terminal-input-regression.ts";
+import { checkSafariIme } from "./terminal-safari-ime-regression.ts";
 import { checkHeldDraftPaneSwitch } from "./terminal-draft-regression.ts";
 import { checkDefaultView } from "./default-view-regression.ts";
 import { checkAlertBell, checkPushedAlertWhileClosed } from "./alert-bell-regression.ts";
@@ -89,6 +91,7 @@ try {
     if (!localStorage.getItem("herdr-web-ui:settings")) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
     for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");
   }, panes);
+
   const page = await context.newPage();
   const workspaceGroup = (workspaceId: string) => page.locator(`.workspace-group[data-workspace="${workspaceId}"]`);
   const workspaceHeader = (workspaceId: string) => workspaceGroup(workspaceId).locator(":scope > .workspace-header");
@@ -650,6 +653,7 @@ try {
   await checkTerminalCopy(browser, origin);
   await checkUsageMeters(browser, origin);
   await checkNotificationStartup(browser, origin, paneA, paneB);
+  await checkNotificationView(browser, origin);
   await checkMobileViewport(browser, origin, paneB);
   await checkMobileTabs(browser, origin);
   await checkDefaultView(browser, origin);
@@ -1034,7 +1038,7 @@ try {
   // ⋯ menu appears under the same workspace, using its exact branch rather than its editable label.
   repo = join(root, `herdr-web-ui-test-repo-${process.pid.toString(36)}`);
   mkdirSync(repo);
-  const git = (...args: string[]) => Bun.spawnSync(["git", "-c", "user.name=herdr-web-ui test", "-c", "user.email=test@example.invalid", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+  const git = (...args: string[]) => Bun.spawnSync(["git", "-c", "user.name=herdr-web-ui test", "-c", "user.email=test@example.invalid", ...args], { cwd: repo ?? undefined, stdout: "pipe", stderr: "pipe" });
   assert.equal(git("init", "-q", "-b", "main").exitCode, 0, "git init");
   writeFileSync(join(repo, "README.md"), "worktree fixture\n");
   assert.equal(git("add", "README.md").exitCode, 0);
@@ -1494,7 +1498,7 @@ try {
   mobilePage.on("pageerror", (error) => errors.push(error.message));
   await mobilePage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}`);
   await mobilePage.locator(".conn-live").waitFor();
-  const tapHighlight = await mobilePage.locator(".view-switch button").first().evaluate((node) => getComputedStyle(node).webkitTapHighlightColor);
+  const tapHighlight = await mobilePage.locator(".view-switch button").first().evaluate((node) => getComputedStyle(node).getPropertyValue("-webkit-tap-highlight-color"));
   assert.equal(tapHighlight, "rgba(0, 0, 0, 0)", "native tap overlays do not obscure selection");
   await mobilePage.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).fill("mobile draft");
@@ -1506,7 +1510,7 @@ try {
   assert.equal(await mobilePage.getByRole("button", { name: "Report a problem", exact: true }).count(), 0, "no report action on a phone");
   assert.equal(await mobilePage.getByRole("button", { name: "Hide keyboard", exact: true }).count(), 0, "no keyboard button on a phone");
   await mobilePage.evaluate(() => document.documentElement.removeAttribute("data-keyboard"));
-  assert.deepEqual(errors, []);
+  assert.equal(errors.length, 0, errors.join("\n"));
   assertCspClean(csp, "the chat, the composer and the phone views load with no CSP violation");
   console.log("PASS mobile composer with unavailable storage and no horizontal overflow");
 
@@ -1557,11 +1561,12 @@ try {
   await until(async () => await plainComposer.getAttribute("placeholder") === "run the tests", "the suggestion stays the placeholder with the chip off");
   assert.equal(await plainPage.getByTitle("Use the suggestion", { exact: true }).count(), 0, "no suggestion chip once Settings turns it off");
   await plainPhone.close();
-  assert.deepEqual(errors, []);
+  assert.equal(errors.length, 0, errors.join("\n"));
   assertCspClean(csp, "the suggestion chip loads with no CSP violation");
   console.log("PASS a phone offers Claude's suggestion as a chip until Settings turns it off");
 
   await checkTerminalInput(browser, origin, paneA, paneB);
+  await checkSafariIme(browser, origin, paneA, paneB);
   await checkHeldDraftPaneSwitch(browser, origin, paneA, paneB);
 
   // the terminal lens on a touch screen: an input line sends whole lines; the grid raises no keyboard
@@ -1619,7 +1624,7 @@ try {
   assert.equal(await line.inputValue(), "unsent 한글 😀", "reload preserves the unsent line");
   await line.fill("");
   assert.equal(await touchPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  assert.deepEqual(errors, []);
+  assert.equal(errors.length, 0, errors.join("\n"));
   assertCspClean(csp, "touch terminal input loads with no CSP violation");
   if (process.env.UI_EVIDENCE_DIR) {
     mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });

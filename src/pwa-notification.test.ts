@@ -2,7 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-type Selection = { type: string; pane_id: string; machine_id: string };
+type Selection = { type: string; pane_id: string; machine_id: string; view?: "chat" | "terminal" };
+type SelectedPane = Omit<Selection, "view">;
 type WindowClient = { url: string; focused: boolean; postMessage: (data: Selection) => void; focus: () => Promise<void> };
 
 function deferred() {
@@ -39,8 +40,20 @@ function notifications(
 }
 
 function client(focus = async () => {}, focused = false, url = "https://app.example/") {
-  const selected: Selection[] = [];
-  return { url, focused, focus, selected, postMessage: (data: Selection) => selected.push(data) };
+  const selected: SelectedPane[] = [];
+  const views: Array<Selection["view"]> = [];
+  return {
+    url,
+    focused,
+    focus,
+    selected,
+    views,
+    postMessage: (data: Selection) => {
+      const { view, ...pane } = data;
+      selected.push(pane);
+      views.push(view);
+    },
+  };
 }
 
 describe("notification clicks", () => {
@@ -61,7 +74,7 @@ describe("notification clicks", () => {
     await worker.click("pane-b", "remote&pc");
     expect(unrelated.selected).toEqual([]);
     expect(foreign.selected).toEqual([]);
-    expect(worker.opened).toEqual(["/?machine=remote%26pc&pane=pane-b"]);
+    expect(worker.opened).toEqual(["/?machine=remote%26pc&pane=pane-b&view=chat"]);
   });
 
   it("selects the pane before a delayed focus and repeats after the page resumes", async () => {
@@ -85,7 +98,7 @@ describe("notification clicks", () => {
     const worker = notifications([target]);
     await worker.click("remote pane/?", "remote&pc");
     expect(target.selected).toEqual([{ type: "select-pane", pane_id: "remote pane/?", machine_id: "remote&pc" }]);
-    expect(worker.opened).toEqual(["/?machine=remote%26pc&pane=remote%20pane%2F%3F"]);
+    expect(worker.opened).toEqual(["/?machine=remote%26pc&pane=remote%20pane%2F%3F&view=chat"]);
   });
 
   it("chooses the focused window and does not open another after a successful focus", async () => {
@@ -102,7 +115,19 @@ describe("notification clicks", () => {
     const worker = notifications([]);
     await worker.click("pane-b", "remote");
     await worker.click(null);
-    expect(worker.opened).toEqual(["/?machine=remote&pane=pane-b", "/"]);
+    expect(worker.opened).toEqual(["/?machine=remote&pane=pane-b&view=chat", "/"]);
+  });
+
+  it("opens a pane notification in the Agent chat view in existing and cold windows", async () => {
+    const existing = client();
+    const openWorker = notifications([existing]);
+    await openWorker.click("pi-pane", "local");
+    expect(existing.views).toEqual(["chat", "chat"]);
+    expect(openWorker.opened).toEqual([]);
+
+    const coldWorker = notifications([]);
+    await coldWorker.click("pi-pane", "local");
+    expect(coldWorker.opened).toEqual(["/?machine=local&pane=pi-pane&view=chat"]);
   });
 
   it("focuses a generic notification without sending an empty pane selection", async () => {
@@ -258,7 +283,7 @@ describe("notification clicks", () => {
       expect(foreground).toBe("opened");
       expect(opened.selected.at(-1)).toEqual(selection);
       expect(newer.selected.at(-1)).toEqual(selection);
-      expect(worker.opened).toEqual(["/?machine=first%26pc&pane=older%20pane%2F%3F"]);
+      expect(worker.opened).toEqual(["/?machine=first%26pc&pane=older%20pane%2F%3F&view=chat"]);
       expect(focuses).toBe(fallback ? 2 : 1);
     });
   }
@@ -290,6 +315,6 @@ describe("notification clicks", () => {
     lookup.resolve();
     await second;
     expect(newer.selected.at(-1)).toEqual(selection);
-    expect(worker.opened).toEqual(["/?machine=local&pane=pane-a"]);
+    expect(worker.opened).toEqual(["/?machine=local&pane=pane-a&view=chat"]);
   });
 });

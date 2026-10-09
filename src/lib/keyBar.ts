@@ -57,6 +57,7 @@ export function migrateKeyBarItems(extras: readonly KeyBarExtra[]): KeyBarItem[]
   return items;
 }
 
+// fork: the bar the user already has (upstream #607 moved ^C to third); the key bar settings reorder it
 export const DEFAULT_KEY_BAR_ITEMS: KeyBarItem[] = migrateKeyBarItems(["alt"]);
 
 /** Stable descriptor identity; an inherited key and an exact bare key have different behavior. */

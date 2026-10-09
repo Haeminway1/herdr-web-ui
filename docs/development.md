@@ -93,7 +93,7 @@ bun scripts/font-swap-demo-regression.ts      # the app's faces arriving late on
 - `compose.ts` draws every output frame on a canvas: a backdrop, a browser window or a phone, the frame under an eased camera, and a vector cursor with click ripples or touch rings. It writes `demo-*.mp4` (1920×1200 and 1080×1920, 30 fps) and a GIF of each. Stills get the same window or phone on a transparent background.
 
 The MP4s are not committed: GitHub plays a README video only from an upload (`github.com/user-attachments/…`), so drop them into an issue or PR comment and use the link it gives.
-The website's page is built from the README's own artifacts: it downloads the README's top video (listed in `scripts/build-site.ts`, `videos`, so a new top video needs its link changed there as well), shows the feature grid's clips linking to their uploads (the same list of links is in `site/index.html`), and uses `docs/screenshots/install.png`.
+The website's page is built from the README's own artifacts: it downloads the README's top video (listed in `scripts/build-site.ts`, `videos`, so a new top video needs its link changed there as well), shows the feature grid's clips linking to their uploads (the same list of links is in `site/index.html` and `site/zh/index.html`), and uses `docs/screenshots/install.png`.
 The README's feature grid shows a looping ~7-second cut of each feature video (`docs/media/readme/*.webp`, 800×450, 15 fps), each linking to its upload. Cut one with
 `ffmpeg -ss <start> -t <seconds> -i clip.mp4 -vf "fps=15,scale=800:450:force_original_aspect_ratio=increase:flags=lanczos,crop=800:450" -c:v libwebp_anim -loop 0 -quality 72 -compression_level 6 -an out.webp`;
 the scale and crop fill 800×450 from any source aspect. Start on a sharp frame, not mid camera move. The top video stays a GitHub upload so it plays at full quality.
@@ -135,8 +135,10 @@ bun scripts/film/render.ts check                # acceptance frame grabs, sizes,
 
 ## Website
 
-<https://devswha.github.io/herdr-web-ui/> is `site/index.html`, a static page with desktop and phone
-demos, a screenshot gallery, supported agents, phone setup and a comparison table. `bun run build:site`
+<https://herdrweb.dev/> is `site/index.html`, a static page with desktop and phone
+demos, a screenshot gallery, supported agents, phone setup and a comparison table. `site/zh/index.html`
+is the same page in Simplified Chinese at `/zh/`, linked from the header; a change to one page belongs in
+the other. `bun run build:site`
 assembles it into `_site/` with icons, the social preview and scaled screenshots from `docs/screenshots/`.
 The two demo videos come from local `docs/screenshots/*.mp4` when present, otherwise the README's uploads;
 ffmpeg creates their poster frames. Without ffmpeg, the page omits unavailable posters.
@@ -153,7 +155,7 @@ every push to `main`.
 
 ### The browser demo
 
-<https://devswha.github.io/herdr-web-ui/demo/> is the real client on a fictional session, no server.
+<https://herdrweb.dev/demo/> is the real client on a fictional session, no server.
 `build-site.ts` builds the client a second time with `vite build --base ./` into `_site/demo/app/`,
 bundles `site/demo/transport.ts` in front of it and frames it with `site/demo/index.html`. The
 transport answers the app's `fetch("/api/…")`, the machines event stream and the `/ws` terminal
@@ -175,6 +177,9 @@ after changing the staged session. Files, images, push and remote PCs are not pa
    an install shows before and after the update, with the changelog section folded under it,
    so a line names what changes for the people who use the app and leaves out PR numbers and
    internals. The unit suite and the release workflow fail without all four languages.
+   The GitHub release is written from the same files by `scripts/release-notes.ts`: the
+   English lists under New features, Improvements and Bug fixes, then the version's whole
+   changelog section folded under **Full changelog**.
 2. Merge it after CI passes.
 3. Run **Actions → Release → Run workflow**, select `main`, and enter `X.Y.Z` without `v`.
    The CLI equivalent is `gh workflow run release.yml --ref main -f version=X.Y.Z`.
