@@ -8,6 +8,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Fixed
+- A web UI tab you are not using no longer resizes the pane you are using elsewhere. A window
+  left open behind another app turned visible again when the screen woke, or reconnected,
+  reloaded or moved on to the next pane in the background, and fitted the pane to itself: herdr
+  in your terminal, or your phone, then showed the pane at that window's size, cut off at its
+  edge. The tab takes the pane back once its window has the focus.
+  ([#658](https://github.com/devswha/herdr-web-ui/pull/658) by @jiunshinn)
 - Open tabs take turns chiming for the same alert. A question or a finish is still heard if
   the tab that claimed it closes or cannot play it, including on plain-HTTP LAN addresses.
   ([#632](https://github.com/devswha/herdr-web-ui/pull/632))
