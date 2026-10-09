@@ -1208,9 +1208,13 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
     // a long command pushes the panel's rule and tool name off the top of the screen: the
     // numbered rows and Claude's own key hint under them, with what is left of the panel above
     // them (its `│` command block and the dashed rule under that), still say it is an approval
-    const above = lines.slice(0, questionIndex).map((line) => line.trim());
+    // the dashed rule is the last divider over the question, the block right above it, and
+    // only the panel's own few lines (never Claude's or the user's text) between it and the question
+    const above = lines.slice(0, questionIndex).map((line) => line.replace(ANSI_RE, "").trim());
+    const dashIndex = findLastIndex(above, (line) => isDivider(line));
     const scrolled = ruleIndex < 0 && callIndex < 0 && hintIndex > questionIndex && /^esc to cancel\b/i.test(cleanLine(lines[hintIndex]!))
-      && above.some((line) => /^│\s/.test(line)) && above.some((line) => /^╌{8,}$/.test(line));
+      && dashIndex >= 1 && questionIndex - dashIndex <= 8 && /^╌{8,}$/.test(above[dashIndex]!) && /^│\s/.test(above[dashIndex - 1]!)
+      && above.slice(dashIndex + 1).every((line) => !/^[●⏺❯>›]/.test(line));
     if (!scrolled && (ruleIndex < 0 || questionIndex - ruleIndex > 60)) return null;
     // all of a scrolled panel is the body: a command line changed far above the question is another asking
     // Claude's own tip is a line of the panel; a `│ Tip:` line is the command's

@@ -4208,6 +4208,22 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
     expect(changed.id).not.toBe(hello.id);
   });
 
+  test("a boxed line and a dashed rule further up the screen do not make printed rows an approval", () => {
+    const screen = [
+      " │ earlier boxed output",
+      DASH,
+      "● Here is what the dialog says:",
+      "",
+      "  Do you want to proceed?",
+      "  ❯ 1. Yes",
+      "    2. No",
+      "",
+      "  Esc to cancel",
+      "",
+    ].join("\n");
+    expect(parseInteractivePrompt("claude", screen)).toBeNull();
+  });
+
   test("a printed approval with no panel left above it is no card", () => {
     const screen = ["Printed example", "Do you want to proceed?", "❯ 1. Yes", "  2. No", "Esc to cancel", ""].join("\n");
     expect(parseInteractivePrompt("claude", screen)).toBeNull();
