@@ -7,6 +7,14 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+### Fixed
+- Claude Code 2.1.29x approvals and questions keep their card instead of falling back to the
+  numbered one: an approval with the cursor on "Yes, and don't ask again" (its hint is
+  `Esc to cancel` alone, so picking that row from the card failed with "The interactive prompt
+  changed"), an approval whose long command pushed its title off the screen, and a question whose
+  typed-answer row already holds a draft.
+  ([#614](https://github.com/devswha/herdr-web-ui/pull/614) by @Haeminway1)
+
 ## [0.4.2] - 2026-10-09
 
 ### Added
@@ -49,14 +57,6 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#610](https://github.com/devswha/herdr-web-ui/pull/610))
 
 ### Fixed
-- Claude Code 2.1.29x approvals and questions show their card again instead of the numbered
-  fallback, which answered by typing the option's number: an approval whose hint is
-  `Esc to cancel` alone, one whose long command pushed its title off the screen, and a question
-  whose typed-answer row already holds a draft.
-- Claude Code 2.1.29x approvals and questions show their card again instead of the numbered
-  fallback, which answered by typing the option's number: an approval whose hint is
-  `Esc to cancel` alone, one whose long command pushed its title off the screen, and a question
-  whose typed-answer row already holds a draft.
 - Command palette shortcut hints follow changed bindings and disappear for disabled ones.
   App shortcuts also recognize physical letter keys on non-Latin layouts outside IME composition.
   ([#607](https://github.com/devswha/herdr-web-ui/pull/607))
