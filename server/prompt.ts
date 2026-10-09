@@ -1203,7 +1203,8 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
     const scrolled = ruleIndex < 0 && callIndex < 0 && hintIndex > questionIndex && /^esc to cancel\b/i.test(cleanLine(lines[hintIndex]!))
       && above.some((line) => /^│\s/.test(line)) && above.some((line) => /^╌{8,}$/.test(line));
     if (!scrolled && (ruleIndex < 0 || questionIndex - ruleIndex > 60)) return null;
-    const panel = lines.slice(scrolled ? Math.max(0, questionIndex - 8) : ruleIndex + 1, questionIndex).map(cleanLine)
+    // all of a scrolled panel is the body: a command line changed far above the question is another asking
+    const panel = lines.slice(scrolled ? 0 : ruleIndex + 1, questionIndex).map(cleanLine)
       .filter((line) => line && !isDivider(line) && !/^Tip:/i.test(line));
     if (panel.length === 0) return null;
     title = scrolled ? "Command approval" : panel[0]!;

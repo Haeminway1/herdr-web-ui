@@ -4158,6 +4158,24 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
     expect(parseInteractivePrompt("claude", screen)).toBeNull();
   });
 
+  test("a scrolled approval is another asking when a command line far above the question changes", () => {
+    const scrolledApproval = (first: string) => [
+      ` │ ${first}`,
+      ...Array.from({ length: 12 }, () => " │ echo same"),
+      DASH,
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+      "",
+      " Esc to cancel · Tab to amend",
+      "",
+    ].join("\n");
+    const harmless = parseInteractivePrompt("claude", scrolledApproval("echo harmless"))!;
+    const changed = parseInteractivePrompt("claude", scrolledApproval("rm -rf important"))!;
+    expect(changed.body).toContain("rm -rf important");
+    expect(changed.id).not.toBe(harmless.id);
+  });
+
   // live on 2.1.295: the typed text went in after the draft, "neither, tell me their namesbuilder-c"
   test("a typed answer replaces the draft in the row instead of joining it", () => {
     const screen = [
