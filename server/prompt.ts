@@ -513,10 +513,10 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
   if (!sequentialRows(rows) || rows.filter((row) => row.selected).length !== 1) return null;
   const chatIndex = rows.findIndex((row) => row.label === "Chat about this");
   let customIndex = rows.findIndex((row) => /^Type something\.?$/i.test(row.label));
-  // typed into, the row shows the draft instead of "Type something.", and while it holds the
-  // cursor the hint offers "ctrl+g to edit": that row is still the typed answer's
-  // Claude's own form only: the question named by its chip or tabs, a rule between that row and "Chat about this"
-  const drafted = customIndex < 0 && !preview && chatIndex > 1 && rows[chatIndex - 1]!.selected && /ctrl\+g to edit/i.test(wrapped(raw, hintIndex))
+  // typed into, the row shows the draft instead of "Type something.", with the cursor on it or
+  // not (2.1.295): in Claude's own form, where the question is named by its chip or tabs and a
+  // rule parts that row from "Chat about this", it is still the typed answer's
+  const drafted = customIndex < 0 && !preview && chatIndex > 1
     && lines.slice(rows[chatIndex - 1]!.lineIndex + 1, rows[chatIndex]!.lineIndex).some((line) => isDivider(line))
     && (claudeTabs(lines, rows[0]!.lineIndex) !== null || claudeChip(lines, rows[0]!.lineIndex) !== null);
   if (drafted) customIndex = chatIndex - 1;
@@ -543,9 +543,14 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
     selectedIndex: rows.findIndex((row) => row.selected),
     checkedOptionIndices: optionRows.flatMap((row, index) => row.checked ? [index] : []),
     customMenuIndex: preview ? null : customIndex, rejectWithEscapeIndex: null,
-    // the cursor is in the draft: an answer typed after it would join it, so the row is emptied
-    // first, after the cursor and before it (ctrl+k, ctrl+u; measured on 2.1.295)
-    ...(drafted ? { customSteps: (text: string) => [...keySteps(["ctrl+k", "ctrl+u"]), { text }, ...keySteps([KEY.enter])] } : {}),
+    // an answer typed into the draft would join it, so once the cursor is in the row it is
+    // emptied first, after the cursor and before it (ctrl+k, ctrl+u; measured on 2.1.295)
+    ...(drafted ? {
+      customSteps: (text: string) => [
+        ...keySteps([...navigationKeys(customIndex - rows.findIndex((row) => row.selected)), "ctrl+k", "ctrl+u"]),
+        { text }, ...keySteps([KEY.enter]),
+      ],
+    } : {}),
   });
 }
 

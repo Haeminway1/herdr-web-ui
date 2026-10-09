@@ -4188,6 +4188,33 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
     expect(parseInteractivePrompt("claude", screen)?.custom_option_index ?? null).toBeNull();
   });
 
+  // live on 2.1.295: the draft stays in its row when the cursor moves up, and the hint loses ctrl+g
+  test("a drafted question stays a card with the cursor on another row", () => {
+    const screen = [
+      RULE,
+      " ☐ Pick",
+      "",
+      "Which fruit?",
+      "",
+      "  1. apple",
+      "     Apple",
+      "❯ 2. pear",
+      "     Pear",
+      "  3. my draft",
+      RULE,
+      "  4. Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+      "",
+    ].join("\n");
+    const prompt = parseInteractivePrompt("claude", screen)!;
+    expect(prompt).toMatchObject({ kind: "question", title: "Pick", custom_option_index: 2 });
+    expect(prompt.options.map((option) => option.label)).toEqual(["apple", "pear"]);
+    expect(answerKeys(prompt, { option_index: 0 }).flatMap((step) => step.keys ?? [])).toEqual(["up", "enter"]);
+    expect(answerKeys(prompt, { custom_text: "plum" }).flatMap((step) => step.keys ?? [`text:${step.text}`]))
+      .toEqual(["down", "ctrl+k", "ctrl+u", "text:plum", "enter"]);
+  });
+
   // live on 2.1.295: the typed text went in after the draft, "neither, tell me their namesbuilder-c"
   test("a typed answer replaces the draft in the row instead of joining it", () => {
     const screen = [
