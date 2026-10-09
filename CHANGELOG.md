@@ -8,6 +8,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Fixed
+- Codex Chat can read a new session with one short answer when its complete submitted
+  first prompt and answer identify it unambiguously. Older conversations, unreadable
+  candidates and competing panes keep the terminal fallback; process age alone never
+  selects a conversation. Complete directory-less injected AGENTS.md instructions are
+  hidden without hiding user messages that continue after the instructions.
+  ([#650](https://github.com/devswha/herdr-web-ui/pull/650) by @od-studio-webagency)
 - Terminal cleanup waits for xterm's pending frame and task before disposing its renderer,
   preventing a dimensions console error on development reloads or when switching PCs or
   signing out immediately after a pane reset.
