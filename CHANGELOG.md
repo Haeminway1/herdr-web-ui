@@ -29,6 +29,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   the terminal's input box. While that box holds a draft the message stays in the list with the
   reason, and **Send now** delivers it once the draft is sent or cleared.
   ([#628](https://github.com/devswha/herdr-web-ui/pull/628))
+- The command palette opens on an empty search every time. It no longer shows the previous
+  search's results for a moment, during which a quick Tab could highlight a different row than the
+  one it focused. ([#631](https://github.com/devswha/herdr-web-ui/pull/631))
 
 ## [0.4.2] - 2026-10-09
 
