@@ -17,6 +17,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#663](https://github.com/devswha/herdr-web-ui/pull/663))
 
 ### Fixed
+- Settings keeps a slow browser-history traversal from closing the key bar editor by itself,
+  and no longer retries an unanswered traversal every second.
+  ([#630](https://github.com/devswha/herdr-web-ui/pull/630))
 - A Claude Code approval asked while background agents run shows its card instead of the numbered
   fallback: its hint goes on after `Esc to cancel` with the chord that stops them.
   ([#659](https://github.com/devswha/herdr-web-ui/pull/659) by @Haeminway1)
