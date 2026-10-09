@@ -4134,4 +4134,28 @@ describe("Claude Code 2.1.29x approvals and questions", () => {
     expect(prompt.options.map((option) => option.label)).toEqual(["builder-a", "builder-b"]);
     expect(answerKeys(prompt, { option_index: 1 }).flatMap((step) => step.keys ?? [])).toEqual(["up", "enter"]);
   });
+
+  // live on 2.1.295: the typed text went in after the draft, "neither, tell me their namesbuilder-c"
+  test("a typed answer replaces the draft in the row instead of joining it", () => {
+    const screen = [
+      RULE,
+      " ☐ Session",
+      "",
+      "Two sessions are open. Which one?",
+      "",
+      "  1. builder-a",
+      "     started 15 hours ago",
+      "  2. builder-b",
+      "     started 13 hours ago",
+      "❯ 3. neither, tell me their names",
+      RULE,
+      "  4. Chat about this",
+      "",
+      "Enter to select · ↑/↓ to navigate · ctrl+g to edit in Vim · Esc to cancel",
+      "",
+    ].join("\n");
+    const prompt = parseInteractivePrompt("claude", screen)!;
+    expect(answerKeys(prompt, { custom_text: "builder-c" }).flatMap((step) => step.keys ?? [`text:${step.text}`]))
+      .toEqual(["ctrl+k", "ctrl+u", "text:builder-c", "enter"]);
+  });
 });

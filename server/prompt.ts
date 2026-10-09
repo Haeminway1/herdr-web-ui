@@ -515,7 +515,8 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
   let customIndex = rows.findIndex((row) => /^Type something\.?$/i.test(row.label));
   // typed into, the row shows the draft instead of "Type something.", and while it holds the
   // cursor the hint offers "ctrl+g to edit": that row is still the typed answer's
-  if (customIndex < 0 && !preview && chatIndex > 1 && rows[chatIndex - 1]!.selected && /ctrl\+g to edit/i.test(wrapped(raw, hintIndex))) customIndex = chatIndex - 1;
+  const drafted = customIndex < 0 && !preview && chatIndex > 1 && rows[chatIndex - 1]!.selected && /ctrl\+g to edit/i.test(wrapped(raw, hintIndex));
+  if (drafted) customIndex = chatIndex - 1;
   if (preview) {
     // its notes are no answer of their own: no typed-answer row, the options are the menu
     if (customIndex >= 0 || chatIndex >= 0) return null;
@@ -539,6 +540,9 @@ function parseClaudeQuestion(screen: string): ParsedPrompt | null {
     selectedIndex: rows.findIndex((row) => row.selected),
     checkedOptionIndices: optionRows.flatMap((row, index) => row.checked ? [index] : []),
     customMenuIndex: preview ? null : customIndex, rejectWithEscapeIndex: null,
+    // the cursor is in the draft: an answer typed after it would join it, so the row is emptied
+    // first, after the cursor and before it (ctrl+k, ctrl+u; measured on 2.1.295)
+    ...(drafted ? { customSteps: (text: string) => [...keySteps(["ctrl+k", "ctrl+u"]), { text }, ...keySteps([KEY.enter])] } : {}),
   });
 }
 
