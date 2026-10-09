@@ -445,14 +445,10 @@
 }
 
 /* no height cap: an inner scroll hid the rest of the block on phones */
-.markdown-code pre {
-  margin: 0;
+.markdown-code .hl-code {
   padding: var(--space-3) var(--space-4);
-  overflow-x: auto;
-  font-family: var(--font-mono);
   font-size: var(--fs-sm);
   line-height: var(--lh-code);
-  white-space: pre;
 }
 
 .markdown-code-more {

@@ -27,6 +27,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - A task list (`- [x] done`, `- [ ] open`) in the chat shows a checked or empty box in place of
   its bullet, instead of the brackets.
   ([#669](https://github.com/devswha/herdr-web-ui/pull/669) by @aNNdii)
+- Code blocks in the chat are highlighted by their language (TanStack Highlight). Anything longer
+  than a few lines is highlighted in a worker, so no reply can freeze the page: a block that takes
+  longer than 2 s, or is over 100 KB, stays plain and says so. **Settings → Chat → Highlight code**
+  turns it off.
+  ([#671](https://github.com/devswha/herdr-web-ui/pull/671) by @aNNdii)
 
 ### Changed
 - The chat's `/` command list also matches a word of a command's name, any part of it, its letters

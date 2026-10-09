@@ -4,6 +4,8 @@ import { Check, Copy } from "lucide-react";
 import { foldCode, mathNestsTooDeep, parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock } from "../lib/markdown.ts";
 import { codeIsFilePath, OpenFileContext, splitFilePaths } from "../lib/filePaths.ts";
 import { fileUriPath } from "../lib/terminalFileLinks.ts";
+import { CHAT_HIGHLIGHT_LIMIT, languageForFence } from "../lib/highlight.ts";
+import { HighlightedCode } from "./HighlightedCode.tsx";
 import { useT } from "../lib/i18n.ts";
 import { copyText } from "../lib/clipboard.ts";
 
@@ -148,7 +150,7 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
         </button>
       </div>
       {copyFailed && <p className="markdown-code-error" role="alert">{t("Couldn't copy. Select the text and copy it manually.")}</p>}
-      <pre><code>{fold !== null && !expanded ? fold.head : value}</code></pre>
+      <HighlightedCode code={fold !== null && !expanded ? fold.head : value} language={languageForFence(language)} limit={CHAT_HIGHLIGHT_LIMIT} />
       {fold !== null && (
         <button type="button" className="markdown-code-more" aria-expanded={expanded} onClick={toggle}>
           {expanded ? t("Show less") : t("Show all {n} lines", { n: fold.lines })}

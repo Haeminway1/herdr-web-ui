@@ -78,6 +78,8 @@ export const KO: Record<string, string> = {
   "Increase chat font size": "채팅 글자 크게",
   "Chat font": "채팅 글꼴",
   "Message text; code stays monospace. Comma-separated, tried in order. A font this device does not have falls back to the default.": "메시지 본문에 적용되며 코드는 고정폭 글꼴을 유지합니다. 쉼표로 구분하며 앞에서부터 차례로 사용합니다. 이 기기에 없는 글꼴은 기본 글꼴로 대체합니다.",
+  "Highlight code": "코드 구문 강조",
+  "Colors code by its language. Off, code is plain text.": "코드를 언어에 맞게 색으로 구분합니다. 끄면 코드가 일반 텍스트로 표시됩니다.",
   "Shortcuts": "단축키",
   "Phone": "폰",
   "Devices": "기기",
@@ -454,6 +456,7 @@ export const KO: Record<string, string> = {
   "Copy code": "코드 복사",
   "Show less": "접기",
   "Show all {n} lines": "{n}줄 모두 보기",
+  "Too long to highlight": "너무 길어 강조 표시를 생략했습니다",
   "Empty task": "빈 할 일",
 
   // ---- composer ----

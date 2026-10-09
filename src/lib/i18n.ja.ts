@@ -80,6 +80,8 @@ export const JA: Record<string, string> = {
   "Increase chat font size": "チャットの文字を大きく",
   "Chat font": "チャットのフォント",
   "Message text; code stays monospace. Comma-separated, tried in order. A font this device does not have falls back to the default.": "メッセージ本文に適用され、コードは等幅フォントのままです。カンマ区切りで、先頭から順に使います。このデバイスにないフォントは既定のフォントで表示します。",
+  "Highlight code": "コードのシンタックスハイライト",
+  "Colors code by its language. Off, code is plain text.": "コードを言語に合わせて色分けします。オフにするとコードはプレーンテキストで表示されます。",
   "Shortcuts": "ショートカット",
   "Phone": "スマートフォン",
   "Devices": "デバイス",
@@ -456,6 +458,7 @@ export const JA: Record<string, string> = {
   "Copy code": "コードをコピー",
   "Show less": "折りたたむ",
   "Show all {n} lines": "{n} 行すべて表示",
+  "Too long to highlight": "長すぎるため構文ハイライトを省略しました",
   "Empty task": "空のタスク",
 
   // ---- composer ----

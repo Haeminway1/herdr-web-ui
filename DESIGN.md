@@ -127,6 +127,27 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
 | Cursor | `--term-cursor` | `#f0a830` | `#8c5000` | `cursor` |
 | Selection | `--term-selection` | `#4a3d26` | `#f0d9ae` | `selectionBackground` |
 
+### Syntax highlighting
+
+Code in the chat is colored by `--syntax-*` tokens. Four follow the palette: `--syntax-comment` is
+`--text-dim`, `--syntax-function` is `--accent`, `--syntax-inserted` is `--status-done` and
+`--syntax-deleted` is `--status-blocked`. The other six are literals per block
+(each at least 4.5:1 on `--bg-panel` and `--bg-elevated`); light charcoal uses the light report
+column. Catppuccin follows Catppuccin's own mapping: keywords are mauve, so `--syntax-function` is
+blue there instead of `--accent`, and Latte's colors are darkened to stay readable.
+
+| Block | keyword | string | number | type | variable | meta |
+|-------|---------|--------|--------|------|----------|------|
+| Dark amber | `#e8875f` | `#a8c17c` | `#d6a0c9` | `#6cb8d6` | `#e0c08f` | `#b49dd6` |
+| Light amber | `#a33a17` | `#4b6b18` | `#8a3f7a` | `#155a72` | `#7a5418` | `#5d4791` |
+| Dark report | `#f78c6c` | `#3ddc97` | `#f5b544` | `#7fd4ff` | `#c9d1dc` | `#b392f0` |
+| Light report and charcoal | `#b3261e` | `#22743a` | `#8a5300` | `#0b6e8a` | `#3b3b3b` | `#6f42c1` |
+| Dark charcoal | `#d7a08a` | `#a7b789` | `#c2a2af` | `#9fb4c2` | `#dcd8d0` | `#b8a5c9` |
+| Catppuccin Mocha | `#cba6f7` | `#a6e3a1` | `#fab387` | `#f9e2af` | `#f5e0dc` | `#f5c2e7` |
+| Catppuccin Latte | `#712fc6` | `#2f7620` | `#b44201` | `#905c13` | `#4c4f69` | `#bc1d91` |
+
+`--syntax-function` in Catppuccin: Mocha `#89b4fa`, Latte `#0b59f4`.
+
 ### Rules
 - Amber is the one chrome color. Accent (selected, focused, informational) and primary (the user's
   action: Send, primary buttons) are both amber; in light, accent is the darker text-safe ochre and
@@ -211,6 +232,7 @@ CSS tokens verbatim for each resolved theme and palette (`settings.test.ts` chec
   `--font-mono`. At most 200 characters, with `;`, `{`, `}`, `<`,
   `>`, `\` and control characters stripped and names with spaces quoted.
 - Composer Enter behavior and folded thinking visibility are preferences, not typography tokens.
+- `highlightCode` colors code in the chat by its language (default on; off shows plain text).
 - All settings share one sanitized `localStorage["herdr-web-ui:settings"]` record.
 
 ## 4. Spacing & Layout
@@ -668,6 +690,9 @@ One set for both themes: the card is island black wherever it shows.
   first 20 behind **Show all N lines**. On touch a block has a header strip (language, copy);
   with a mouse and no touch screen the strip becomes a corner control over the block's top right,
   shown on hover or focus-within (no transition under reduced motion).
+  Fenced code is colored by role (`--syntax-*`) up to 100 KB, in a worker past 2 KB; a longer block,
+  or one the worker cannot color within 2 s, stays plain with a note under it. Past 20 000 lines
+  code is drawn as one text rather than an element per line, so it never holds the page.
   A table fills the reply's width; its cells, file paths included, break between words only, so a
   column is never narrower than its longest word, and a table without room scrolls sideways in
   its own box.
@@ -977,8 +1002,8 @@ One set for both themes: the card is island black wherever it shows.
   control, the X, Escape and the scrim take the same entries off. Beside the list, turning pages
   replaces the one entry. A reload steps out of the entries it finds; Forward reopens the page.
 - Pages, in order: **Appearance** (theme, colors, density, language, sidebar rows), **Chat**
-  (panes open in, show thinking, chat width, chat font size and family; then **Composer**: Enter
-  sends, suggestion chip; then **Quick replies**), **Terminal** (font size and family, wheel
+  (panes open in, show thinking, chat width, chat font size and family, highlight code; then
+  **Composer**: Enter sends, suggestion chip; then **Quick replies**), **Terminal** (font size and family, wheel
   speed, input mode, Key bar), **Alerts**, **Voice input**, **Subscription usage**,
   **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (the phone address,
   Keep screen on, Install; then paired devices), **Remote PCs**, **About** (Updates, herdr,

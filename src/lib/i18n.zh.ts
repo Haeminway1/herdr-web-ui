@@ -82,6 +82,8 @@ export const ZH: Record<string, string> = {
   "Increase chat font size": "增大聊天字号",
   "Chat font": "聊天字体",
   "Message text; code stays monospace. Comma-separated, tried in order. A font this device does not have falls back to the default.": "用于消息正文，代码仍使用等宽字体。以逗号分隔，按顺序使用。此设备上没有的字体会回退到默认字体。",
+  "Highlight code": "代码语法高亮",
+  "Colors code by its language. Off, code is plain text.": "按语言为代码着色。关闭后代码以纯文本显示。",
   "Shortcuts": "快捷键",
   "Phone": "手机",
   "Devices": "设备",
@@ -458,6 +460,7 @@ export const ZH: Record<string, string> = {
   "Copy code": "复制代码",
   "Show less": "收起",
   "Show all {n} lines": "显示全部 {n} 行",
+  "Too long to highlight": "内容过长，未做语法高亮",
   "Empty task": "空任务",
 
   // ---- composer ----
