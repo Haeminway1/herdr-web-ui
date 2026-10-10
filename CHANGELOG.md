@@ -61,6 +61,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#724](https://github.com/devswha/herdr-web-ui/pull/724))
 
 ### Fixed
+- A Claude pane that used an agent team no longer counts its teammates as running after they
+  shut down: a teammate that approved its lead's shutdown request reads as completed, so the
+  pane's running count and the agent list show only what still runs.
 - Codex conversations on Windows resolve the transcript even when the pane's working directory
   uses different letter casing from Codex's stored path. The lookup verifies the directory on
   disk before considering its canonical spelling, so another pane's chat is not substituted.
