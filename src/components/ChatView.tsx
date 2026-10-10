@@ -36,7 +36,7 @@ import { machinePath } from "../../shared/machines.ts";
 import { fileUrl } from "../lib/api.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
 import { lineDiff } from "../lib/diff.ts";
-import { formatTokens } from "../lib/compose.ts";
+import { formatTokens, sameMessage } from "../lib/compose.ts";
 import { formatElapsed, taskCallItems, taskResultMarkdown } from "../lib/omoTasks.ts";
 
 /** The pane this chat shows, for what its rows fetch on request (a tool call's whole output). */
@@ -75,6 +75,8 @@ export interface ChatViewProps {
   onPrompt?: (paneId: string, prompt: InteractivePrompt | null) => void;
   /** with no prompt waiting, the next prompt the agent suggests (Claude's grey input text) */
   onSuggestion?: (paneId: string, suggestion: string | null) => void;
+  /** a cancelled send the agent put back in its input box: the composer fills it again, and it is no sent turn here either */
+  onRestored?: (paneId: string, restored: string | null) => void;
   /** bumped after the composer answered: read the prompt again now */
   promptRefreshKey?: number;
   /** a typed pick of an approval's option, waiting in the card for Confirm */
@@ -541,7 +543,7 @@ function FallbackTurn({ paneId, message }: { paneId: string; message: Transcript
 const NO_OUTGOING: readonly Outgoing[] = [];
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0, outgoing = NO_OUTGOING, onOutgoingDone, connected, ended, agent, agentStatus, onMetadata, onWork, onRead, greeted = false, onPrompt, onSuggestion, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0, outgoing = NO_OUTGOING, onOutgoingDone, connected, ended, agent, agentStatus, onMetadata, onWork, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -570,6 +572,11 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   // where a pane switch or a send upstream could leave it stale
   const onSuggestionRef = useRef(onSuggestion);
   onSuggestionRef.current = onSuggestion;
+  // restored is handed up the same way, and also kept here: while it holds, the send it names
+  // is filtered out of the rendered turns (the terminal shows no sent turn for it either)
+  const onRestoredRef = useRef(onRestored);
+  onRestoredRef.current = onRestored;
+  const [restored, setRestored] = useState<string | null>(null);
   // a read begun before the latest send answers for the turn before it: its suggestion is dropped
   const sentKeyRef = useRef(sentKey);
   sentKeyRef.current = sentKey;
@@ -611,7 +618,7 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   useEffect(() => {
     shownPane.current = paneId;
     history.current = undefined; setHistoryId(undefined);
-    stickToBottom.current = true; signature.current = ""; setState(EMPTY_STATE); setNewMessages(false); setAway(false); setLoaded(false); setError(null); setErrorStatus(null); setPrompt(null); setAbandoned(null);
+    stickToBottom.current = true; signature.current = ""; setState(EMPTY_STATE); setNewMessages(false); setAway(false); setLoaded(false); setError(null); setErrorStatus(null); setPrompt(null); setAbandoned(null); setRestored(null);
     dropOlder();
     lastAnswer.current = null;
     setSentOver(null);
@@ -773,7 +780,7 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   // idle. The visible prompt, not the status badge, decides whether to offer answers.
   const pollPrompt = connected && !ended && agent !== null;
   useEffect(() => {
-    if (!pollPrompt) { setPrompt(null); onSuggestionRef.current?.(paneId, null); return; }
+    if (!pollPrompt) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
     let cancelled = false;
     let timer = 0;
@@ -784,10 +791,14 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
         const next = await fetchPanePromptState(paneId);
         if (!cancelled) {
           setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
-          if (sentKeyRef.current === sent) onSuggestionRef.current?.(paneId, next.suggestion);
+          if (sentKeyRef.current === sent) {
+            onSuggestionRef.current?.(paneId, next.suggestion);
+            setRestored(next.restored);
+            onRestoredRef.current?.(paneId, next.restored);
+          }
         }
       }
-      catch { if (!cancelled) { setPrompt(null); onSuggestionRef.current?.(paneId, null); } }
+      catch { if (!cancelled) { setPrompt(null); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); } }
       finally { if (!cancelled) timer = window.setTimeout(() => void readPrompt(), POLL_MS); }
     };
     void readPrompt();
@@ -799,8 +810,8 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
     return () => onPrompt?.(paneId, null);
   }, [onPrompt, paneId, prompt]);
 
-  // a pane left behind keeps no suggestion
-  useEffect(() => () => onSuggestionRef.current?.(paneId, null), [paneId]);
+  // a pane left behind keeps no suggestion and no restored send
+  useEffect(() => () => { onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); }, [paneId]);
 
   // away from the page, the prompt is not read: it can be answered in the terminal and asked
   // again unseen, so a typed pick waiting for Confirm does not outlive the page being hidden
@@ -876,6 +887,15 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
   }, [state.turns, state.source, agentStatus, finishedBefore]);
   const workKey = work ? `${work.since}|${work.doing}` : "";
   useEffect(() => { onWork?.(paneId, work); }, [paneId, workKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A cancelled send back in the agent's input box is no sent turn: the transcript still holds it
+  // (empty, blank, held and onRead keep the turns as read), but the rendered list drops it while
+  // the last turn is that very send — matching the terminal, which shows it only as typed text.
+  const shownTurns = useMemo(() => {
+    const last = turns[turns.length - 1];
+    if (restored === null || last?.role !== "user") return turns;
+    const sent = last.parts.filter((part): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n");
+    return sameMessage(sent, restored) ? turns.slice(0, -1) : turns;
+  }, [turns, restored]);
   heldPage.current = state.turns;
   const finishedBeforeSend = sentOver !== null && sentOver.page === state.turns ? sentOver.turn : null;
   const empty = state.source === "conversation" ? turns.length === 0 && outgoing.length === 0 : state.messages.length === 0;
@@ -950,8 +970,8 @@ export const ChatView = memo(function ChatView({ paneId, refreshKey, sentKey = 0
       )}
       {state.source === "conversation" && olderCursor === null && older.length > 0 && <p className="chat-endcap">{t("beginning of conversation")}</p>}
       {state.source === "conversation"
-        ? turns.map((turn, index) => {
-            const last = index === turns.length - 1;
+        ? shownTurns.map((turn, index) => {
+            const last = index === shownTurns.length - 1;
             const live = isLiveWorkTurn(turn, last, agentStatus, finishedBeforeSend);
             return <RenderBoundary key={`${paneId}:${historyId ?? ""}:${turn.role}:${turn.ts ?? index}`} resetKey={turnRevision(turn)} fallback={() => <p className="chat-inline-state chat-inline-error">{t("This message can't be shown here. The terminal has it.")}</p>}>
               <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} last={last && settings.openLastWork} showThinking={settings.showThinking} />
