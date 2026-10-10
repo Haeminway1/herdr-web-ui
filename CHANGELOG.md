@@ -8,6 +8,9 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 ## [Unreleased]
 
 ### Fixed
+- A Claude pane that used an agent team no longer counts its teammates as running after they
+  shut down: a teammate that approved its lead's shutdown request reads as completed, so the
+  pane's running count and the agent list show only what still runs.
 - A chat message stopped right after sending, before Claude Code answered, is no longer stuck: the
   message goes back into the message box to edit and send again, as Claude Code puts it back in its
   own input box, instead of staying in the chat as sent and the next send failing with "Claude
