@@ -197,6 +197,21 @@ function closeDemoWorkspaces(ids: Set<string>): void {
 const sseListeners = new Set<SseListener>();
 const sockets = new Set<DemoSocket>();
 
+// herdr names an unnamed tab by its place in the row and moves that name up when an earlier tab
+// closes; a renamed tab keeps its name. The demo tracks which tabs still carry the automatic name.
+const autoTabs = new Set<string>();
+function relabelAutoTabs(workspaceId: string): void {
+  // a tab that is gone is forgotten, so a later tab given its ID keeps the name it was created with
+  const live = new Set(snapshot().tabs.map((tab) => tab.tab_id));
+  for (const id of autoTabs) if (!live.has(id)) autoTabs.delete(id);
+  let place = 0;
+  for (const tab of snapshot().tabs) {
+    if (tab.workspace_id !== workspaceId) continue;
+    place += 1;
+    if (autoTabs.has(tab.tab_id)) tab.label = String(place);
+  }
+}
+
 function emitSse(event: MachineEvent): void {
   const message = new MessageEvent("message", { data: JSON.stringify(event) });
   for (const listener of sseListeners) listener(message);
@@ -466,6 +481,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     snap.panes = snap.panes.filter((candidate) => candidate.pane_id !== pane.pane_id);
     const survivingPanes = snap.panes.filter((candidate) => candidate.workspace_id === pane.workspace_id);
     snap.tabs = snap.tabs.filter((tab) => tab.workspace_id !== pane.workspace_id || survivingPanes.some((candidate) => candidate.tab_id === tab.tab_id));
+    relabelAutoTabs(pane.workspace_id);
     const survivingTabs = snap.tabs.filter((tab) => tab.workspace_id === pane.workspace_id);
     snap.workspaces = snap.workspaces.filter((workspace) => workspace.workspace_id !== pane.workspace_id || survivingPanes.length > 0);
     const focused = snap.panes.find((candidate) => candidate.pane_id === snap.focused_pane_id)
@@ -516,6 +532,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     const label = String(body["label"] ?? "").trim();
     if (label === "") return error("missing_label", "label is required", 400);
     tab.label = label;
+    autoTabs.delete(tab.tab_id);
     structureChanged();
     return json({ ok: true });
   }
@@ -530,6 +547,8 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     }
     snap.panes = snap.panes.filter((p) => p.tab_id !== tab.tab_id);
     snap.tabs = snap.tabs.filter((t) => t.tab_id !== tab.tab_id);
+    autoTabs.delete(tab.tab_id);
+    relabelAutoTabs(tab.workspace_id);
     snap.layouts = snap.layouts.filter((l) => l.tab_id !== tab.tab_id);
     // a workspace's last tab takes the workspace with it
     if (!snap.tabs.some((t) => t.workspace_id === tab.workspace_id)) snap.workspaces = snap.workspaces.filter((w) => w.workspace_id !== tab.workspace_id);
@@ -584,7 +603,10 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     const pane: Pane = { ...structuredClone(template), pane_id: `${id}:p${(nextWorkspace++).toString(36)}`, tab_id: tabId, terminal_id: `${id}:term${number}`, workspace_id: id, label: null, title: null, agent, agent_session: null, agent_status: agent ? "working" : "unknown", cwd, foreground_cwd: cwd, focused: false, terminal_title: null, terminal_title_stripped: null, revision: 1 };
     snap.panes.push(pane);
     addAgent(pane);
-    snap.tabs.push({ ...structuredClone(snap.tabs[0]!), tab_id: tabId, workspace_id: id, label: String(body["label"] ?? "") || String(number), number, agent_status: pane.agent_status, focused: false, pane_count: 1 });
+    snap.tabs.push({ ...structuredClone(snap.tabs[0]!), tab_id: tabId, workspace_id: id, label: String(body["label"] ?? ""), number, agent_status: pane.agent_status, focused: false, pane_count: 1 });
+    if (String(body["label"] ?? "") === "") autoTabs.add(tabId);
+    else autoTabs.delete(tabId);
+    relabelAutoTabs(id);
     workspace.tab_count = tabs.length + 1;
     workspace.pane_count = siblings.length + 1;
     if (agent) {
