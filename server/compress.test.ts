@@ -58,6 +58,16 @@ test("a static bundle's gzip is kept and served again by its content", async () 
   expect(gunzipSync(again).toString()).toBe("console.log(1);".repeat(500));
 });
 
+test("a body that fails to read answers in the error envelope, not with a rejection", async () => {
+  const broken = new Response(new ReadableStream({ pull(controller) { controller.error(new Error("file went away")); } }), { headers: { "content-type": "text/javascript" } });
+  const console_ = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const response = (await compressResponse(asks("/assets/gone.js"), broken))!;
+    expect(response.status).toBe(500);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("internal_error");
+  } finally { console_.mockRestore(); }
+});
+
 test("leaves alone what it must not touch", async () => {
   expect((await compressResponse(asks("/x", "identity"), json(50_000)))!.headers.get("content-encoding")).toBeNull();
   expect((await compressResponse(asks(), json(10)))!.headers.get("content-encoding")).toBeNull();

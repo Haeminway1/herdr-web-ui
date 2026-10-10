@@ -9,6 +9,8 @@
  * too, so a cache never hands one form to a client that asked for the other.
  */
 
+import { errorResponse } from "./http.ts";
+
 const COMPRESSIBLE = /^(?:application\/(?:json|javascript|manifest\+json)|text\/(?:html|css|javascript|plain)|image\/svg\+xml)\b/i;
 const MIN_BYTES = 1024;
 /**
@@ -75,7 +77,9 @@ export async function compressResponse(request: Request, response: Response | un
   if (!/\baccept-encoding\b/i.test(headers.get("vary") ?? "")) headers.append("vary", "accept-encoding");
   const init = { status: response.status, statusText: response.statusText, headers };
   if (response.status !== 200 || request.method === "HEAD" || !acceptsGzip(request)) return new Response(response.body, init);
-  const body = new Uint8Array(await response.arrayBuffer());
+  let body: Uint8Array<ArrayBuffer>;
+  // a static file read lazily can fail here, after the route answered: it still answers in the envelope
+  try { body = new Uint8Array(await response.arrayBuffer()); } catch (error) { return errorResponse(error); }
   if (body.byteLength < MIN_BYTES) return new Response(body, init);
   const gzipped = gzipOf(body, !pathname.startsWith("/api/"));
   headers.set("content-encoding", "gzip");
