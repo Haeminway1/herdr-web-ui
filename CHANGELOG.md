@@ -24,6 +24,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   timed out) now reads READY instead of DONE, and no "work finished" alert fires for it. A retry
   that answers afterwards still finishes the turn as DONE, with its alert.
   ([#715](https://github.com/devswha/herdr-web-ui/pull/715))
+- On Windows, a Codex chat is found when `CODEX_HOME` carries the `\\?\` prefix, or when Codex
+  stored the working directory with a drive letter in another case than herdr reports
+  (`\\?\d:\work\app` for `D:\work\app`). A Claude pane whose process two stores both claim
+  (`~/.claude` and a `~/.claude-*` copy) now says its chat is unavailable instead of showing
+  `~/.claude`'s session.
+  ([#714](https://github.com/devswha/herdr-web-ui/pull/714))
 
 ## [0.4.5] - 2026-10-09
 
