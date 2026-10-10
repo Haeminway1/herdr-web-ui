@@ -2165,9 +2165,10 @@ export function createServer(
           const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb);
           // The chat polls every 2s: an unchanged conversation answers 304 with no body.
           // no-store keeps the browser's own cache out of it, so the chat sees the 304.
-          const etag = `"${version}"`;
+          // weak: the same answer goes out gzipped or plain (compress.ts), which are not the same bytes
+          const etag = `W/"${version}"`;
           const headers = { etag, "cache-control": "no-store" };
-          if (request.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
+          if (request.headers.get("if-none-match")?.replace(/^W\//, "") === etag.slice(2)) return new Response(null, { status: 304, headers });
           return jsonResponse(conversation, 200, headers);
         } catch (error) {
           if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
