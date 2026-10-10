@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Bell, Ellipsis, FolderOpen, Lock, Menu, MessageSquare, PanelLeft, Plus, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ClientRole, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
@@ -26,6 +26,7 @@ import { paneStorageId, type Machine, type MachineEvent } from "../shared/machin
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
 import { rosterPanes } from "./lib/dagPane.ts";
+import { carryPaneRecords, paneMovePending, paneMovesVersion, subscribePaneMoves } from "./lib/paneMove.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
 import { alertPrefs, useSettings, type DefaultView } from "./lib/settings.ts";
 import { useShortcuts } from "./lib/shortcuts.ts";
@@ -552,6 +553,9 @@ export function App() {
     storeSelection(machineId, paneId);
   }, []);
   const selectTargetRef = useRef(selectTarget); selectTargetRef.current = selectTarget;
+  // the moves this client asked for and has no answer to yet (MovePaneMenu): the effect below
+  // looks again when one ends, since a failed move leaves the selection to it after all
+  const movesVersion = useSyncExternalStore(subscribePaneMoves, paneMovesVersion);
   useEffect(() => {
     // An offline PC's cached roster cannot invalidate a selection. Once connected,
     // a closed pane (including one remembered across reloads) must release its selection.
@@ -564,11 +568,14 @@ export function App() {
     let cancelled = false;
     void fetchSession(selectedMachineId).then((current) => {
       if (cancelled || current.panes.some((pane) => pane.pane_id === selectedPaneId)) return;
+      // the pane is gone because this client is moving it and the roster outran the answer:
+      // the answer names the id to follow (actions.paneMoved), and herdr's focus is not it
+      if (paneMovePending(selectedMachineId, selectedPaneId)) return;
       setSelectedPaneId(fallback(current));
       setAutoSelected(true);
     }).catch(() => { /* a failed read is not evidence that the pane disappeared */ });
     return () => { cancelled = true; };
-  }, [snapshot, selectedPaneId, selectedMachineId, selectedMachine?.state]);
+  }, [snapshot, selectedPaneId, selectedMachineId, selectedMachine?.state, movesVersion]);
   useEffect(() => {
     storeSelection(selectedMachineId, selectedPaneId);
   }, [selectedMachineId, selectedPaneId]);
@@ -716,6 +723,14 @@ export function App() {
         setNewSessionOpen(true);
       },
       openPalette: () => setPaletteOpen(true),
+      paneMoved: (machineId, previousPaneId, paneId) => {
+        if (previousPaneId === paneId) return;
+        carryPaneRecords(machineId, previousPaneId, paneId);
+        // the new id is selected before a snapshot without the old one can fall the selection
+        // back to herdr's focus; a pane moved from the sidebar while another is open stays unselected
+        const current = selectionRef.current;
+        if (current.machineId === machineId && current.paneId === previousPaneId) selectPane(paneId);
+      },
       openFind: () => {
         if (selectedPaneId === null) return;
         setView("terminal");
@@ -947,7 +962,7 @@ export function App() {
         <MachineActionBanner machines={machines} onSetup={(machine, update = false) => { setDrawerOpen(false); setUpdateRemote(update); setMachineDialog(machine); }} />
         {layoutNotice && <p className="pane-notice" role="alert">{layoutNotice}</p>}
         {snapshot && selectedPane && selectedWorkspace && (
-          <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()} onLayoutChanged={actions.refresh} />
+          <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()} onPaneMoved={(previousPaneId, paneId) => actions.paneMoved(selectedMachineId, previousPaneId, paneId)} onLayoutChanged={actions.refresh} />
         )}
         {/* the tab strip's panel: its id is what each tab's aria-controls points at. No tabIndex -
             the terminal (PaneTerminal) and the composer are the focusable things inside it. */}

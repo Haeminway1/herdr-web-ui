@@ -5,6 +5,9 @@
  * focused there, else its first. The app shows one pane at a time, so a tab with several panes
  * carries a picker of them beside its name.
  *
+ * The menu also moves the tab's pane (the one the tab opens) to another tab, a new tab or
+ * another workspace, as herdr's `pane move`: MovePaneMenu lists the places under the same button.
+ *
  * A tab is renamed and closed here, as herdr's prefix+shift+t and prefix+shift+x. With a mouse:
  * an x on the tab under the pointer and on the open one, a double-click on the name to type a
  * new one, a right-click for the menu. On a touch screen the open tab's chevron opens the same
@@ -19,7 +22,7 @@
  * layout map. A split keeps the user's pane, as herdr's --no-focus does.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { ChevronDown, ChevronsDownUp, ChevronsLeftRight, ChevronsRightLeft, ChevronsUpDown, Columns2, Eraser, Maximize2, Minimize2, MoveDown, MoveLeft, MoveRight, MoveUp, Pencil, Plus, Rows2, Terminal, X, type LucideIcon } from "lucide-react";
+import { ChevronDown, ChevronsDownUp, ChevronsLeftRight, ChevronsRightLeft, ChevronsUpDown, Columns2, Eraser, FolderInput, Maximize2, Minimize2, MoveDown, MoveLeft, MoveRight, MoveUp, Pencil, Plus, Rows2, Terminal, X, type LucideIcon } from "lucide-react";
 
 import "./TabStrip.css";
 
@@ -39,8 +42,9 @@ import { paneStatus, rollupStatus } from "../lib/status.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { displayPaneTitle } from "./Sidebar.tsx";
-import { LayoutMap } from "./LayoutMap.tsx";
+import { MovePaneMenu } from "./MovePaneMenu.tsx";
 import { RowMenu, SHEET_QUERY, type RowMenuItem } from "./RowMenu.tsx";
+import { LayoutMap } from "./LayoutMap.tsx";
 
 const said = (reason: unknown): string => reason instanceof ApiError ? reason.detail : reason instanceof Error ? reason.message : String(reason);
 
@@ -66,17 +70,20 @@ export interface TabStripProps {
   selectedPane: PaneInfo;
   onSelectPane: (paneId: string) => void;
   onNewTab: () => void;
+  /** a pane this strip moved, under the id it answers to now (a new one when it left the workspace) */
+  onPaneMoved: (previousPaneId: string, paneId: string) => void;
   /** herdr took a layout call from here: the snapshot is read again now, not at the next push's debounce */
   onLayoutChanged: () => void;
 }
 
-export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNewTab, onLayoutChanged }: TabStripProps) {
+export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNewTab, onPaneMoved, onLayoutChanged }: TabStripProps) {
   const t = useT();
   const machineId = useMachineId();
   const { closeTab, renameTab, splitPane, zoomPane, swapPane, resizePane, clearPane } = useMachineApi();
   const sheet = useMediaQuery(SHEET_QUERY);
   const strip = useRef<HTMLDivElement>(null);
   const [picker, setPicker] = useState<{ anchor: HTMLElement; tab: HerdrTab } | null>(null);
+  const [moving, setMoving] = useState<{ anchor: HTMLElement; pane: PaneInfo } | null>(null);
   const [editing, setEditing] = useState<{ tabId: string; value: string } | null>(null);
   // the name just sent, shown until herdr's snapshot carries it
   const [sent, setSent] = useState<{ tabId: string; label: string } | null>(null);
@@ -103,6 +110,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
   useEffect(() => {
     const here = (tabId: string): boolean => tabs.some((tab) => tab.tab_id === tabId);
     if (picker && !here(picker.tab.tab_id)) setPicker(null);
+    if (moving && !panes.some((pane) => pane.pane_id === moving.pane.pane_id)) setMoving(null);
     if (editing && !here(editing.tabId)) setEditing(null);
     if (confirm && !here(confirm.tab.tab_id)) setConfirm(null);
     if (sent && tabs.find((tab) => tab.tab_id === sent.tabId)?.label.trim() === sent.label) setSent(null);
@@ -288,11 +296,12 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
   };
 
   // a tab's menu: its panes when it has several, herdr's layout operations on the pane it
-  // opens, then its name and its close
+  // opens, then its name, where its pane can move, and its close
   const pickerItems = (tab: HerdrTab): RowMenuItem[] => {
     // the tab may have changed under the open menu: the items act on what it is now
     const now = tabs.find((candidate) => candidate.tab_id === tab.tab_id) ?? tab;
     const own = panesOf(now);
+    const anchor = picker?.anchor;
     const target = paneFor(now);
     const layout = layoutOf(now);
     const layoutItems: RowMenuItem[] = [];
@@ -332,6 +341,8 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
       })) : []),
       ...layoutItems,
       { id: "rename-tab", label: t("Rename tab"), icon: Pencil, divider: true, run: () => beginRename(now) },
+      // the pane the tab opens: the open one on the open tab
+      { id: "move-pane", label: t("Move pane to…"), icon: FolderInput, run: () => { if (anchor && target) setMoving({ anchor, pane: target }); } },
       { id: "close-tab", label: t("Close tab"), icon: X, danger: true, divider: true, run: () => requestClose(now) },
     ];
   };
@@ -424,6 +435,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
         </button>
         {error && <span className="tab-strip-error" role="alert">{error}</span>}
       </div>
+      {moving && <MovePaneMenu anchor={moving.anchor} align="start" snapshot={snapshot} pane={moving.pane} paneTitle={displayPaneTitle(moving.pane)} onMoved={(moved) => onPaneMoved(moved.previous_pane_id, moved.pane.pane_id)} onError={(reason) => setError(t("Move failed: {reason}", { reason }))} onClose={() => setMoving(null)} />}
       {picker && (() => {
         const title = panesOf(picker.tab).length > 1 ? t("Panes in {tab}", { tab: nameOf(picker.tab) }) : nameOf(picker.tab);
         return <RowMenu anchor={picker.anchor} title={title} header={pickerHeader(picker.tab, title)} items={pickerItems(picker.tab)} align="start" onClose={() => setPicker(null)} />;

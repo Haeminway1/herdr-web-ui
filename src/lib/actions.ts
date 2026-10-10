@@ -22,6 +22,12 @@ export interface AppActions {
    */
   openNewTab: (target?: { machineId: string; workspaceId: string }) => void;
   openPalette: () => void;
+  /**
+   * A pane this client moved (POST /api/pane/move), under the id it answers to now: the lens
+   * and drafts kept under the old id follow it, and the selection too when it was the
+   * selected pane. A move made elsewhere (the TUI, another client) never moves the selection.
+   */
+  paneMoved: (machineId: string, previousPaneId: string, paneId: string) => void;
   openFind: () => void;
   openSettings: () => void;
   /** the Add PC dialog, from Settings → Remote PCs and the palette; Settings closes first */

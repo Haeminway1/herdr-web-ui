@@ -405,7 +405,7 @@ One set for both themes: the card is island black wherever it shows.
 - The sidebar's row menu (`.row-menu`) is a `.menu` drawn through a portal at fixed coordinates,
   under its `⋯` with right edges aligned, above it when the screen ends first, and over the drawer.
   A row offers Rename workspace, Rename pane (the pane it opens), Agent name… (only while herdr
-  lists a live agent in that pane), New tab,
+  lists a live agent in that pane), Move pane to…, New tab,
   New worktree, Open worktree…, then Close workspace under a hairline. A worktree workspace has no worktree items and
   ends in **Delete worktree checkout…** after Close workspace. The
   danger item takes `--status-blocked`. The popover is as tall as its items, up to the room on
@@ -433,6 +433,15 @@ One set for both themes: the card is island black wherever it shows.
   (or the shell glyph) and the pane's title, the open pane named in the strong colour
   (`aria-current`). A tab of several panes heads it with the layout map (below), in the
   popover's header and in the sheet's head under the title.
+- **Move pane to…** (a row's menu, a tab's menu) opens the same menu again under the same button
+  (`MovePaneMenu`): a dim uppercase MOVE TO micro label with the pane's name under it
+  (`.move-pane-head`), then New tab and the workspace's other tabs, every other workspace under
+  a hairline, and New workspace under another. A pick moves the pane at once (`POST
+  /api/pane/move`); the app stays on a moved pane that was open, also under the new id herdr
+  gives a pane that changes workspace, and waits for the move's answer before it would read a
+  roster without the pane as the pane gone. A refusal reads as the row's or the strip's inline
+  error, herdr's own too ("Move failed: the tab is zoomed; unzoom it in herdr, then move the
+  pane"): a `changed: false` answer never closes the menu as if the pane had moved.
 
 ### Badge (`.badge`)
 - Agent states read **READY**, **RUN**, **INPUT**, **DONE**; unknown reads **—**. **BG** is a pane
@@ -631,7 +640,8 @@ One set for both themes: the card is island black wherever it shows.
   unzoom a tab zoomed on another pane) and **Swap left / right / up / down** (prefix+shift+hjkl), only for
   the sides the pane has a neighbour on, **Wider / Narrower / Taller / Shorter** (the resize
   mode, by herdr's own share of the split the border belongs to), only for an axis the pane shares with a neighbour, and
-  **Clear pane**; then **Rename tab**, then **Close tab** in the danger colour under a hairline.
+  **Clear pane**; then **Rename tab**, **Move pane to…** (the same pane), then **Close tab** in the
+  danger colour under a hairline.
   A split keeps the open pane, as herdr's `--no-focus` keeps its focus. herdr's "nothing
   changed" answers (no neighbour on that side, a border that cannot move) read as a line of
   `--status-blocked` text at the strip's end, like a refusal.
