@@ -15,6 +15,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   push subscribe — as does any client that proves itself with `x-herdr-machine`. A browser is
   unaffected: it always states an `Origin` on a cross-origin request, and `SameSite=Strict`
   already covered what this closes.
+- A remote PC that is switched off or asleep while its bridge update runs, or whose update was
+  cancelled, now shows **Reconnecting…** instead of asking for a bridge update it cannot run.
+  Once the PC answers, the version check runs again and, if the bridge is still out of date, the
+  update follows; a cancelled update comes back as the **Update bridge** button only.
+  ([#716](https://github.com/devswha/herdr-web-ui/pull/716))
 
 ## [0.4.5] - 2026-10-09
 
