@@ -55,6 +55,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#724](https://github.com/devswha/herdr-web-ui/pull/724))
 
 ### Fixed
+- A chat message stopped right after sending, before Claude Code answered, is no longer stuck: the
+  message goes back into the message box to edit and send again, as Claude Code puts it back in its
+  own input box, instead of staying in the chat as sent and the next send failing with "Claude
+  Code's input box in the terminal is not empty". The new send replaces that copy in the terminal
+  and stays in the same conversation, and the cancelled message is not shown beside it. A draft you
+  typed or changed in the terminal is still never replaced.
 - The browser demo keeps each row's own split when resizing a grid and keeps deeply split
   panes visible and resizable. ([#726](https://github.com/devswha/herdr-web-ui/pull/726))
 - Workspace and tab changes, pane moves and layout updates made in herdr's terminal UI
