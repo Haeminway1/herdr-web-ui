@@ -56,6 +56,12 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   `AlertToasts`), the connected keyline bloom, the alert-history bell, native push taps routed to
   app windows only.
 - Appearance: Claude and Codex mark choices (`claudeMark`, `codexMark`).
+- Panes: one pane at a time, the tab strip shown only once a workspace has more than one pane, with
+  its pane picker and inline close (`ClassicTabStrip.tsx`, `cl-tab-strip` classes), no history
+  scrollbar beside the terminal, and the command palette as one Panes list (recent first) with no
+  status chips, workspace sections or footer. Upstream #747/#721's herdr-style pane area, tab menu,
+  history scrollbar and grouped palette are `tuiPanes` in Settings, off by default (automation
+  browsers start on it so upstream's UI tests stay valid). (2026-10-11, v0.4.601)
 - Terminal: the phone key bar's default order, ^C last (`DEFAULT_KEY_BAR_ITEMS`; upstream #607 put it
   third, reachable through the key bar settings).
 - Desktop shell (`desktop/`), identity overlay above.
