@@ -16,6 +16,7 @@ import { paneFiles } from "./files.ts";
 import { badRequest, errorResponse, isCount, isJsonObject, jsonResponse } from "./http.ts";
 import { parseMoveRequest } from "./pane-move.ts";
 import { serveStatic } from "./static.ts";
+import { compressResponse } from "./compress.ts";
 import { sameAttachment } from "./input-guard.ts";
 import { startStatusCollector } from "./collector.ts";
 import { claudePanePid, claudePaneSession, conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneRunsOmo, toolOutput } from "./conversation.ts";
@@ -1414,6 +1415,8 @@ export function createServer(
     hostname,
 
     async fetch(request, bunServer) {
+      // the route's answer, gzipped for a browser that takes it (server/compress.ts)
+      return compressResponse(request, await (async (): Promise<Response | undefined> => {
       const url = new URL(request.url);
       let { pathname } = url;
       const bridgeAuthorized = isAuthenticated(request, bridgeToken);
@@ -2163,9 +2166,10 @@ export function createServer(
           const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb);
           // The chat polls every 2s: an unchanged conversation answers 304 with no body.
           // no-store keeps the browser's own cache out of it, so the chat sees the 304.
-          const etag = `"${version}"`;
+          // weak: the same answer goes out gzipped or plain (compress.ts), which are not the same bytes
+          const etag = `W/"${version}"`;
           const headers = { etag, "cache-control": "no-store" };
-          if (request.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
+          if (request.headers.get("if-none-match")?.replace(/^W\//, "") === etag.slice(2)) return new Response(null, { status: 304, headers });
           return jsonResponse(conversation, 200, headers);
         } catch (error) {
           if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
@@ -2317,6 +2321,7 @@ export function createServer(
 
       // static client - public even when the API is gated, so the login UI can load
       return serveStatic(pathname);
+      })());
     },
 
     websocket: {
