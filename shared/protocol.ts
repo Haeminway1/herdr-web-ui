@@ -44,8 +44,9 @@ export interface PaneAttention { finished_at: string | null; seen_at: string | n
  * `background_tasks`: an OmO pane's `task` children, or a Claude Code pane's subagents and background commands, still running, counted by the server; absent when none.
  * `background_wait`: the pane is at rest while work its turn started still runs, and the turn goes on when it ends (server/background-wait.ts); absent when not.
  * `attention`: its read state; absent for a pane that never finished while this server watched.
+ * `plan`: how far the pane's agent's task list or checklist has progressed; absent when it keeps none.
  */
-export type HerdrPane = PaneInfo & { background_tasks?: number; background_wait?: true; attention?: PaneAttention };
+export type HerdrPane = PaneInfo & { background_tasks?: number; background_wait?: true; attention?: PaneAttention; plan?: PlanSummary };
 
 export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAction, BridgeIdentity, BridgeHealth } from "./machines.ts";
 
@@ -75,7 +76,7 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         Update POSTs require X-Herdr-Update: 1, same-origin browser requests,
  *         and the usual token gate. Managed starts only; status is polled during restart.
  *  GET    /api/telemetry                 -> TelemetryStatus (shared/telemetry.ts), no-store
- *  POST   /api/telemetry                 -> TelemetryStatus; body { enabled?, notice_seen?: true },
+ *  POST   /api/telemetry                 -> TelemetryStatus; body { enabled?, notice_seen?: true, changed_settings? },
  *         X-Herdr-Update: 1 and same-origin. 404 from a server that sends no telemetry.
  *  GET    /api/agents                    -> { agents: AgentKind[] } (herdr's agent manifests: the
  *         kinds `agent.start` accepts, plus omo and gjc when they are on this server's PATH,
@@ -114,8 +115,11 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         history, soft-wrapped lines joined; a terminal selection that outlives one screen)
  *  POST   /api/pane/input  { pane_id, text }   -> { ok: true }
  *  GET    /api/pane/conversation?pane_id=    -> ConversationResponse (structured agent
- *         transcript turns - claude, codex, omp, omo, gjc, pi or devin; source:"scrollback" when the pane has no
- *         recognized store)
+ *         transcript turns - claude, codex, omp, omo, gjc, pi, devin, OpenCode, hermes, grok or agy;
+ *         source:"scrollback" when the pane has no recognized, readable store.
+ *         Grok requires exact live process/session evidence, Agy live process/session evidence;
+ *         rewinds invalidate cursors.
+ *         Grok/Agy optional activity describes the latest native turn, independently of pane status.)
  *  POST   /api/pane/close { pane_id }         -> { ok: true } (pane.close RPC; the collector's
  *         session-changed broadcast removes it from every client's sidebar)
  *  POST   /api/pane/rename { pane_id, label } -> { ok: true } (pane.rename; empty label clears it)
@@ -161,6 +165,8 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         pane's OmO session started, or a Claude Code pane's subagents (no workflows): running ones, then
  *         those that ended in the last day; empty for any other pane or one whose session is not
  *         known yet. server_time: that PC's clock, which the times are on)
+ *  GET    /api/pane/plan?pane_id=       -> PanePlan (the plan the pane's Claude Code or Codex session
+ *         keeps: its task list or checklist, read from the transcript; null when it keeps none)
  *  GET    /api/pane/files?pane_id=&q=&limit=  -> { files: string[] } (paths relative to the pane
  *         cwd matching q, for @-mentions; git ls-files when the cwd is a repo, bounded walk otherwise)
  *  GET    /api/pane/prompt?pane_id=     -> { prompt: InteractivePrompt | null, suggestion: string | null, restored: string | null }
@@ -266,6 +272,8 @@ export interface UsageWindow {
   readonly used_percent: number;
   /** ISO 8601; null when the provider does not say */
   readonly resets_at: string | null;
+  /** ISO 8601 time this window began counting; null when the provider states neither it nor the window's length */
+  readonly starts_at: string | null;
 }
 
 /**
@@ -382,6 +390,8 @@ export type ConversationPart =
   /** `error`: the call failed (the agent recorded it so, or its output says a command exited non-zero) */
   | {
     kind: "tool"; name: string; summary: string; input: string; output: string; error?: boolean;
+    /** Hermes could not load a tool-call list whose arguments exceeded its page limit. */
+    arguments_omitted?: true;
     skill?: SkillActivity;
     /** set when `output` was cut: the call's id, for GET /api/pane/conversation/tool-output, and the whole output's length */
     output_ref?: string; output_size?: number;
@@ -473,11 +483,45 @@ export interface OmoActivity {
   server_time: string;
 }
 
+/**
+ * One step of the plan an agent keeps for its session (GET /api/pane/plan): a task of Claude
+ * Code's task list (`TaskCreate`/`TaskUpdate`), or an item of Codex's `update_plan` checklist.
+ */
+export interface PlanStep {
+  id: string;
+  label: string;
+  /** what it does now, in the agent's own words (Claude's `activeForm`), when it gave some */
+  active: string | null;
+  status: "pending" | "in_progress" | "completed";
+  /** the steps it waits on: Claude's `blockedBy`, or for Codex the step before it */
+  blocked_by: string[];
+  /** the teammate it was given to, in a Claude Code agent team */
+  owner: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+/** GET /api/pane/plan: the plan the pane's agent keeps now, null when it keeps none. */
+export interface PanePlan {
+  plan: { steps: PlanStep[] } | null;
+  /** the PC's clock, which the times are on */
+  server_time: string;
+}
+
+/** How far a pane's plan has got, for the sidebar: `current` names the step in progress. */
+export interface PlanSummary {
+  done: number;
+  total: number;
+  current: string | null;
+}
+
 /** GET /api/pane/conversation: native conversation with settings, or scrollback fallback. */
 export interface ConversationResponse {
+  /** Grok/Agy latest native turn; display feedback only, never input-delivery authority. */
+  activity?: "thinking" | "working" | "idle";
   /** Stable across appends; changes on transcript replacement or native context clear. */
   history_id?: string;
-  source: "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "scrollback";
+  source: "grok-transcript" | "agy-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript" | "scrollback";
   turns: ConversationTurn[];
   metadata?: ConversationMetadata;
   /**
@@ -910,9 +954,10 @@ export interface PushPayload {
  *  Client -> server frames: attach {pane_id, cols, rows} | detach {pane_id} | input {pane_id, text}
  *    | keys {pane_id, keys} | resize {pane_id, cols, rows} | role {mode}
  *    | pty-ack {pane_id, stream_id, offset} | secret {id, pane_id, prompt, secret}
- *    | watch {pane_id, cols, rows} | unwatch {pane_id}
+ *    | watch {pane_id, cols, rows} | unwatch {pane_id} | conversation-watch {pane_id, enabled}
  *  Server -> client frames: snapshot | pty-data | pty-exit | pane-geometry | role-ack
- *    | pane-status | pane-attention | pane-exited | session-changed | secret-result | watch-data | watch-end | error
+ *    | pane-status | pane-attention | pane-exited | session-changed | conversation-changed | secret-result
+ *    | watch-data | watch-end | error
  *
  *  attach {flow_control:"ack"} opts into per-subscription output credit.
  *  pty-data.flow carries a stream_id and cumulative UTF-8 payload offset;
@@ -951,6 +996,9 @@ export type ClientMessage =
   /** keep_size: the grid is covered (the chat lens), so the attach leaves the shared pty's size as it is */
   | { type: "attach"; pane_id: string; cols: number; rows: number; flow_control?: "ack"; keep_size?: boolean }
   | { type: "detach"; pane_id: string }
+  /** Native invalidations require "conversation-watch" and an attachment; observers may subscribe.
+   * Detaching clears interest, so reconnect/reattach must enable it again. REST remains authoritative. */
+  | { type: "conversation-watch"; pane_id: string; enabled: boolean }
   /** a pane another web bridge holds (`attach_held`): take herdr's attach slot from it, here, now */
   | { type: "take-over"; pane_id: string }
   | { type: "input"; pane_id: string; text: string }
@@ -964,8 +1012,11 @@ export type ClientMessage =
    * works the bridge keeps the message until its next turn, or the owner explicitly steers it.
    * Omission keeps the legacy immediate submission. Queued messages never resume after lease loss.
    * Queue request ids increase monotonically per connection; recent duplicates replay their
-   * receipt, and retired ids are rejected rather than executed after history eviction. */
-  | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue" }
+   * receipt, and retired ids are rejected rather than executed after history eviction.
+   * `clear_draft`: an immediate chat message only, sent again over the `draft` its input_draft
+   * refusal named: the server clears Claude's input box first while it still holds exactly that,
+   * and refuses again (input_draft) when it holds anything else or does not read empty after. */
+  | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue"; clear_draft?: string }
   | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard" }
   /** Masked input: revalidate the visible prompt, type literal bytes + Enter immediately.
    * Never queued, retried, sent through agent.prompt, or echoed in a result. */
@@ -974,12 +1025,17 @@ export type ClientMessage =
   /** Cumulative UTF-8 payload bytes processed by xterm, only for this subscription. */
   | { type: "pty-ack"; pane_id: string; stream_id: string; offset: number }
   | { type: "role"; mode: ClientRole }
+  /** whether this page is in use: visible and focused. While any connection of a server says
+   * so, that server sends no web push to any device (#751). Sent on connect and on every change,
+   * also through a remote PC's socket (the connection server reads it there too); an older
+   * server ignores it, so it needs no feature. */
+  | { type: "presence"; active: boolean }
   /** a read-only view of the pane at this grid, for a tab out of use (feature "watch"); never resizes the pane */
   | { type: "watch"; pane_id: string; cols: number; rows: number }
   | { type: "unwatch"; pane_id: string };
 
 /** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "pending-input" | "secret-input" | "input-ready" | "take-over" | "watch";
+export type ServerFeature = "submit" | "pending-input" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch";
 
 export type ServerMessage =
   | { type: "snapshot"; snapshot: SessionSnapshot; features?: ServerFeature[] }
@@ -993,16 +1049,22 @@ export type ServerMessage =
   /** the shared pty's grid changed: observe clients adopt it, interact clients drive it. `fixed`: the grid is the pane's own in herdr (a mirrored pane), so every client adopts it and none resizes */
   | { type: "pane-geometry"; pane_id: string; cols: number; rows: number; fixed?: boolean }
   | { type: "role-ack"; mode: ClientRole }
-  /** ok after Enter delivery, or bridge acceptance (`pending`); never an agent execution acknowledgement. */
-  | { type: "submit-result"; id: number; pane_id: string; ok: boolean; pending?: PendingMessage; code?: string; message?: string }
+  /** ok after Enter delivery, or bridge acceptance (`pending`); never an agent execution acknowledgement.
+   * `draft`: on an immediate send's input_draft, the one-row draft in Claude's input box that a send
+   * with `clear_draft` may clear (absent when the box is not one the server clears).
+   * `submit_partial`: the explicitly confirmed terminal draft was cleared, but the send's
+   * deadline then expired before the message was sent; never a nothing-typed receipt. */
+  | { type: "submit-result"; id: number; pane_id: string; ok: boolean; pending?: PendingMessage; code?: string; message?: string; draft?: string }
   | { type: "pending-result"; id: number; pane_id: string; pending_id: string; ok: boolean; code?: string; message?: string }
   /** Owner-only receipt and state; only an explicit removed outcome permits deleting a retained client message. */
   | { type: "pending-messages"; pane_id: string; messages: PendingMessage[]; removed?: Array<{ id: string; outcome: "sent" | "discarded" }> }
   | { type: "secret-result"; id: number; pane_id: string; ok: boolean; code?: string }
   /** agent-status push for ANY pane, attached or not (server-side status collector) */
-  | { type: "pane-status"; pane_id: string; agent_status: AgentStatus; /** a pane's running background tasks (OmO's, or a Claude Code pane's subagents and commands), when the frame is about them: it changes no status */ background_tasks?: number; /** every frame says it: absent, the pane does not wait on its turn's background work */ background_wait?: true }
+  | { type: "pane-status"; pane_id: string; agent_status: AgentStatus; /** a pane's running background tasks (OmO's, or a Claude Code pane's subagents and commands), when the frame is about them: it changes no status */ background_tasks?: number; /** every frame says it: absent, the pane does not wait on its turn's background work */ background_wait?: true; /** a pane's plan, when the frame is about it (null: it keeps none now); it changes no status */ plan?: PlanSummary | null }
   /** a pane finished or was read: its new read state, for every device (HerdrPane.attention) */
   | { type: "pane-attention"; pane_id: string; attention: PaneAttention }
+  /** Native transcript invalidation for an interested attached pane; signature is opaque, not a REST ETag. Refetch the existing conversation endpoint. */
+  | { type: "conversation-changed"; pane_id: string; signature: string }
   /** a pane's process exited (pushed even when nobody is attached to it) */
   | { type: "pane-exited"; pane_id: string }
   /** session structure changed (pane created/closed): refetch /api/session */

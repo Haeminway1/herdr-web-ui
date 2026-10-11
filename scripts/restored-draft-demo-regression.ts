@@ -26,17 +26,35 @@ const RESTORED = "Rename the backup job and rerun it";
 
 const extraTurn = (): unknown => ({ role: "user", ts: new Date().toISOString(), parts: [{ kind: "text", text: TURN_TEXT }] });
 
-/** What the infra pane's prompt and conversation reads answer with from here on. */
-const feed = (page: Page, restored: string | null, turn: unknown | null): Promise<void> => page.evaluate(([text, extra]) => {
-  const view = window as unknown as { restoredText: string | null; extraTurn: unknown };
-  view.restoredText = text;
-  view.extraTurn = extra;
-}, [restored, turn] as const);
+/** A transcript write, announced as a bridge with "conversation-watch" does: the chat reads on it. */
+const announce = (page: Page): Promise<void> => page.evaluate(() => (window as unknown as { announceConversation: () => void }).announceConversation());
+
+/** What the infra pane's prompt and conversation reads answer with from here on, announced as a transcript change. */
+const feed = async (page: Page, restored: string | null, turn: unknown | null): Promise<void> => {
+  await page.evaluate(([text, extra]) => {
+    const view = window as unknown as { restoredText: string | null; extraTurn: unknown };
+    view.restoredText = text;
+    view.extraTurn = extra;
+  }, [restored, turn] as const);
+  await announce(page);
+};
 
 /** The composer box's value, waited for: the fills and clears under test are a poll away. */
 const boxValue = (page: Page, expected: string): Promise<unknown> => page.waitForFunction(
   (value) => document.querySelector<HTMLTextAreaElement>(".composer-text")?.value === value,
   expected, { timeout: 10_000 },
+);
+
+/** How many prompt reads the page has asked for so far. */
+const promptReads = (page: Page): Promise<number> => page.evaluate(() => (window as unknown as { promptReads: number }).promptReads);
+
+/**
+ * Waits until the page asked for a prompt read after read `n`: the reads go one after another, so
+ * by then read `n`'s answer has been applied. Counted after a feed, read count + 1 is the first one
+ * asked for after it.
+ */
+const promptReadsPast = (page: Page, n: number): Promise<unknown> => page.waitForFunction(
+  (count) => (window as unknown as { promptReads: number }).promptReads > count, n, { timeout: 10_000 },
 );
 
 /** A rendered turn saying the send's words: the transcript's own answer, when it stands. */
@@ -62,6 +80,18 @@ try {
     window.extraTurn = null;
     window.extraServed = 0;
     window.promptReads = 0;
+    // the demo's sockets, so a transcript change can be announced on them as the bridge does
+    const DemoSocket = window.WebSocket;
+    const sockets = new Set();
+    const Socket = function (...args) { const socket = new DemoSocket(...args); sockets.add(socket); return socket; };
+    Socket.prototype = DemoSocket.prototype;
+    Object.setPrototypeOf(Socket, DemoSocket);
+    window.WebSocket = Socket;
+    let signature = 0;
+    window.announceConversation = () => {
+      signature += 1;
+      for (const socket of sockets) socket.push({ type: "conversation-changed", pane_id: infra, signature: "restored:" + signature });
+    };
     const json = (body) => Promise.resolve(new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } }));
     window.fetch = (input, init) => {
       const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
@@ -125,8 +155,10 @@ try {
         await composer.evaluate((node) => (node as HTMLElement).blur());
         await feed(page, RESTORED, extraTurn());
         await boxValue(page, RESTORED);
+        // the reads run one after another: a second read served means the first one's answer was drawn
         await page.waitForFunction(() => (window as unknown as { extraServed: number }).extraServed >= 1, undefined, { timeout: 10_000 });
-        await page.waitForTimeout(300);
+        await announce(page);
+        await page.waitForFunction(() => (window as unknown as { extraServed: number }).extraServed >= 2, undefined, { timeout: 10_000 });
         assert.equal(await page.locator(".chat-turn").count(), 2, "the transcript read carried the send's turn; it is not rendered");
         const shown = await page.locator(".chat-turn").allTextContents();
         assert.ok(shown.every((text) => !text.includes("Rename the backup job")), `no turn shows the restored send: ${JSON.stringify(shown)}`);
@@ -149,8 +181,9 @@ try {
         await composer.fill(edited);
         await boxValue(page, edited);
         await feed(page, null, extraTurn());
+        const after = await promptReads(page);
         await turnShown(page);
-        await page.waitForTimeout(2500);
+        await promptReadsPast(page, after + 1);
         assert.equal(await composer.inputValue(), edited, "an edited fill is never cleared");
         console.log("PASS a fill the user edited is theirs and stays when the restored send goes away");
 
@@ -159,9 +192,7 @@ try {
         await composer.fill(own);
         await boxValue(page, own);
         await feed(page, "something else restored", extraTurn());
-        const reads = await page.evaluate(() => (window as unknown as { promptReads: number }).promptReads);
-        await page.waitForFunction((n) => (window as unknown as { promptReads: number }).promptReads > n, reads, { timeout: 10_000 });
-        await page.waitForTimeout(2500);
+        await promptReadsPast(page, await promptReads(page) + 1);
         assert.equal(await composer.inputValue(), own, "the user's own draft is never replaced");
         console.log("PASS a composer holding the user's own words is never overwritten by a restored send");
 

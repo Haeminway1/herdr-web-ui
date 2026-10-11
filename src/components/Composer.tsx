@@ -29,11 +29,13 @@ import {
   composerStatusHint,
   composerStatusWord,
   contextLeftPercent,
+  type DraftRefusal,
   formatTokens,
   imageMention,
   insertMention,
   MAX_COMPOSER_CHARS,
   rankSlashCommands,
+  submitNote,
   terminalOnlyCommand,
 } from "../lib/compose.ts";
 import { paneStatus } from "../lib/status.ts";
@@ -48,6 +50,7 @@ import { composerFileName, desktopFileNames } from "../lib/desktop.ts";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { formatElapsed, type WorkNow } from "../lib/workBlocks.ts";
 import { useT } from "../lib/i18n.ts";
+import { modalOpen } from "../lib/focus.ts";
 
 export interface ComposerProps {
   connected: boolean;
@@ -72,8 +75,10 @@ export interface ComposerProps {
   restored?: string | null;
   /** an empty chat's greeting: it stands over the composer's column and takes no row of its own */
   greeting?: ReactNode;
-  /** true: sent, clear the box; a string: keep the text and say why; a promise settles to either */
-  onSend: (text: string) => boolean | string | Promise<boolean | string>;
+  /** true: sent, clear the box; a string: keep the text and say why; a DraftRefusal: the same, and the
+   * note offers to send again with `clearDraft`, which clears that draft from the terminal first; a
+   * promise settles to any of them */
+  onSend: (text: string, clearDraft?: string) => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
   onAbort: () => void;
   onUploadImage: (file: File) => Promise<string>;
 }
@@ -258,7 +263,7 @@ export function Composer({
   // it), as the grid does in the terminal lens: a pane picked from the drawer is typed into
   // and once the user picks the pane App had switched to on its own
   useEffect(() => {
-    if (autoFocus) textareaRef.current?.focus({ preventScroll: true });
+    if (autoFocus && !modalOpen()) textareaRef.current?.focus({ preventScroll: true });
   }, [autoFocus]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
@@ -280,7 +285,7 @@ export function Composer({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNote] = useState<string | DraftRefusal | null>(null);
   // a message sent from a page that closed before the pane answered is back in the box: say so
   useEffect(() => {
     if (unconfirmed) setNote(t("Not confirmed. Check the terminal before sending again."));
@@ -700,7 +705,8 @@ export function Composer({
     }
   }, []);
 
-  const send = useCallback(() => {
+  /** `clearDraft`: the terminal draft a DraftRefusal named, which the user asked to clear and send over */
+  const send = useCallback((clearDraft?: string) => {
     if (composingRef.current) return;
     if (!connected || uploading || sending || text.trim().length === 0) return;
     const sent = text;
@@ -715,20 +721,20 @@ export function Composer({
     caretRef.current = 0;
     setNote(null);
     // the attachments stay until the pane took the message: a refused one comes back with them
-    const failed = (note: string): void => {
+    const failed = (note: string | DraftRefusal): void => {
       composerDrafts.restore(draftKey);
       if (mounted.current) setNote(note);
     };
-    const settle = (result: boolean | string): void => {
+    const settle = (result: boolean | string | DraftRefusal): void => {
       if (result === true) {
         for (const attachment of sentAttachments) URL.revokeObjectURL(attachment.previewUrl);
         if (mounted.current) setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
         return;
       }
-      failed(typeof result === "string" ? result : t("Not sent. It is back in the message box."));
+      failed(result === false ? t("Not sent. It is back in the message box.") : result);
     };
     try {
-      const result = onSend(text);
+      const result = onSend(text, clearDraft);
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return; }
       void result.then(settle).catch(() => failed(t("Not confirmed. Check the terminal before sending again."))).finally(() => composerDrafts.end(draftKey));
     } catch {
@@ -741,8 +747,9 @@ export function Composer({
   const sendQuick = useCallback((reply: string) => {
     if (!connected || sending) return;
     setNote(null);
-    const settle = (result: boolean | string): void => {
-      if (mounted.current && typeof result === "string") setNote(result);
+    // a quick reply is not the box's text, so its note offers no send over a draft
+    const settle = (result: boolean | string | DraftRefusal): void => {
+      if (mounted.current && typeof result !== "boolean") setNote(typeof result === "string" ? result : submitNote("input_draft", result.note));
     };
     if (!composerDrafts.begin(draftKey)) return;
     try {
@@ -1128,7 +1135,15 @@ export function Composer({
           )}
         </div>
       </div>
-      {note && <div className="composer-note" role="alert">{note}</div>}
+      {typeof note === "string" && <div className="composer-note" role="alert">{note}</div>}
+      {note !== null && typeof note === "object" && (
+        <div className="composer-note composer-note-offer" role="alert">
+          <span>{note.note}</span>
+          {/* the draft named above, never what has replaced it since: the server checks */}
+          <button type="button" className="composer-note-action" disabled={!connected || uploading || sending || text.trim().length === 0}
+            onClick={() => send(note.draft)}>{t("Clear it and send")}</button>
+        </div>
+      )}
       {/* said while typing, before the send: after it the browser is already open and the reader is
           already in the state the words describe. Not a block — the text still goes, and pi runs the
           command in the terminal the way its own palette would */}
