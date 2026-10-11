@@ -252,6 +252,8 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     await openSettingsPage(page, "Subscription usage");
     await page.getByRole("button", { name: "Beside Settings", exact: true }).click();
     await page.keyboard.press("Escape");
+    // Settings closed the drawer, and a closed drawer is hidden (#683): open it again to see the strip
+    await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
     await page.locator(".usage-strip").waitFor();
     assert.equal(await page.locator(".usage-panel").count(), 0);
     assert.deepEqual(errors, []);
