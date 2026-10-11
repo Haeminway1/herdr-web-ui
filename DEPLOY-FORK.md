@@ -36,7 +36,8 @@ look stays. Deleted upstream code the fork's UI still needs is restored, not dro
 default; the user lost the folder sidebar and the hover rename/close, and v0.4.2 put them back.)
 
 - Chat: instant send (the bubble shows at once, beside upstream's
-  pending follow-ups); the work-progress line in the composer status row (elapsed time and current
+  pending follow-ups; a send refused over a draft in Claude Code's terminal box comes back to the
+  message box with upstream #760's "clear it and send" offer); the work-progress line in the composer status row (elapsed time and current
   tool); a prompt answer refused only because the card's id moved is retried on the same card;
   OmO's lead line as a `.chat-intent` chip and runtime notices as chrome.
 - Sidebar: the classic sidebar by default (`ClassicSidebar.tsx`, `cl-` classes): New session / Add PC
@@ -66,7 +67,11 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   third, reachable through the key bar settings).
 - Desktop shell (`desktop/`), identity overlay above.
 - Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
-  the top-panel part of `usage-regression.ts`, `alert-sound-regression.ts` waiting for the toast.
+  the top-panel part of `usage-regression.ts` (it reopens the phone drawer: a closed one is hidden
+  since #683), `alert-sound-regression.ts` waiting for the toast.
+- Strings: the fork's own UI strings are in every dictionary, `i18n.tr.ts` included (v0.4.701).
+- Web push: a device showing the app holds its own pushes (`/api/push/presence`), beside upstream
+  #759's hold of every device while any window is in use.
 
 ## Automatic sync on each upstream release
 
