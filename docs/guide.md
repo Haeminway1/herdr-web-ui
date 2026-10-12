@@ -183,6 +183,8 @@ Background tasks have a button by the message box, with a count while some run: 
 
 A pane's plan is the task list a Claude Code agent keeps (`TaskCreate` / `TaskUpdate`) or the checklist Codex keeps (`update_plan`), read back from the session's transcript. While there is one, the header shows how many of its steps are done; the count opens the plan over the chat or the terminal. **Flow** draws each step as a box below the steps it waits on (Claude Code's `blockedBy`; a Codex step waits on the one before it), so steps that can run side by side sit on one row; **Steps** lists them in that order. Settings → Appearance → **Plan flow** off opens the plan as that list alone, and **Plan count in the header** off takes the count out of the header on that device. The running step says what it does now, and each step shows how long it took. The sidebar row carries the same count. Claude Code empties its task list once every task is done, and so does this: the first task after that starts a new plan. A teammate of an agent team that changes a task writes that in its own transcript, which is not read.
 
+Settings → Appearance → **Plan in the message box** (off by default in this fork) moves the plan to the background-task button by the message box instead: it starts with **Plan** and how many steps are done (`2/5`), and opens one list with the plan's steps first and the background tasks below.
+
 ## Features
 
 | | |

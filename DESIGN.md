@@ -919,6 +919,21 @@ The Dynamic Island's own colours, the same in every theme.
 - Steps: the same steps in wave order, a status glyph, the name, what a running step does now and
   the meta line.
 
+### Plan in the message box (`.bg-tasks-plan`, `.bg-step`), fork: Appearance → **Plan in the message box**, off by default
+Upstream #846's layout. On, the header has no plan button and no plan dialog opens:
+- A pane's plan has no control of its own: it shares the composer's background-task chip
+  (`.bg-tasks-toggle`, beside the add button in the input card's last row). With a plan the chip
+  starts with the list-checks glyph, the word **Plan** and `done/total` in tabular figures; running
+  background tasks follow after a hairline as their glyph and number. The chip keeps the working
+  tint while a step or a task is left, and goes quiet once every step is done and nothing runs. A
+  narrow card drops the words and keeps the glyphs and numbers. The chip shows only in the chat
+  lens, and not for an offline PC's cached plan. The sidebar's agent row repeats the count beside
+  the background count, in its quiet mono figures and with no box (`.plan-count`).
+- The chip opens one list above the card: a **Plan** heading with `N of M done`, the steps in wave
+  order (a status glyph, the name, what a running step does now, then a dim state · time · teammate
+  line; a waiting step's name is dim), then a **Background tasks** heading over the tasks list when
+  the pane has tasks to show. The steps are read again every few seconds while the list is open.
+
 ### Background tasks ended (`.chat-task-results`)
 - Where OmO reports background tasks that ended, or a Claude Code subagent ends (its
   `<task-notification>`, drawn once however many records carry it), the transcript shows one `--bg-elevated` card
@@ -1370,6 +1385,8 @@ The Dynamic Island's own colours, the same in every theme.
   a state change, not a dialog, so the snap rule above does not apply to it.
 - `prefers-reduced-motion: reduce` removes pulses, drawer/control transitions, sheet rise and drop,
   smooth chat scrolling and settings toggle motion; a drag still follows the finger. State remains legible without animation.
+  One exception: the sidebar's RUN arc stops turning and takes the stepped opacity `pulse` instead,
+  since a held-still arc is how BG reads; nothing moves.
 - Under reduced motion the voice pill swaps its bars for one level bar updated at 4 Hz and drops
   the ring and the morph; the **Recording** label and the timer stay.
 

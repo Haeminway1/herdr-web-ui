@@ -189,11 +189,15 @@ function AppearancePage() {
       <SettingsRow label={t("Pin agents")} description={t("Show a star beside each agent that keeps it at the top of the Agents list")}>
         <Toggle label={t("Pin agents")} checked={settings.agentPins} onChange={(agentPins) => update({ agentPins })} />
       </SettingsRow>
-      <SettingsRow label={t("Plan count in the header")} description={t("Show how many steps of the open pane's plan are done in the header, where a press opens the plan; off, the header has no plan button")}>
+      {!settings.planInChip && <SettingsRow label={t("Plan count in the header")} description={t("Show how many steps of the open pane's plan are done in the header, where a press opens the plan; off, the header has no plan button")}>
         <Toggle label={t("Plan count in the header")} checked={settings.planButton} onChange={(planButton) => update({ planButton })} />
-      </SettingsRow>
-      <SettingsRow label={t("Plan flow")} description={t("Draw a plan as a flow of boxes, with a switch to its list; off, a plan opens as the list alone")}>
+      </SettingsRow>}
+      {!settings.planInChip && <SettingsRow label={t("Plan flow")} description={t("Draw a plan as a flow of boxes, with a switch to its list; off, a plan opens as the list alone")}>
         <Toggle label={t("Plan flow")} checked={settings.planFlow} onChange={(planFlow) => update({ planFlow })} />
+      </SettingsRow>}
+      {/* fork: upstream #846's plan in the background-task chip, off by default */}
+      <SettingsRow label={t("Plan in the message box")} description={t("Show the plan's progress on the background-task button by the message box, which lists its steps above the tasks, instead of the header's plan button")}>
+        <Toggle label={t("Plan in the message box")} checked={settings.planInChip} onChange={(planInChip) => update({ planInChip })} />
       </SettingsRow>
       <SettingsRow label={t("Quiet opened finishes")} description={t("A finished agent you have opened here loses its dot, as herdr's own view would clear it; remembered per PC on this browser")}>
         <Toggle label={t("Quiet opened finishes")} checked={settings.quietOpenedDone} onChange={(quietOpenedDone) => update({ quietOpenedDone })} />
@@ -256,6 +260,9 @@ function ChatPage() {
       <SettingsGroup title={t("Composer")} section="composer">
         <SettingsRow label={t("Enter sends")} description={t("When off, Mod+Enter sends")}>
           <Toggle label={t("Enter sends")} checked={settings.enterSends} onChange={(enterSends) => update({ enterSends })} />
+        </SettingsRow>
+        <SettingsRow label={t("Send queued messages automatically")} description={t("A message sent while the agent works goes by itself when the turn ends. When off, it waits until you press Send now.")}>
+          <Toggle label={t("Send queued messages automatically")} checked={settings.autoSendQueued} onChange={(autoSendQueued) => update({ autoSendQueued })} />
         </SettingsRow>
         <SettingsRow label={t("Suggestion chip")} description={t("On a touch screen, a chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.")}>
           <Toggle label={t("Suggestion chip")} checked={settings.showSuggestionChip} onChange={(showSuggestionChip) => update({ showSuggestionChip })} />

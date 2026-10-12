@@ -100,9 +100,16 @@ it("keeps the plan's flow and its header count unless they were turned off", () 
   }
 });
 
+it("keeps the fork's header plan unless upstream's plan in the chip was chosen", () => {
+  expect(DEFAULT_SETTINGS.planInChip).toBe(false);
+  expect(sanitizeSettings({}).planInChip).toBe(false);
+  expect(sanitizeSettings({ planInChip: true }).planInChip).toBe(true);
+  expect(sanitizeSettings({ planInChip: "true" }).planInChip).toBe(false);
+});
+
 it("names the appearance settings changed from their defaults, and no other setting", () => {
   expect(changedSettings(DEFAULT_SETTINGS)).toEqual([]);
-  expect(changedSettings({ ...DEFAULT_SETTINGS, planFlow: false, theme: "light", agentCards: true })).toEqual(["theme", "agentCards", "planFlow"]);
+  expect(changedSettings({ ...DEFAULT_SETTINGS, agentPins: true, theme: "light", agentCards: true })).toEqual(["theme", "agentCards", "agentPins"]);
   // a setting the user types, or one outside the list, is never named
   expect(changedSettings({ ...DEFAULT_SETTINGS, terminalFontFamily: "D2Coding", terminalFontSize: 16, quietOpenedDone: true })).toEqual([]);
 });

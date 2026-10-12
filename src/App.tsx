@@ -13,7 +13,7 @@ import { AccessGate } from "./components/AccessGate.tsx";
 import { AgentMark } from "./components/AgentMark.tsx";
 import { NewSessionDialog, type NewTabTarget } from "./components/NewSessionDialog.tsx";
 import { MovePaneMenu } from "./components/MovePaneMenu.tsx";
-import { recentDirectories } from "./lib/recent-directories.ts";
+import { passingFolder, recentDirectories } from "./lib/recent-directories.ts";
 import { TabStrip } from "./components/TabStrip.tsx";
 import { ClassicTabStrip } from "./components/ClassicTabStrip.tsx";
 import { SettingsDialog } from "./components/SettingsDialog.tsx";
@@ -169,8 +169,13 @@ export function App() {
   useEffect(() => {
     for (const machine of machines) {
       if (machine.state !== "connected" || !machine.snapshot) continue;
+      // a worktree's checkout or a temporary folder is no project to start a workspace in
+      const linked = machine.snapshot.workspaces.filter((workspace) => workspace.worktree?.is_linked_worktree);
+      const inLinked = new Set(linked.map((workspace) => workspace.workspace_id));
+      const worktrees = linked.map((workspace) => workspace.worktree!.checkout_path);
       recentDirectories.remember(machine.id, machine.snapshot.panes
-        .filter((pane) => !pane.restore_error).map((pane) => pane.cwd).reverse());
+        .filter((pane) => !pane.restore_error && !inLinked.has(pane.workspace_id) && !(pane.cwd && passingFolder(pane.cwd, worktrees)))
+        .map((pane) => pane.cwd).reverse());
     }
   }, [machines]);
   const [selectedMachineId, setSelectedMachineId] = useState(() => {
@@ -268,6 +273,8 @@ export function App() {
   // the header's More menu: its button, and whether it opened on a phone-width screen
   const [more, setMore] = useState<{ anchor: HTMLElement; phone: boolean } | null>(null);
   const closeMore = useCallback(() => setMore(null), []);
+  // the pane canvas's actions, for the phone's tab menu (TabStrip)
+  const paneActionsRef = useRef<((target: HerdrPane) => RowMenuItem[]) | null>(null);
   const moreOpen = more !== null;
   // a sheet stays up through a resize: its palette item follows the header's palette button,
   // which the same breakpoint hides
@@ -1229,8 +1236,9 @@ export function App() {
             </button>
           </div>
         )}
-        {/* the selected pane's plan, in the chat and the terminal alike; an offline PC's cached plan cannot be read */}
-        {settings.planButton && selectedPane && selectedMachine?.state === "connected" && (selectedPane as HerdrPane).plan && <PlanButton plan={(selectedPane as HerdrPane).plan!} onOpen={() => setPlanOpen(true)} />}
+        {/* the selected pane's plan, in the chat and the terminal alike; an offline PC's cached plan cannot be read.
+            fork: the header's button stays unless upstream #846's chip was chosen (planInChip) */}
+        {settings.planButton && !settings.planInChip && selectedPane && selectedMachine?.state === "connected" && (selectedPane as HerdrPane).plan && <PlanButton plan={(selectedPane as HerdrPane).plan!} onOpen={() => setPlanOpen(true)} />}
         <div className="header-meta">
           {/* speaks only while the bridge is not live; live, it stays in the document for a screen
               reader (and the browser scripts that wait on it), drawn by nothing (styles.css) */}
@@ -1314,7 +1322,14 @@ export function App() {
         {layoutNotice && <p className="pane-notice" role="alert">{layoutNotice}</p>}
         {snapshot && selectedPane && selectedWorkspace && (
           settings.tuiPanes
-            ? <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()} />
+            ? <TabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()}
+              paneActions={(paneId) => {
+                const target = snapshot.panes.find((item) => item.pane_id === paneId);
+                if (!target || !paneActionsRef.current) return [];
+                // the strip renders before the canvas, so its items come from the canvas's previous render:
+                // an action runs against the canvas's latest one, where a snapshot change has landed
+                return paneActionsRef.current(target).map((item) => ({ ...item, run: () => (paneActionsRef.current?.(target).find((fresh) => fresh.id === item.id) ?? item).run() }));
+              }} />
             // fork: the strip and pane picker from before #747 while the herdr-style pane area is off
             : <ClassicTabStrip snapshot={snapshot} workspace={selectedWorkspace} selectedPane={selectedPane} onSelectPane={selectPane} onNewTab={() => actions.openNewTab()} />
         )}
@@ -1323,7 +1338,7 @@ export function App() {
         <main className="terminal-host">
           {/* the panel sits inside main, so the page keeps its main landmark; it draws no box */}
           <div id={PANE_TABPANEL_ID} className="terminal-tabpanel" role={tabPanelLabel === null ? undefined : "tabpanel"} aria-label={tabPanelLabel ?? undefined}>
-          <PaneCanvas key={selectedMachineId} snapshot={snapshot} pane={selectedPane} selectedPaneId={selectedPaneId} onSelect={selectPane} onChanged={actions.refresh} single={!settings.tuiPanes}
+          <PaneCanvas key={selectedMachineId} snapshot={snapshot} pane={selectedPane} selectedPaneId={selectedPaneId} onSelect={selectPane} onChanged={actions.refresh} actionsRef={paneActionsRef} single={!settings.tuiPanes}
             isTerminal={(item) => (item.pane_id === selectedPaneId ? view : storedView(lenses, item.pane_id, selectedMachineId, item.agent != null, terminalAttach)) === "terminal"}
             renderPane={(item, active, split) => <OpenFileContext.Provider value={item ? (path) => openFile({ path, paneId: item.pane_id, machineId: selectedMachineId }) : null}>
               <PaneTerminal
@@ -1335,6 +1350,8 @@ export function App() {
                 agent={item?.agent ?? null}
                 agentStatus={item?.agent_status}
                 backgroundTasks={item?.background_tasks ?? 0}
+                // an offline PC's cached plan cannot be read
+                plan={settings.planInChip && selectedMachine?.state === "connected" ? (item as HerdrPane | undefined)?.plan ?? null : null}
                 backgroundWait={item?.background_wait === true}
                 cwd={item?.cwd ?? null}
                 machineName={selectedMachine?.name ?? selectedMachineId}
@@ -1364,6 +1381,7 @@ export function App() {
       <MachineContext.Provider value={newSessionMachineId}><NewSessionDialog
         key={newSessionMachineId}
         machineName={machines.find((m) => m.id === newSessionMachineId)?.name ?? newSessionMachineId}
+        worktrees={machines.find((m) => m.id === newSessionMachineId)?.snapshot?.workspaces.flatMap((workspace) => workspace.worktree?.is_linked_worktree ? [workspace.worktree.checkout_path] : []) ?? []}
         open={newSessionOpen}
         tab={newTab}
         defaultCwd={newSessionMachineId === selectedMachineId ? selectedPane?.cwd ?? null : null}
