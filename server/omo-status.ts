@@ -359,6 +359,7 @@ export class OmoStatus {
       // nothing could be read of it (a read that failed): what the pane read before stands until one succeeds
       if (tracked.turn.status === null && tracked.offset < size) { this.noteAuthority(tracked); continue; }
       const stale = tracked.turn.status === "working" && tracked.turn.at !== null && tracked.startedAt !== null && tracked.turn.at < tracked.startedAt - STALE_TURN_MS;
+      if (this.staleIsFailure && stale && tracked.turn.asks.length > 0) tracked.turn = { ...tracked.turn, asks: [] };
       const status: OmoPaneStatus = tracked.turn.asks.length > 0 ? "blocked" : tracked.turn.status === "working" && !stale ? "working" : "idle";
       const sessionId = omoSessionId(tracked.path);
       if (!counts.has(tracked.cwd)) counts.set(tracked.cwd, tracked.cwd ? this.background(tracked.cwd) : new Map());

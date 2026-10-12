@@ -342,6 +342,15 @@ describe("a GJC pane's status in place of herdr's provider-child status", () => 
     append(message("assistant", "stop"));
     gjc.poll();
     expect(told.at(-1)).toEqual(["gjc", "idle", 0, true]);
+    const resumed = setup(lines(ask));
+    await resumed.gjc.refresh(raw.panes);
+    resumed.state.discovered.set("gjc", { path: FILE, startedAt: Date.parse("2026-10-02T00:05:00Z") });
+    resumed.state.clock += 10_000;
+    await resumed.gjc.refresh(raw.panes);
+    expect(resumed.told.at(-1)).toEqual(["gjc", "idle", 0, true, "failed"]);
+    resumed.append(message("user", undefined, "2026-10-02T00:06:00Z"));
+    resumed.gjc.poll();
+    expect(statuses(resumed.gjc.apply(raw))["gjc"]).toBe("gjc/working");
   });
 
   it("tells the pane's own rest once its transcript first answers, so herdr's word does not stand", async () => {
