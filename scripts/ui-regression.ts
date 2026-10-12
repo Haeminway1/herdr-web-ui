@@ -1841,6 +1841,7 @@ try {
   const unroutePhonePlanned = await planned(phone);
   await phone.goto(`${origin}/?pane=${encodeURIComponent(paneA)}`);
   await phone.locator(".conn-live").waitFor();
+  await phone.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
   const phonePlan = phone.getByRole("button", { name: /^Plan: 1 of 4 done/ });
   await phonePlan.waitFor();
   const card = (await phone.locator(".composer-surface").first().boundingBox())!;
