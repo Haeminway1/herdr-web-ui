@@ -153,7 +153,7 @@ describe("a GJC pane's status in place of herdr's provider-child status", () => 
   const statuses = (snapshot: SessionSnapshot) => Object.fromEntries(snapshot.panes.map((p) => [p.pane_id, `${p.agent}/${p.agent_status}`]));
 
   it("reads READY where herdr's provider child still reads working, and no finish from a first idle baseline", async () => {
-    const { gjc, told, found } = setup();
+    const { gjc, told, found, state } = setup();
     const completions = new CompletionTracker(null);
     const raw = herdr();
     await gjc.refresh(raw.panes);
@@ -167,6 +167,13 @@ describe("a GJC pane's status in place of herdr's provider-child status", () => 
     expect(statuses(completions.present(gjc.apply(raw)))["gjc"]).toBe("gjc/idle");
     // the session that cannot be told keeps herdr's word under the same identity
     expect(statuses(completions.present(gjc.apply(raw)))["lost"]).toBe("gjc/working");
+    state.discovered.set("gjc", { path: null, startedAt: null });
+    state.clock += 10_000;
+    await gjc.refresh(raw.panes);
+    state.discovered.set("gjc", { path: FILE, startedAt: null });
+    state.clock += 10_000;
+    await gjc.refresh(raw.panes);
+    expect(told).toEqual([["gjc", "idle", 0, true]]);
   });
 
   it("reads RUN while a turn runs and DONE when it ends, in events and in every snapshot", async () => {
