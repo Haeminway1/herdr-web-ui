@@ -224,7 +224,7 @@ try {
   } finally {
     statusSocket?.close();
     try { await browser?.close(); } finally {
-      try { await server?.stop(true); } finally {
+      try { await server?.stop(); } finally {
         try {
           const cleanup = await Promise.allSettled(workspaces.map((id) => workspaceClose(id)));
           const failures = cleanup.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
