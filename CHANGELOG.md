@@ -20,6 +20,14 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   **Plan flow** and **Plan count in the header**. Upstream's plan inside the background-task button by
   the message box is **Settings → Appearance → Plan in the message box**, off by default.
 
+### Fixed
+- Fork: custom OmO launchers bind chat to the live native holder in their own store,
+  including the process's actual cwd; provider-child labels cannot take that ownership.
+  ([#923](https://github.com/devswha/herdr-web-ui/pull/923))
+- Fork: Gajae Code status follows its native parent turn, including questions, background
+  results, errors and restart interruptions, instead of a provider child's stale RUN.
+  ([#928](https://github.com/devswha/herdr-web-ui/pull/928))
+
 ## [0.4.8] - 2026-10-12
 
 ### Added

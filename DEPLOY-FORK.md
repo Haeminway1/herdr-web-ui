@@ -77,6 +77,25 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
 - Web push: a device showing the app holds its own pushes (`/api/push/presence`), beside upstream
   #759's hold of every device while any window is in use.
 
+## Scoped backport and everyday deployment (2026-10-13, v0.4.802)
+
+- Base: `origin/deploy/haemin` at `5bbd0ce` (v0.4.801). Backport only the fixes from
+  [OMO #923](https://github.com/devswha/herdr-web-ui/pull/923)
+  (`5a9fe391..60967b2`) and [GJC #928](https://github.com/devswha/herdr-web-ui/pull/928)
+  (`5a9fe391..cf6e865`), without merging the newer upstream UI or PR branches.
+- OMO: custom launchers require live native holder ownership, the process's actual cwd
+  (including the OS cwd fallback), and exact binding in their own store. Child GJC,
+  Codex or Devin labels cannot replace native OMO ownership. GJC: derive parent turns,
+  questions, errors and resumed interruptions from its exact native transcript.
+- Keep every fork feature above, the desktop shell and all existing defaults. Both
+  new browser scenarios run alongside the existing fork scenarios in the browser lane.
+- User preference: after future validated improvements, deploy to the everyday shared
+  server endpoint `:10445` used by the Mac mini and laptop by default, and verify both
+  devices. An explicit per-task restriction overrides this preference. Preserve native
+  sessions, authentication and mappings; never force-reload active clients or restart
+  native work sessions. Upstream PR merging is a separate action. Release and device
+  verification remain the parent session's responsibility for this backport.
+
 ## Automatic sync on each upstream release
 
 `herdr-web-ui-fork-sync.timer` runs `scripts/fork-sync.sh` every five minutes: one `git ls-remote`

@@ -140,6 +140,38 @@ bun scripts/narrow-pane-demo-regression.ts    # a split pane under 80 columns: t
 
 `FILE_VIEWER_CASE=landscape-notch` selects a viewer case; `FILE_VIEWER_CSS=/path/to/before.css` compares another stylesheet. These checks use Chromium mobile emulation and synthetic safe-area/keyboard geometry; they cannot verify actual iOS Safari keyboard dismissal or notch insets. The existing `bun scripts/file-viewer-regression.ts` separately checks history with an owned herdr pane. The original `scripts/mobile-viewport-regression.ts` exports `checkMobileViewport` for the real-app `bun run test:ui` suite; it also checks the command palette and xterm focus transitions. The demo runners build the real client into a temporary directory, inject the committed fictional-session transport and serve it only on loopback; they do not use a live herdr session or download website media. Run on its own, each builds the client itself (`scripts/demo-build.ts`); the browser lane builds it once and names the directory in `HERDR_DEMO_BUILD`, and each runner copies that instead. They exercise real-app viewport and alert geometry, but not live herdr connectivity.
 
+## OmO runtime recognition
+
+OmO's own program or a JS runtime loading its entrypoint identifies legacy launchers.
+A launcher with arbitrary argv requires read-only native ownership proof: an OmO-specific
+store, a live OS start time for its exact pid, and a session holder matching that start and
+the process's own cwd. The process-reported cwd takes priority, followed by the OS cwd
+(`/proc/<pid>/cwd`), then the pane's foreground/original cwd. Environment markers, model
+names and filename exceptions do not establish identity. Stores moved only by Senpi or pi
+do not establish custom OmO identity.
+
+Holder claims, descriptors and reported ids bind only inside that pane's own canonical
+stores. Conflicting holders fail closed; missing or unreadable files keep their store
+scope. Custom launchers never fall back to cwd/time inference or stale launch hints, so
+`/new` stays pending until its first transcript is written and `/resume` follows its holder.
+Native OmO ownership takes priority over provider-child GJC, Codex and Devin labels.
+Custom launcher proof currently needs readable Linux `/proc` environment/cwd evidence;
+macOS and Windows require an argv identity recognized by `isOmoProcess`.
+
+## GJC parent-turn status
+
+GJC status follows the native transcript bound to that pane, rather than a provider child's
+stale status or session ID. A user message, tool result or tool call keeps the parent turn
+working; an explicit final answer ends it. Native background-result, monitor and scheduled
+notifications start another turn, and an open `ask` waits for input. Errors, aborted turns
+and interrupted old turns read READY rather than successful DONE. Historical job starts
+do not prove a background job still runs. Missing, unreadable or incomplete native evidence
+leaves herdr's status in charge.
+
+The isolated `scripts/omo-chat-browser-qa.ts` and `scripts/gjc-status-browser-regression.ts`
+fixtures exercise the real server and browser using synthetic records and owned panes,
+without invoking providers or touching existing sessions.
+
 ## Conversation refresh
 
 The chat reads `/api/pane/conversation` after a `conversation-changed` WebSocket frame.
