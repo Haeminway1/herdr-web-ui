@@ -158,6 +158,17 @@ export interface OmoStatusDeps {
   onChange: (paneId: string, status: AgentStatus, background: number, turn: boolean, rest?: OmoRest) => void;
   /** a pane was found to run OmO: what herdr called it until now is the same agent */
   onFound?: (paneId: string) => void;
+  /** the identity the panes' status is reported under (`omo`), and the names herdr gave the agent before */
+  agent?: string;
+  aliases?: readonly string[];
+  /** a session record applied to the turn so far (`omoTurnAfter`): another agent's records have their own */
+  turnAfter?: (turn: OmoTurn, line: OmoLine) => OmoTurn;
+  /**
+   * Whether the pane's own status may replace herdr's (default: always, once the session file
+   * is known). GJC withholds it until a turn record was read: an empty or unreadable transcript
+   * is nobody's rest, and an idle that cannot be shown is not the pane's.
+   */
+  ready?: (tracked: { status: OmoPaneStatus; turn: OmoTurn }) => boolean;
   file?: OmoFile;
   background?: (cwd: string) => Map<string, number>;
   /** how often the session files are looked at, and the panes found anew */
@@ -196,12 +207,20 @@ export class OmoStatus {
   private readonly background: NonNullable<OmoStatusDeps["background"]>;
   private readonly now: () => number;
   private readonly refreshMs: number;
+  private readonly agent: string;
+  private readonly aliases: readonly string[];
+  private readonly turnAfter: NonNullable<OmoStatusDeps["turnAfter"]>;
+  private readonly ready: NonNullable<OmoStatusDeps["ready"]>;
 
   constructor(private readonly deps: OmoStatusDeps) {
     this.file = deps.file ?? FILES;
     this.background = deps.background ?? omoBackgroundTasks;
     this.now = deps.now ?? Date.now;
     this.refreshMs = deps.refreshMs ?? 5000;
+    this.agent = deps.agent ?? "omo";
+    this.aliases = deps.aliases ?? OMO_ALIASES;
+    this.turnAfter = deps.turnAfter ?? omoTurnAfter;
+    this.ready = deps.ready ?? (() => true);
   }
 
   /** Watches with no browser connected too: web push depends on it. */
@@ -221,9 +240,15 @@ export class OmoStatus {
     this.timer = null;
   }
 
+  /** the pane's own status may replace herdr's only while it is allowed to (omo: once the session is known) */
+  private authoritative(tracked: Tracked): boolean {
+    return tracked.path !== null && this.ready(tracked);
+  }
+
   /** herdr's status for this pane is replaced: its events say nothing true. */
   tracks(paneId: string): boolean {
-    return this.panes.get(paneId)?.path != null;
+    const tracked = this.panes.get(paneId);
+    return tracked !== undefined && this.authoritative(tracked);
   }
 
   /** The pane runs OmO, its session known or not: its identity is `omo` whatever herdr calls it. */
@@ -298,7 +323,7 @@ export class OmoStatus {
    * OmO's until now: what OmO did there is then no part of the other agent's status.
    */
   named(paneId: string, agent: string | null): boolean {
-    if (agent === null || agent === "omo" || OMO_ALIASES.includes(agent)) return false;
+    if (agent === null || agent === this.agent || this.aliases.includes(agent)) return false;
     const held = this.panes.delete(paneId);
     const remembered = this.last.delete(paneId);
     if (!held && !remembered) return false;
@@ -320,7 +345,7 @@ export class OmoStatus {
       const { size } = stat;
       if (tracked.offset === -1 || size < tracked.offset || stat.id !== tracked.id) this.readFrom(tracked, tracked.path, size);
       // also what a read that failed left unread
-      else if (size !== tracked.size || tracked.offset < size) tracked.offset = this.file.lines(tracked.path, tracked.offset, size, (line) => { tracked.turn = omoTurnAfter(tracked.turn, line); });
+      else if (size !== tracked.size || tracked.offset < size) tracked.offset = this.file.lines(tracked.path, tracked.offset, size, (line) => { tracked.turn = this.turnAfter(tracked.turn, line); });
       tracked.size = size;
       tracked.id = stat.id;
       // nothing could be read of it (a read that failed): what the pane read before stands until one succeeds
@@ -346,7 +371,7 @@ export class OmoStatus {
       tracked.failedAt = failed ? tracked.turn.at : null;
       tracked.history = false;
       tracked.background = background;
-      if (changed) this.deps.onChange(paneId, status, background, turn, rest);
+      if (changed && this.ready(tracked)) this.deps.onChange(paneId, status, background, turn, rest);
     }
   }
 
@@ -355,7 +380,7 @@ export class OmoStatus {
     tracked.turn = noTurn();
     tracked.history = true;
     tracked.offset = this.file.lines(path, 0, size, (line) => {
-      tracked.turn = omoTurnAfter(tracked.turn, line);
+      tracked.turn = this.turnAfter(tracked.turn, line);
     });
   }
 
@@ -368,7 +393,7 @@ export class OmoStatus {
     const own = <P extends { pane_id: string; agent_status: AgentStatus }>(entry: P): P => {
       const tracked = this.panes.get(entry.pane_id);
       if (!tracked) return entry;
-      return { ...entry, agent: "omo", ...(tracked.path !== null ? { agent_status: tracked.status } : {}) };
+      return { ...entry, agent: this.agent, ...(this.authoritative(tracked) ? { agent_status: tracked.status } : {}) };
     };
     return { ...snapshot, panes: snapshot.panes.map(own), ...(snapshot.agents ? { agents: snapshot.agents.map(own) } : {}) };
   }

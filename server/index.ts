@@ -26,6 +26,7 @@ import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { omoPanes } from "./omo.ts";
+import { createGjcStatus, gjcPanes } from "./gjc-status.ts";
 import { OMO_ALIASES, OmoStatus, processAlive } from "./omo-status.ts";
 import { omoRuns, omoTasks } from "./omo-tasks.ts";
 import { ClaudeSubagentStatus, claudeSubagents, within } from "./claude-subagents.ts";
@@ -1019,6 +1020,13 @@ export function createServer(
     // herdr called it `claude` or `pi` until now: what it finished under that name is its own
     onFound: (paneId) => completions.adopt(paneId, "omo", OMO_ALIASES),
   });
+  /** GJC panes get their status from gjc's own transcript: herdr's `working` can be a provider child's (server/gjc-status.ts) */
+  const gjc = createGjcStatus({
+    discover: (panes) => gjcPanes(panes),
+    snapshot: sessionSnapshot,
+    onChange: (paneId, derived, _background, turn, rest) => gjcChanged(paneId, derived, turn, rest),
+    onFound: (paneId) => completions.adopt(paneId, "gjc", []),
+  });
   /** Claude panes whose turn ended while work it started runs in the background (server/background-wait.ts) */
   const waits = new BackgroundWait(options.statusNow ?? Date.now, options.backgroundWait);
   /** the pane whose status event is reading its background work now: that event sends the one frame and alert of it */
@@ -1041,11 +1049,11 @@ export function createServer(
     codexPath: async (pane) => codexOpenRollout(pane.pane_id, pane.cwd, await paneCodexHome(pane.pane_id, options.codexHome)),
     onChange: (paneId, summary) => planChanged(paneId, summary),
   });
-  /** herdr's snapshot with OmO's own status in it: what the completion tracker and web push are given */
+  /** herdr's snapshot with OmO's and GJC's own status in it: what the completion tracker and web push are given */
   const rawSnapshot = async (): Promise<SessionSnapshot> => {
     const snapshot = await sessionSnapshot();
-    await omo.refresh(snapshot.panes);
-    const named = omo.apply(snapshot);
+    await Promise.all([omo.refresh(snapshot.panes), gjc.refresh(snapshot.panes)]);
+    const named = gjc.apply(omo.apply(snapshot));
     // not waited for: finding a transcript costs process calls, and a snapshot must not wait on them.
     // The plans come after: a Claude pane's transcript is the one the subagent tracker found
     void claudeAgents.refresh(named.panes).catch(() => undefined).then(() => plans.refresh(named.panes)).catch(() => undefined);
@@ -1509,6 +1517,19 @@ export function createServer(
   }
 
   /**
+   * A GJC pane's own turn, which herdr's provider-child status never shows: back at work, its
+   * form has had its answer. gjc keeps no background records to count, so a change is always a
+   * turn, and an idle read after work is the finish — one ended in an error is not (#687).
+   */
+  function gjcChanged(paneId: string, derived: AgentStatus, turn: boolean, rest: OmoRest | undefined): void {
+    if (turn && derived === "working") promptWaitEnded(paneId);
+    const status = turn ? completions.observe(paneId, derived, "gjc", rest) : completions.current(paneId) ?? completions.observe(paneId, derived, "gjc");
+    if (turn) { pending.status(paneId, status); drainPending(paneId); }
+    broadcastAll(paneStatus(paneId, status));
+    if (turn) push.onStatus(paneId, status).catch(logPushError);
+  }
+
+  /**
    * A Claude pane's subagents or background commands started or ended: no turn, so the status
    * stands. Nothing is alerted unless the pane began or stopped waiting on its turn's work at rest:
    * the alerts took it for working meanwhile, so a wait that ends with no turn after it is that
@@ -1546,16 +1567,20 @@ export function createServer(
   const collector = startStatusCollector({
     onStatus: (paneId, raw, agent, replay) => {
       // read back from a snapshot around a gap between subscriptions. An OmO pane's status there
-      // is OmO's own or herdr's by turns (server/omo-status.ts), and a difference is no change
-      if (replay && (omo.runs(paneId) || !completions.replayed(paneId, raw, replay))) return;
-      // another agent took an OmO pane: what OmO worked on there is not that agent's to finish
-      if (omo.named(paneId, agent)) completions.forget(paneId);
+      // is OmO's own or herdr's by turns (server/omo-status.ts), and a difference is no change;
+      // a GJC pane's may be a provider child's while gjc's own transcript is tracked
+      if (replay && (omo.runs(paneId) || gjc.tracks(paneId) || !completions.replayed(paneId, raw, replay))) return;
+      // another agent took an OmO or a GJC pane: what it worked on there is not that agent's to finish
+      const leftOmo = omo.named(paneId, agent);
+      const leftGjc = gjc.named(paneId, agent);
+      if (leftOmo || leftGjc) completions.forget(paneId);
       // the frame below names no agent: one herdr names anew is read into the roster now. An OmO
       // pane is `omo` in every snapshot, whatever herdr calls it in an event
-      const named = [{ pane_id: paneId, agent: omo.runs(paneId) ? "omo" : agent }];
+      const named = [{ pane_id: paneId, agent: omo.runs(paneId) ? "omo" : gjc.runs(paneId) ? "gjc" : agent }];
       if (machines) machines.localAgents(named); else bridgeAgents!.status(named);
-      // herdr says `claude/idle` for an OmO pane whatever it does: its own status stands, and no Claude turn waits there
-      if (omo.tracks(paneId)) {
+      // herdr says `claude/idle` for an OmO pane whatever it does, and a provider child's work for
+      // a GJC one while its transcript is tracked: their own status stands, and no Claude turn waits there
+      if (omo.tracks(paneId) || gjc.tracks(paneId)) {
         waits.forget(paneId);
         return;
       }
@@ -1566,7 +1591,7 @@ export function createServer(
       if (raw === "working") promptWaitEnded(paneId);
       // an agent herdr lost on the way still works and finishes as such (server/completion.ts);
       // an OmO pane whose session is not known keeps herdr's status, under its own name
-      const status = completions.observe(paneId, raw, omo.runs(paneId) ? "omo" : agent);
+      const status = completions.observe(paneId, raw, omo.runs(paneId) ? "omo" : gjc.runs(paneId) ? "gjc" : agent);
       pending.status(paneId, status); drainPending(paneId);
       // a Claude turn that ended holds on its background work: what it started is read now, while
       // the pane is still taken for the status before (work that ended before the turn did holds
@@ -1627,6 +1652,7 @@ export function createServer(
     onStructureChange: () => broadcastAll({ type: "session-changed" }),
   }, { snapshot: rawSnapshot });
   omo.start();
+  gjc.start();
   claudeAgents.start();
   const waitTimer = setInterval(waitsRanOut, 1000);
   waitTimer.unref?.();
@@ -3282,6 +3308,7 @@ export function createServer(
       clearInterval(outputTimer);
       collector.stop();
       omo.stop();
+      gjc.stop();
       claudeAgents.stop();
       clearInterval(waitTimer);
       plans.stop();
