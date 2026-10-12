@@ -22,7 +22,7 @@
  * after the record was written) is another process's unfinished work: an interruption, told as
  * a failed rest, never a finish.
  */
-import type { HerdrPane } from "../shared/protocol.ts";
+import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc } from "./herdr/client.ts";
 import { gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, type GjcProcess } from "./gjc-runtime.ts";
 import type { OmoAsks } from "./omo-ask.ts";
@@ -143,9 +143,17 @@ export async function gjcPanes(panes: HerdrPane[], deps: GjcDiscovery = {}): Pro
  * gone told as the failed rest it is, and the readiness gate that releases a transcript
  * nothing — or not everything — was read from back to herdr's status.
  */
-export function createGjcStatus(deps: Omit<OmoStatusDeps, "agent" | "aliases" | "turnAfter" | "ready" | "background" | "staleIsFailure">): OmoStatus {
+export function createGjcStatus(deps: Omit<OmoStatusDeps, "agent" | "aliases" | "turnAfter" | "ready" | "background" | "staleIsFailure">, nativeOmo?: OmoStatus): OmoStatus {
   return new OmoStatus({
     ...deps,
+    discover: async (panes) => {
+      const found = await deps.discover(panes.filter((pane) => !nativeOmo?.runs(pane.pane_id)));
+      // Native discovery may have finished while gjc's process lookup was in flight.
+      for (const paneId of found.keys()) if (nativeOmo?.runs(paneId)) found.delete(paneId);
+      return found;
+    },
+    onFound: (paneId) => { if (!nativeOmo?.runs(paneId)) deps.onFound?.(paneId); },
+    onChange: (...change) => { if (!nativeOmo?.runs(change[0])) deps.onChange(...change); },
     agent: "gjc",
     aliases: [],
     turnAfter: gjcTurnAfter,
@@ -153,4 +161,19 @@ export function createGjcStatus(deps: Omit<OmoStatusDeps, "agent" | "aliases" | 
     background: () => new Map(),
     staleIsFailure: true,
   });
+}
+
+/** Shared by GJC's periodic discovery and the combined snapshot: native OmO is found first. */
+export async function readOmoSnapshot(snapshot: OmoStatusDeps["snapshot"], omo: OmoStatus): Promise<SessionSnapshot> {
+  const raw = await snapshot();
+  await omo.refresh(raw.panes);
+  return omo.apply(raw);
+}
+
+/** Provider labels cannot revoke native OmO; only discovery can. Discard any stale GJC hold. */
+export function reconcileProviderStatus(omo: OmoStatus, gjc: OmoStatus, pane: Pick<HerdrPane, "pane_id" | "agent">): boolean {
+  const native = omo.runs(pane.pane_id);
+  const leftOmo = !native && omo.named(pane.pane_id, pane.agent ?? null);
+  const leftGjc = gjc.named(pane.pane_id, native ? "omo" : pane.agent ?? null);
+  return !native && (leftGjc || (leftOmo && !gjc.runs(pane.pane_id)));
 }

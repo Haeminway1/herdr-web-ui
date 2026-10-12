@@ -5,8 +5,8 @@ import { join } from "node:path";
 
 import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker, type OmoRest } from "./completion.ts";
-import { createGjcStatus, gjcPanes, gjcTurnAfter } from "./gjc-status.ts";
-import { noTurn, OmoStatus, type OmoLine, type OmoPane, type OmoTurn } from "./omo-status.ts";
+import { createGjcStatus, gjcPanes, gjcTurnAfter, readOmoSnapshot, reconcileProviderStatus } from "./gjc-status.ts";
+import { noTurn, OMO_ALIASES, OmoStatus, type OmoLine, type OmoPane, type OmoTurn } from "./omo-status.ts";
 
 // records as gjc's native transcript writes them: a message envelope with the pi family's roles
 const message = (role: string, stopReason?: string, at = "2026-10-02T00:00:10.000Z", text = "") => JSON.stringify({ type: "message", id: "x", parentId: null, timestamp: at, message: { role, content: [{ type: "text", text }], ...(stopReason ? { stopReason } : {}) } });
@@ -461,6 +461,185 @@ describe("a GJC pane's status in place of herdr's provider-child status", () => 
     expect(omo.named("gjc", "claude")).toBe(false);
     expect(omo.named("gjc", "codex")).toBe(true);
     expect(told).toEqual([]);
+  });
+});
+
+describe("native OmO ownership alongside GJC", () => {
+  function setup(native = true) {
+    const cwd = mkdtempSync(join(root, "ownership-"));
+    const omoPath = join(cwd, "2026-10-02_native-omo-session.jsonl");
+    const gjcPath = join(cwd, "gjc.jsonl");
+    writeFileSync(omoPath, lines(message("user")));
+    writeFileSync(gjcPath, lines(message("user"), message("assistant", "stop")));
+    const state = { native, known: true, clock: 0, duringOmo: async () => {}, duringGjc: async () => {} };
+    const pane = (paneId: string): HerdrPane => ({ pane_id: paneId, agent: "gjc", agent_status: "working", cwd, focused: false, revision: 0, tab_id: "t", terminal_id: paneId, workspace_id: "w" });
+    const raw: SessionSnapshot = { panes: [pane("wrapped"), pane("standalone")], agents: [pane("wrapped"), pane("standalone")], layouts: [], tabs: [], workspaces: [], protocol: 22, version: "test" };
+    const completions = new CompletionTracker(null);
+    const adopted: string[] = [];
+    const turns: [string, AgentStatus][] = [];
+    const candidates: string[][] = [];
+    const omo = new OmoStatus({
+      discover: async () => { await state.duringOmo(); return state.native ? new Map([["wrapped", { path: state.known ? omoPath : null, startedAt: null }]]) : new Map(); },
+      snapshot: async () => raw,
+      onFound: (id) => completions.adopt(id, "omo", OMO_ALIASES),
+      onChange: (id, status, _background, turn, rest) => { if (turn) completions.observe(id, status, "omo", rest); },
+      background: () => new Map([["native-omo-session", 3]]),
+      now: () => state.clock,
+    });
+    const snapshot = () => readOmoSnapshot(async () => raw, omo);
+    const gjc = createGjcStatus({
+      snapshot,
+      discover: async (panes) => {
+        candidates.push(panes.map((pane) => pane.pane_id));
+        const found = await gjcPanes(panes, { processInfo: async () => null, transcript: async () => gjcPath, underShell: async () => null });
+        await state.duringGjc();
+        return found;
+      },
+      onFound: (id) => { adopted.push(id); completions.adopt(id, "gjc", []); },
+      onChange: (id, status, _background, turn, rest) => { turns.push([id, status]); if (turn) completions.observe(id, status, "gjc", rest); },
+      now: () => state.clock,
+    }, omo);
+    const served = () => completions.readSnapshot(async () => {
+      const named = await snapshot();
+      await gjc.refresh(named.panes);
+      return gjc.apply(omo.apply(named));
+    });
+    return { omo, gjc, state, raw, snapshot, served, adopted, turns, candidates, completions, omoPath, gjcPath };
+  }
+
+  it("preserves native status and background work when the raw pane is gjc", async () => {
+    const f = setup();
+    const shown = await f.served();
+    expect(shown.panes.find((pane) => pane.pane_id === "wrapped")).toMatchObject({ agent: "omo", agent_status: "working" });
+    expect(shown.agents.find((pane) => pane.pane_id === "wrapped")).toMatchObject({ agent: "omo", agent_status: "working" });
+    expect(f.omo.backgroundOf("wrapped")).toBe(3);
+    expect(f.gjc.runs("wrapped")).toBe(false);
+    expect(f.adopted).toEqual(["standalone"]);
+    expect(f.turns).toEqual([]);
+    expect(shown.panes.find((pane) => pane.pane_id === "standalone")).toMatchObject({ agent: "gjc", agent_status: "idle" });
+    expect(f.gjc.tracks("standalone")).toBe(true);
+  });
+
+  it("uses native ownership when periodic discovery invokes the shared snapshot dependency", async () => {
+    const f = setup();
+    let release = () => {};
+    let entered = () => {};
+    const discovered = new Promise<void>((resolve) => { release = resolve; });
+    const discovering = new Promise<void>((resolve) => { entered = resolve; });
+    f.state.duringOmo = async () => { entered(); await discovered; };
+    const periodic = f.snapshot().then((snapshot) => f.gjc.refresh(snapshot.panes));
+    await discovering;
+    await Promise.resolve();
+    expect(f.candidates).toEqual([]);
+    release();
+    await periodic;
+    expect(f.candidates).toEqual([["standalone"]]);
+    expect(f.adopted).toEqual(["standalone"]);
+    expect(f.turns).toEqual([]);
+    expect(f.omo.runs("wrapped")).toBe(true);
+    expect(f.omo.backgroundOf("wrapped")).toBe(3);
+  });
+
+  it("hands ownership back to GJC when native discovery loses OmO", async () => {
+    const f = setup();
+    await f.served();
+    f.state.native = false;
+    f.state.clock += 10_000;
+    const shown = await f.served();
+    expect(f.omo.runs("wrapped")).toBe(false);
+    expect(f.gjc.tracks("wrapped")).toBe(true);
+    expect(f.adopted).toEqual(["standalone", "wrapped"]);
+    expect(shown.panes.find((pane) => pane.pane_id === "wrapped")).toMatchObject({ agent: "gjc", agent_status: "idle" });
+    appendFileSync(f.gjcPath, lines(message("user")));
+    f.gjc.poll();
+    expect(f.turns).toContainEqual(["wrapped", "working"]);
+  });
+
+  it("keeps the new GJC turn when a raw event clears inactive OmO history", async () => {
+    const f = setup();
+    await f.served();
+    f.state.native = false;
+    f.state.clock += 10_000;
+    await f.served();
+    appendFileSync(f.gjcPath, lines(message("user")));
+    f.gjc.poll();
+    if (reconcileProviderStatus(f.omo, f.gjc, { pane_id: "wrapped", agent: "gjc" })) f.completions.forget("wrapped");
+    expect(f.gjc.tracks("wrapped")).toBe(true);
+    expect(f.completions.current("wrapped")).toBe("working");
+  });
+
+  it("rejects a stale discovery result when native OmO is found during the GJC lookup", async () => {
+    const f = setup(false);
+    f.state.duringGjc = async () => { f.state.native = true; await f.omo.refresh(f.raw.panes); };
+    await f.gjc.refresh(f.raw.panes);
+    expect(f.adopted).toEqual(["standalone"]);
+    expect(f.turns).toEqual([]);
+    expect(f.completions.current("wrapped")).toBe("working");
+    expect(f.gjc.runs("wrapped")).toBe(false);
+    expect(f.omo.backgroundOf("wrapped")).toBe(3);
+  });
+
+  it("suppresses a stale GJC poll after native OmO takes its pane", async () => {
+    const f = setup(false);
+    await f.served();
+    f.state.native = true;
+    f.state.clock += 10_000;
+    await f.omo.refresh(f.raw.panes);
+    appendFileSync(f.omoPath, lines(message("assistant", "stop")));
+    f.omo.poll();
+    appendFileSync(f.gjcPath, lines(message("user")));
+    f.gjc.poll();
+    expect(f.turns).toEqual([["standalone", "working"]]);
+    expect(f.completions.current("wrapped")).toBe("done");
+    expect(f.omo.backgroundOf("wrapped")).toBe(3);
+  });
+
+  it.each(["gjc", "codex", "devin", "unknown", null])("preserves native ownership when a stale %s provider event arrives", async (agent) => {
+    const f = setup(false);
+    await f.served();
+    f.state.native = true;
+    f.state.clock += 10_000;
+    await f.omo.refresh(f.raw.panes);
+    appendFileSync(f.omoPath, lines(message("assistant", "stop")));
+    f.omo.poll();
+    if (reconcileProviderStatus(f.omo, f.gjc, { pane_id: "wrapped", agent })) f.completions.forget("wrapped");
+    expect(f.omo.runs("wrapped")).toBe(true);
+    expect(f.gjc.runs("wrapped")).toBe(false);
+    expect(f.completions.current("wrapped")).toBe("done");
+    expect(f.omo.backgroundOf("wrapped")).toBe(3);
+  });
+
+  it("keeps native ownership with an unknown session while raw status remains authoritative", async () => {
+    const f = setup();
+    f.state.known = false;
+    await f.served();
+    if (reconcileProviderStatus(f.omo, f.gjc, { pane_id: "wrapped", agent: "codex" })) f.completions.forget("wrapped");
+    const shown = await f.served();
+    expect(f.omo.runs("wrapped")).toBe(true);
+    expect(f.omo.tracks("wrapped")).toBe(false);
+    expect(f.adopted).toEqual(["standalone"]);
+    expect(shown.panes.find((pane) => pane.pane_id === "wrapped")).toMatchObject({ agent: "omo", agent_status: "working" });
+  });
+
+  it("releases standalone GJC when another provider is named", async () => {
+    const f = setup();
+    await f.served();
+    expect(reconcileProviderStatus(f.omo, f.gjc, { pane_id: "standalone", agent: "codex" })).toBe(true);
+    expect(f.gjc.runs("standalone")).toBe(false);
+  });
+
+  it("returns to raw unknown status when native OmO disappears without another agent", async () => {
+    const f = setup();
+    await f.served();
+    f.state.native = false;
+    f.state.clock += 10_000;
+    for (const pane of [...f.raw.panes, ...f.raw.agents]) {
+      if (pane.pane_id === "wrapped") { pane.agent = null; pane.agent_status = "unknown"; }
+    }
+    const shown = await f.served();
+    expect(f.omo.runs("wrapped")).toBe(false);
+    expect(f.gjc.runs("wrapped")).toBe(false);
+    expect(shown.panes.find((pane) => pane.pane_id === "wrapped")).toMatchObject({ agent: null, agent_status: "unknown" });
   });
 });
 

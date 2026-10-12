@@ -26,7 +26,7 @@ import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { omoPanes } from "./omo.ts";
-import { createGjcStatus, gjcPanes } from "./gjc-status.ts";
+import { createGjcStatus, gjcPanes, readOmoSnapshot, reconcileProviderStatus } from "./gjc-status.ts";
 import { OMO_ALIASES, OmoStatus, processAlive } from "./omo-status.ts";
 import { omoRuns, omoTasks } from "./omo-tasks.ts";
 import { ClaudeSubagentStatus, claudeSubagents, within } from "./claude-subagents.ts";
@@ -1020,13 +1020,14 @@ export function createServer(
     // herdr called it `claude` or `pi` until now: what it finished under that name is its own
     onFound: (paneId) => completions.adopt(paneId, "omo", OMO_ALIASES),
   });
+  const omoSnapshot = () => readOmoSnapshot(sessionSnapshot, omo);
   /** GJC panes get their status from gjc's own transcript: herdr's `working` can be a provider child's (server/gjc-status.ts) */
   const gjc = createGjcStatus({
     discover: (panes) => gjcPanes(panes),
-    snapshot: sessionSnapshot,
+    snapshot: omoSnapshot,
     onChange: (paneId, derived, _background, turn, rest) => gjcChanged(paneId, derived, turn, rest),
     onFound: (paneId) => completions.adopt(paneId, "gjc", []),
-  });
+  }, omo);
   /** Claude panes whose turn ended while work it started runs in the background (server/background-wait.ts) */
   const waits = new BackgroundWait(options.statusNow ?? Date.now, options.backgroundWait);
   /** the pane whose status event is reading its background work now: that event sends the one frame and alert of it */
@@ -1051,8 +1052,8 @@ export function createServer(
   });
   /** herdr's snapshot with OmO's and GJC's own status in it: what the completion tracker and web push are given */
   const rawSnapshot = async (): Promise<SessionSnapshot> => {
-    const snapshot = await sessionSnapshot();
-    await Promise.all([omo.refresh(snapshot.panes), gjc.refresh(snapshot.panes)]);
+    const snapshot = await omoSnapshot();
+    await gjc.refresh(snapshot.panes);
     const named = gjc.apply(omo.apply(snapshot));
     // not waited for: finding a transcript costs process calls, and a snapshot must not wait on them.
     // The plans come after: a Claude pane's transcript is the one the subagent tracker found
@@ -1570,10 +1571,8 @@ export function createServer(
       // is OmO's own or herdr's by turns (server/omo-status.ts), and a difference is no change;
       // a GJC pane's may be a provider child's while gjc's own transcript is tracked
       if (replay && (omo.runs(paneId) || gjc.tracks(paneId) || !completions.replayed(paneId, raw, replay))) return;
-      // another agent took an OmO or a GJC pane: what it worked on there is not that agent's to finish
-      const leftOmo = omo.named(paneId, agent);
-      const leftGjc = gjc.named(paneId, agent);
-      if (leftOmo || leftGjc) completions.forget(paneId);
+      // Native OmO discovery owns the pane even when herdr names its provider child.
+      if (reconcileProviderStatus(omo, gjc, { pane_id: paneId, agent })) completions.forget(paneId);
       // the frame below names no agent: one herdr names anew is read into the roster now. An OmO
       // pane is `omo` in every snapshot, whatever herdr calls it in an event
       const named = [{ pane_id: paneId, agent: omo.runs(paneId) ? "omo" : gjc.runs(paneId) ? "gjc" : agent }];
