@@ -63,6 +63,10 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   status chips, workspace sections or footer. Upstream #747/#721's herdr-style pane area, tab menu,
   history scrollbar and grouped palette are `tuiPanes` in Settings, off by default (automation
   browsers start on it so upstream's UI tests stay valid). (2026-10-11, v0.4.601)
+- Plan: the header's plan button (`done/total`) and its dialog with Flow / Steps (`PlanDialog.tsx`,
+  `flowLayout` in `lib/plan.ts`, **Plan flow** and **Plan count in the header**), which upstream #846
+  deleted. Its plan inside the composer's background-task chip is `planInChip` in Settings
+  ("Plan in the message box"), off by default (automation browsers start on it). (2026-10-12, v0.4.801)
 - Terminal: the phone key bar's default order, ^C last (`DEFAULT_KEY_BAR_ITEMS`; upstream #607 put it
   third, reachable through the key bar settings).
 - Desktop shell (`desktop/`), identity overlay above.
