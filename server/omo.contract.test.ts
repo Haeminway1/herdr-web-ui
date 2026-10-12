@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "./herdr/client.ts";
 import { labelOmoPanes, paneTranscript } from "./conversation.ts";
-import { isOmoProcess, omoPanes, omoSessionForPane, omoTranscriptForPane } from "./omo.ts";
+import { isOmoProcess, omoPanes, omoSessionForPane, omoTranscriptForPane, omoTranscriptsOfCwd, type ProcessInfo } from "./omo.ts";
 import { createServer } from "./index.ts";
 import type { ConversationResponse } from "../shared/protocol.ts";
 import { startShellAgent } from "./shell-agent.ts";
@@ -229,6 +229,19 @@ it.skipIf(process.platform !== "linux")("recognizes a custom launcher only by ve
   writeFileSync(written, JSON.stringify({ type: "session", id: "custom-pending", cwd: root, timestamp: new Date().toISOString() }) + "\n");
   expect(await omoTranscriptForPane(paneId, root, (await sessionSnapshot()).panes, root)).toBe(realpathSync(written));
   const snapshot = await sessionSnapshot();
+  const info = await herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: paneId });
+  const processes = info.process_info?.foreground_processes ?? [];
+  const custom = processes.find((process) => process.argv?.includes(launcher));
+  expect(custom).toBeDefined();
+  if (!custom) throw new Error("custom launcher process missing");
+  expect(readlinkSync(`/proc/${custom.pid}/cwd`)).toBe(root);
+  // Older process-info responses omit cwd; both pane directory fields can be stale.
+  const withoutCwd = { process_info: { foreground_processes: processes.map(({ pid, argv }) => ({ pid, argv })) } };
+  const stale = snapshot.panes.filter((entry) => entry.pane_id === paneId).map((entry) =>
+    ({ ...entry, cwd: join(root, "stale-pane"), foreground_cwd: join(root, "stale-foreground") }));
+  const resolved = omoTranscriptsOfCwd(root, stale, new Map([[paneId, withoutCwd]]), root).get(paneId);
+  expect(resolved?.path).toBe(realpathSync(written));
+  expect(resolved?.pending).toBeNull();
   for (const agent of ["codex", "devin", "gjc"]) {
     const relabelled = { ...snapshot, panes: snapshot.panes.map((entry) => entry.pane_id === paneId ? { ...entry, agent } : entry) };
     expect((await omoPanes(relabelled.panes)).get(paneId)?.path).toBe(realpathSync(written));

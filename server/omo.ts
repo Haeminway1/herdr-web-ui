@@ -165,14 +165,13 @@ export function processEnviron(pid: number): string[] | null {
 
 /**
  * Where a process actually runs: the cwd herdr reports for the process itself, then
- * the caller's (the pane's), then the OS's own answer (Linux). "" when no source can
+ * the OS's own answer (Linux), then the caller's (the pane's). "" when no source can
  * say — a custom identity cannot be verified without it. A pane cwd goes stale the
- * moment a process moves, so it must never override the process's own report.
+ * moment a process moves, so it must never override either process-specific source.
  */
 function processCwd(process: { pid: number; cwd?: string }, cwd: string): string {
   if (typeof process.cwd === "string" && process.cwd) return process.cwd;
-  if (cwd) return cwd;
-  try { return readlinkSync(`/proc/${process.pid}/cwd`); } catch { return ""; }
+  try { return readlinkSync(`/proc/${process.pid}/cwd`); } catch { return cwd; }
 }
 
 /**

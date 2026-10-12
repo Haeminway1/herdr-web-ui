@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane } from "../shared/protocol.ts";
@@ -20,6 +20,25 @@ const writeSession = (dir: string, id: string, cwd: string): string => {
 const info = (processes: { pid: number; argv?: string[]; cwd?: string }[]) => ({ process_info: { foreground_processes: processes } });
 const NEUTRAL = ["/opt/team-ai/bin/run"];
 
+it.skipIf(process.platform !== "linux")("prefers the OS cwd over stale pane directories for a held custom session", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-omo-proc-cwd-")));
+  try {
+    const home = join(root, "home");
+    const pid = process.pid;
+    const cwd = readlinkSync(`/proc/${pid}/cwd`);
+    const agentDir = join(root, "agent");
+    const dir = join(agentDir, "sessions", omoSessionFolder(cwd));
+    holdRecord(dir, "held", pid, { pid, processStartedAtMs: processStartedAt(pid), cwd });
+    const written = writeSession(dir, "held", cwd);
+    writeSession(dir, "unheld", cwd);
+    const pane = { pane_id: "w:p1", cwd: join(root, "stale-pane"), foreground_cwd: join(root, "stale-foreground") } as HerdrPane;
+    const infos = new Map([[pane.pane_id, info([{ pid, argv: NEUTRAL }])]]);
+    const resolved = omoTranscriptsOfCwd(cwd, [pane], infos, home, () => [`OMO_CODING_AGENT_DIR=${agentDir}`]).get(pane.pane_id);
+    expect(resolved?.path).toBe(realpathSync(written));
+    expect(resolved?.pending).toBeNull();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 it("keeps a held claim's store when its own file cannot be read as a candidate", () => {
   // A custom holder in store A names sess-x; the pane's other, legacy process resolves
   // the default store B, where another pane's session happens to share the id.
@@ -36,7 +55,7 @@ it("keeps a held claim's store when its own file cannot be read as a candidate",
     writeFileSync(join(dirA, "2026-10-02T16-47-10-905Z_sess-x.jsonl"), "{");
     writeSession(dirB, "sess-x", cwd);
     const pane = { pane_id: "w:p1", cwd } as HerdrPane;
-    const infos = new Map([[pane.pane_id, info([{ pid, argv: NEUTRAL }, { pid: process.ppid, argv: ["node", "/opt/omo/bin/omo.js"] }])]]);
+    const infos = new Map([[pane.pane_id, info([{ pid, argv: NEUTRAL, cwd }, { pid: process.ppid, argv: ["node", "/opt/omo/bin/omo.js"], cwd }])]]);
     const envOf = (pid: number) => pid === process.pid ? [`OMO_CODING_AGENT_DIR=${storeA}`] : ["PATH=/bin"];
     const out = omoTranscriptsOfCwd(cwd, [pane], infos, home, envOf).get(pane.pane_id);
     // the claim still binds store A: B's same-id file is another session, and the pane
@@ -58,7 +77,7 @@ it("keeps a truly pending held id pending while another store has the id written
     holdRecord(dirA, "sess-x", pid, { pid, processStartedAtMs: processStartedAt(pid), cwd });
     writeSession(dirB, "sess-x", cwd);
     const pane = { pane_id: "w:p1", cwd } as HerdrPane;
-    const infos = new Map([[pane.pane_id, info([{ pid, argv: NEUTRAL }, { pid: process.ppid, argv: ["node", "/opt/omo/bin/omo.js"] }])]]);
+    const infos = new Map([[pane.pane_id, info([{ pid, argv: NEUTRAL, cwd }, { pid: process.ppid, argv: ["node", "/opt/omo/bin/omo.js"], cwd }])]]);
     const envOf = (pid: number) => pid === process.pid ? [`OMO_CODING_AGENT_DIR=${storeA}`] : ["PATH=/bin"];
     const out = omoTranscriptsOfCwd(cwd, [pane], infos, home, envOf).get(pane.pane_id);
     expect(out?.path).toBeNull();
@@ -95,7 +114,7 @@ it("fails closed when one pane holds two different sessions", () => {
     writeSession(dirA, "sess-1", cwd);
     writeSession(dirA, "sess-2", cwd);
     const pane = { pane_id: "w:p1", cwd } as HerdrPane;
-    const infos = new Map([[pane.pane_id, info([{ pid, argv: NEUTRAL }])]]);
+    const infos = new Map([[pane.pane_id, info([{ pid, argv: NEUTRAL, cwd }])]]);
     const out = omoTranscriptsOfCwd(cwd, [pane], infos, home, () => [`OMO_CODING_AGENT_DIR=${storeA}`]).get(pane.pane_id);
     expect(out?.path).toBeNull();
     expect(out?.pending).toBeNull();
@@ -118,8 +137,8 @@ it("lets an ambiguous peer's claims still block a pane claiming a known file", (
     writeSession(dirA, "other", cwd);
     const panes = [{ pane_id: "w:p1", cwd } as HerdrPane, { pane_id: "w:p2", cwd } as HerdrPane];
     const infos = new Map([
-      ["w:p1", info([{ pid: pidA, argv: NEUTRAL }])],
-      ["w:p2", info([{ pid: pidB, argv: NEUTRAL }])],
+      ["w:p1", info([{ pid: pidA, argv: NEUTRAL, cwd }])],
+      ["w:p2", info([{ pid: pidB, argv: NEUTRAL, cwd }])],
     ]);
     const out = omoTranscriptsOfCwd(cwd, panes, infos, home, () => [`OMO_CODING_AGENT_DIR=${storeA}`]);
     // p2 is ambiguous and selects nothing; its claims still block p1's known file
@@ -169,8 +188,8 @@ it("binds the folder a moved process runs in and resolves the session it holds t
     expect(omoTranscriptsOfCwd(cwd, [pane], infos, home, env).has(pane.pane_id)).toBeFalse();
     // a foreground cwd herdr reports for the pane reaches the same answer
     const moved = { pane_id: "w:p1", cwd, foreground_cwd: other } as HerdrPane;
-    const withoutCwd = new Map([[moved.pane_id, info([{ pid, argv: NEUTRAL }])]]);
-    expect(omoTranscriptsOfCwd(other, [moved], withoutCwd, home, env).get(moved.pane_id)?.path).toBe(realpathSync(file));
+    const processCwd = new Map([[moved.pane_id, info([{ pid, argv: NEUTRAL, cwd: other }])]]);
+    expect(omoTranscriptsOfCwd(other, [moved], processCwd, home, env).get(moved.pane_id)?.path).toBe(realpathSync(file));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
