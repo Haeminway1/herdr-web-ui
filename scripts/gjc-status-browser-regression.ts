@@ -60,13 +60,13 @@ async function fixture(transcript: string): Promise<string> {
   workspaces.push(result.workspace.workspace_id);
   const paneId = result.root_pane.pane_id;
   await herdrRpc("pane.send_text", { pane_id: paneId, text: `${quote(process.execPath)} ${quote(script)} ${quote(transcript)}\n` });
-  let foreground: { pid: number; argv: string[] } | undefined;
+  let foreground: { pid: number; argv?: string[] } | undefined;
   await until(async () => {
-    const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; argv: string[] }[] } }>("pane.process_info", { pane_id: paneId });
-    foreground = info.process_info?.foreground_processes?.find((item) => item.argv.includes(script));
+    const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; argv?: string[] }[] } }>("pane.process_info", { pane_id: paneId });
+    foreground = info.process_info?.foreground_processes?.find((item) => item.argv?.includes(script));
     return foreground !== undefined;
   }, "owned GJC descriptor process");
-  assert.ok(foreground);
+  assert.ok(foreground?.argv);
   assert.ok(isGjcProcess(foreground.argv), "fixture must be recognized as GJC");
   const terminal = gjcTerminal(foreground.pid);
   if (terminal) {
@@ -111,7 +111,10 @@ async function settled(paneId: string, status: Status, start?: number): Promise<
   await rawWorking(paneId);
 }
 async function checkpoint(name: string): Promise<void> {
-  if (evidenceDirectory && page) await page.screenshot({ path: join(evidenceDirectory, `gjc-status-${name}.png`), fullPage: true });
+  if (evidenceDirectory && page) {
+    await page.screenshot({ path: join(evidenceDirectory, `gjc-status-${name}.png`), fullPage: true });
+    await page.locator(".agents-sidebar").screenshot({ path: join(evidenceDirectory, `gjc-status-${name}-agents.png`) });
+  }
 }
 async function staysDone(paneId: string, start: number): Promise<void> {
   const observedUntil = Date.now() + 2_000;
@@ -140,7 +143,7 @@ try {
   const native = history(transcript), delayed = history(delayedTranscript);
   native.append(native.message("user", "Synthetic initial request"), native.message("assistant", "Synthetic GJC completed answer"));
   const paneId = await fixture(transcript), delayedPaneId = await fixture(delayedTranscript);
-  server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), machines: false, tailscaleOwner: null, usage: new UsageService(undefined, []) });
+  server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), tailscaleOwner: null, usage: new UsageService(undefined, []) });
   origin = `http://127.0.0.1:${server.port}`;
   statusSocket = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
   statusSocket.addEventListener("message", (event) => {
@@ -180,7 +183,7 @@ try {
   await settled(paneId, "done", start);
   start = frames.length;
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "gjc", state: "idle" });
-  await until(async () => (await sessionSnapshot()).panes.find((item) => item.pane_id === paneId)?.agent_status === "idle", "owned raw idle event");
+  // A provider report may keep herdr at RUN even after this raw idle report; native DONE must stand either way.
   await staysDone(paneId, start);
   start = frames.length;
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "gjc", state: "working" });
