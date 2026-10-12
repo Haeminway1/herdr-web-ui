@@ -154,6 +154,12 @@ retried automatically. The restart gate waits for the interrupted turn's readine
 by the new turn's working/ready cycle. If Codex never exposes that cycle, remaining messages
 are held for explicit review.
 
+## GJC parent-turn status
+
+GJC status follows the native transcript bound to that pane, rather than a provider child's stale status or session ID. A user message, tool result or tool call keeps the parent turn working; an explicit final answer ends it. Native background-result, monitor and scheduled-task notifications start another turn, and an open `ask` waits for input.
+
+This is parent-turn state, not a count of live background jobs. GJC's job manager keeps that live state in memory, so historical job starts are not treated as proof that a job still runs. Missing or unreadable native evidence leaves herdr's status in charge; interrupted old turns are not successful completions. The isolated `scripts/gjc-status-browser-regression.ts` fixture exercises the real server and browser without invoking a provider or touching existing sessions.
+
 ## Conversation refresh
 
 The chat reads `/api/pane/conversation` after a `conversation-changed` WebSocket frame.

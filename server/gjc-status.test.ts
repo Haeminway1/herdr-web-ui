@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker, type OmoRest } from "./completion.ts";
-import { createGjcStatus, gjcTurnAfter } from "./gjc-status.ts";
+import { createGjcStatus, gjcPanes, gjcTurnAfter } from "./gjc-status.ts";
 import { noTurn, OmoStatus, type OmoLine, type OmoPane, type OmoTurn } from "./omo-status.ts";
 
 // records as gjc's native transcript writes them: a message envelope with the pi family's roles
@@ -64,6 +64,47 @@ describe("a GJC turn, read from its transcript", () => {
       expect(reduce(...rested, note).status).toBe("idle");
     }
     expect(reduce(bookkeeping("x"), "not json").status).toBeNull();
+  });
+
+  it("starts a turn on the monitor's and the timer's hidden wakes too, and on no text that names them", () => {
+    const reduce = (...entries: string[]) => entries.reduce(status, noTurn());
+    const rested = [message("user"), message("assistant", "stop")];
+    const wake = (customType: string) => JSON.stringify({ type: "custom_message", customType, display: false, triggerTurn: true, deliverAs: "followUp", content: "…", timestamp: "2026-10-02T00:00:20.000Z" });
+    for (const customType of ["async-result", "task-notification", "cron-fire"]) {
+      expect(reduce(...rested, wake(customType)).status).toBe("working");
+    }
+    // a wake's name inside another record's text is no wake
+    expect(reduce(...rested, message("assistant", "stop", "2026-10-02T00:00:30.000Z", "the async-result arrived")).status).toBe("idle");
+    expect(reduce(...rested, bookkeeping("task-notification")).status).toBe("idle");
+    expect(reduce(...rested, JSON.stringify({ type: "custom_message", customType: "task-notificationed" })).status).toBe("idle");
+  });
+
+  it("rejects a record that is not an object, and never throws on one", () => {
+    for (const entry of ["null", "[null]", `[${message("user")}]`, "42", "\"async-result\"", "not json", "{"]) {
+      expect(() => gjcTurnAfter(noTurn(), { text: entry })).not.toThrow();
+      expect(gjcTurnAfter(noTurn(), { text: entry }).status).toBeNull();
+      expect(gjcTurnAfter({ status: "working", at: 1, asks: [] }, { text: entry })).toMatchObject({ status: "working", at: 1 });
+    }
+  });
+
+  it("holds a question the agent asked open until its result, an error result too", () => {
+    const asking = (id: string, extra: Record<string, unknown> = {}) => JSON.stringify({ type: "message", timestamp: "2026-10-02T00:00:30.000Z", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id, name: "ask", arguments: { question: "Which way?" }, ...extra }] } });
+    const result = (id: string, isError = false) => JSON.stringify({ type: "message", timestamp: "2026-10-02T00:00:40.000Z", message: { role: "toolResult", toolCallId: id, toolName: "ask", content: [], isError } });
+    const reduce = (...entries: string[]) => entries.reduce(status, noTurn());
+    const asked = reduce(message("user"), asking("q1"));
+    expect(asked).toMatchObject({ status: "working" });
+    expect(asked.asks.map((call) => call.id)).toEqual(["q1"]);
+    // unrelated assistant narration leaves the question open
+    expect(reduce(message("user"), asking("q1"), message("assistant", "toolUse", "2026-10-02T00:00:35.000Z", "thinking")).asks).toHaveLength(1);
+    // its result resumes the turn; another call's result does not
+    expect(reduce(message("user"), asking("q1"), result("other")).asks).toHaveLength(1);
+    expect(reduce(message("user"), asking("q1"), result("q1")).asks).toEqual([]);
+    // an error result ends the asking the same, and a call with no usable id opens none
+    expect(reduce(message("user"), asking("q2"), result("q2", true)).asks).toEqual([]);
+    expect(reduce(message("user"), asking(""), asking("q3", { incomplete: true })).asks).toEqual([]);
+    for (const stopped of ["stop", "error", "aborted"]) {
+      expect(reduce(message("user"), asking("unexecuted").replace('"stopReason":"toolUse"', `"stopReason":"${stopped}"`)).asks).toEqual([]);
+    }
   });
 
   it("reads a record of any size by its projected JSON, and only whole lines", () => {
@@ -180,10 +221,11 @@ describe("a GJC pane's status in place of herdr's provider-child status", () => 
     const raw = herdr();
     await gjc.refresh(raw.panes);
     expect(gjc.tracks("gjc")).toBe(true);
-    // the file vanished: what the pane read before stands until a read says otherwise
+    // the file vanished: the rest it last read is nobody's, and herdr's word stands for the pane at once
     delete files[FILE];
     gjc.poll();
-    expect(gjc.tracks("gjc")).toBe(true);
+    expect(gjc.tracks("gjc")).toBe(false);
+    expect(statuses(gjc.apply(raw))["gjc"]).toBe("gjc/working");
     // a file that was never readable
     const { gjc: blind, told: blindTold, state: blindState } = setup(lines("not json", bookkeeping("gjc.model_change")));
     blindState.discovered.set("gjc", { path: "/s/elsewhere.jsonl", startedAt: null });
@@ -219,11 +261,12 @@ describe("a GJC pane's status in place of herdr's provider-child status", () => 
     state.clock += 10_000;
     await gjc.refresh(raw.panes);
     expect(statuses(gjc.apply(raw))["gjc"]).toBe("gjc/idle");
-    expect(told).toEqual([]);
+    // the interrupted turn is read as a failed rest of the history, never a successful finish
+    expect(told).toEqual([["gjc", "idle", 0, true, "failed-before"]]);
     // a prompt to the new process is a turn
     append(message("user", undefined, "2026-10-02T00:06:00.000Z"));
     gjc.poll();
-    expect(told).toEqual([["gjc", "working", 0, true]]);
+    expect(told).toEqual([["gjc", "idle", 0, true, "failed-before"], ["gjc", "working", 0, true]]);
   });
 
   it("reads a session the pane switched to from its own start, and lets go when another agent is named", async () => {
@@ -259,15 +302,108 @@ describe("a GJC pane's status in place of herdr's provider-child status", () => 
     expect(told).toHaveLength(1);
     state.failing = false;
     gjc.poll();
-    expect(told).toHaveLength(1);
+    // the turn was the same, but herdr's word stood for the pane meanwhile: its own is told again
+    expect(told).toHaveLength(2);
     // a torn tail waits for its newline: the stop record half-written is not the turn's end yet
     const stop = message("assistant", "stop", "2026-10-02T00:02:00.000Z");
     files[FILE] += stop.slice(0, 60);
     gjc.poll();
-    expect(told).toHaveLength(1);
+    expect(told).toHaveLength(2);
     files[FILE] += stop.slice(60) + "\n";
     gjc.poll();
     expect(told.at(-1)).toEqual(["gjc", "idle", 0, true]);
+  });
+
+  it("reads INPUT while the agent's question waits on the user, and RUN again once its result arrives", async () => {
+    const ask = JSON.stringify({ type: "message", timestamp: "2026-10-02T00:00:30.000Z", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "q1", name: "ask", arguments: { question: "Which way?" } }] } });
+    const answer = JSON.stringify({ type: "message", timestamp: "2026-10-02T00:00:40.000Z", message: { role: "toolResult", toolCallId: "q1", toolName: "ask", content: [] } });
+    const { gjc, told, append } = setup(lines(message("user")));
+    const raw = herdr();
+    await gjc.refresh(raw.panes);
+    append(ask);
+    gjc.poll();
+    expect(told.at(-1)).toEqual(["gjc", "blocked", 0, true]);
+    expect(statuses(gjc.apply(raw))["gjc"]).toBe("gjc/blocked");
+    // unrelated narration leaves the question waiting
+    append(message("assistant", "toolUse", "2026-10-02T00:00:35.000Z", "thinking"));
+    gjc.poll();
+    expect(told).toHaveLength(2);
+    expect(statuses(gjc.apply(raw))["gjc"]).toBe("gjc/blocked");
+    append(answer);
+    gjc.poll();
+    expect(told.at(-1)).toEqual(["gjc", "working", 0, true]);
+    append(message("assistant", "stop"));
+    gjc.poll();
+    expect(told.at(-1)).toEqual(["gjc", "idle", 0, true]);
+  });
+
+  it("tells the pane's own rest once its transcript first answers, so herdr's word does not stand", async () => {
+    const { gjc, told, append } = setup("");
+    const completions = new CompletionTracker(null);
+    const raw = herdr();
+    // herdr's provider-child word stands for the pane meanwhile
+    expect(completions.observe("gjc", "working", "gjc")).toBe("working");
+    await gjc.refresh(raw.panes);
+    expect(gjc.tracks("gjc")).toBe(false);
+    expect(statuses(gjc.apply(raw))["gjc"]).toBe("gjc/working");
+    expect(told).toEqual([]);
+    // a whole turn landed between two polls: the pane's own rest is told though nothing moved since
+    append(message("user"), message("assistant", "stop"));
+    gjc.poll();
+    expect(told).toEqual([["gjc", "idle", 0, true]]);
+    expect(completions.observe("gjc", "idle", "gjc")).toBe("done");
+  });
+
+  it("hands the pane back to herdr's word when the transcript cannot be read whole, and takes it back whole", async () => {
+    const { gjc, told, append, files, state } = setup(lines(message("user"), message("assistant", "stop")));
+    const raw = herdr();
+    await gjc.refresh(raw.panes);
+    expect(gjc.tracks("gjc")).toBe(true);
+    expect(statuses(gjc.apply(raw))["gjc"]).toBe("gjc/idle");
+    // gone: herdr's working stands for the pane at once
+    delete files[FILE];
+    gjc.poll();
+    expect(gjc.tracks("gjc")).toBe(false);
+    expect(statuses(gjc.apply(raw))["gjc"]).toBe("gjc/working");
+    // back, but unreadable: no better
+    const prompt = message("user", undefined, "2026-10-02T00:03:00.000Z") + "\n";
+    files[FILE] = lines(message("user"), message("assistant", "stop")) + prompt.slice(0, 50);
+    state.failing = true;
+    gjc.poll();
+    expect(gjc.tracks("gjc")).toBe(false);
+    expect(statuses(gjc.apply(raw))["gjc"]).toBe("gjc/working");
+    // and a record still being written ends nothing either
+    state.failing = false;
+    gjc.poll();
+    expect(gjc.tracks("gjc")).toBe(false);
+    // whole again, what it gained meanwhile is told as the turn it is
+    files[FILE] += prompt.slice(50);
+    gjc.poll();
+    expect(told).toEqual([["gjc", "working", 0, true]]);
+    expect(gjc.tracks("gjc")).toBe(true);
+    append(message("assistant", "stop", "2026-10-02T00:04:00.000Z"));
+    gjc.poll();
+    expect(told.at(-1)).toEqual(["gjc", "idle", 0, true]);
+    expect(statuses(gjc.apply(raw))["gjc"]).toBe("gjc/idle");
+  });
+
+  it("tells a turn the process now holding the session could not have run as an interruption, never a finish", async () => {
+    const { gjc, told, state } = setup(lines(message("user", undefined, "2026-10-02T00:00:10.000Z"), message("assistant", "toolUse", "2026-10-02T00:00:12.000Z")));
+    // process A ran the turn: it is live work while it holds the session
+    state.discovered.set("gjc", { path: FILE, startedAt: Date.parse("2026-10-02T00:00:00.000Z") });
+    const completions = new CompletionTracker(null);
+    const raw = herdr();
+    await gjc.refresh(raw.panes);
+    const settle = () => told.splice(0).map(([id, status, , , rest]) => completions.observe(id, status, "gjc", rest));
+    expect(settle()).toEqual(["working"]);
+    expect(statuses(completions.present(gjc.apply(raw)))["gjc"]).toBe("gjc/working");
+    // the same file, now held by a process started after the turn's last word: interrupted, not finished
+    state.discovered.set("gjc", { path: FILE, startedAt: Date.parse("2026-10-02T00:05:00.000Z") });
+    state.clock += 10_000;
+    await gjc.refresh(raw.panes);
+    expect(settle()).toEqual(["idle"]);
+    expect(statuses(completions.present(gjc.apply(raw)))["gjc"]).toBe("gjc/idle");
+    expect(completions.current("gjc")).toBe("idle");
   });
 
   it("reads a real transcript file, whole lines at a time and again from where it stopped", async () => {
@@ -309,5 +445,68 @@ describe("a GJC pane's status in place of herdr's provider-child status", () => 
     expect(omo.named("gjc", "claude")).toBe(false);
     expect(omo.named("gjc", "codex")).toBe(true);
     expect(told).toEqual([]);
+  });
+});
+
+describe("the gjc process a pane's transcript and start are read from", () => {
+  const gjcPane = (id: string, extra: Record<string, unknown> = {}): HerdrPane =>
+    ({ pane_id: id, agent: "gjc", agent_status: "working", cwd: "/work", ...extra } as unknown as HerdrPane);
+  const transcript = async (id: string, _cwd: string) => `/t/${id}.jsonl`;
+
+  it("binds the pane's current runtime cwd, not where it started", async () => {
+    const asked: string[] = [];
+    const panes = await gjcPanes([gjcPane("p", { foreground_cwd: "/work/now" }), gjcPane("q")], {
+      processInfo: async () => null,
+      transcript: async (_id, cwd) => { asked.push(cwd); return null; },
+      underShell: async () => null,
+    });
+    expect(asked.sort()).toEqual(["/work", "/work/now"]);
+    // a transcript nobody could tell is still the pane's own record: herdr's word stands for it
+    expect([...panes.values()]).toEqual([{ path: null, startedAt: null }, { path: null, startedAt: null }]);
+  });
+
+  it("takes the native start from the gjc in the foreground, and only there", async () => {
+    const seen: number[] = [];
+    const panes = await gjcPanes([gjcPane("p")], {
+      processInfo: async () => ({ process_info: { foreground_processes: [
+        { pid: 11, argv: ["node", "/home/u/.gjc/gjc"] },
+        { pid: 12, argv: ["/usr/bin/claude", "--session", "abc"] },
+      ] } }),
+      transcript,
+      startedAt: (pid) => { seen.push(pid); return pid === 11 ? 1_000 : 2_000; },
+      underShell: async () => null,
+    });
+    expect(seen).toEqual([11]);
+    expect(panes.get("p")).toEqual({ path: "/t/p.jsonl", startedAt: 1_000 });
+  });
+
+  it("takes the gjc under the pane's shell on Windows, with the start the table read for it", async () => {
+    const panes = await gjcPanes([gjcPane("p")], {
+      platform: "win32",
+      processInfo: async () => ({ process_info: { shell_pid: 50, foreground_processes: [{ pid: 50, argv: ["pwsh.exe"] }] } }),
+      transcript,
+      underShell: async (shellPid) => shellPid === 50 ? { pid: 77, started: 4_242 } : null,
+    });
+    expect(panes.get("p")).toEqual({ path: "/t/p.jsonl", startedAt: 4_242 });
+  });
+
+  it("says nothing of a start when the process table could not be read at all", async () => {
+    const panes = await gjcPanes([gjcPane("p")], {
+      processInfo: async () => null,
+      transcript,
+      underShell: async () => undefined,
+    });
+    expect(panes.get("p")).toEqual({ path: "/t/p.jsonl", startedAt: null });
+  });
+
+  it("takes no start from the provider child herdr follows", async () => {
+    // a foreground that holds only the provider child: its pid is never the session's start
+    const panes = await gjcPanes([gjcPane("p")], {
+      processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 88, argv: ["/usr/bin/claude"] }] } }),
+      transcript,
+      startedAt: () => 9_999,
+      underShell: async () => null,
+    });
+    expect(panes.get("p")).toEqual({ path: "/t/p.jsonl", startedAt: null });
   });
 });

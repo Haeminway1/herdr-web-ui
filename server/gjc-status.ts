@@ -7,84 +7,150 @@
  * newest file by cwd) tells the parent turn instead: a user prompt, a tool result or an
  * assistant message that stopped for a tool means work; one that stopped for good (`stop`,
  * `length`) is rest, and one that errored or was aborted is rest after a failure — READY, not
- * DONE (#687's rule holds here too). gjc wakes the agent with an `async-result` custom message
- * when a background job ends, displayed or not: that begins a new parent turn. Everything else
- * gjc writes (custom bookkeeping, model notices) is no turn's business.
+ * DONE (#687's rule holds here too). gjc wakes the agent with a custom message when work it
+ * asked for lands elsewhere — a background job's `async-result`, a monitor's
+ * `task-notification`, a timer's `cron-fire` — displayed or not: that begins a new parent
+ * turn. Everything else gjc writes (custom bookkeeping, model notices) is no turn's business.
+ * A tool call named `ask` holds a question for the user open until its result arrives, an
+ * error result included: while one is open the pane reads INPUT, whatever the turn does.
  *
- * The status replaces herdr's for the pane only once a turn record was actually read: an empty
- * or unreadable transcript proves nothing, so herdr's `working` stands rather than a rest no
- * one saw. The machinery is omo-status.ts's, composed with the `gjc` identity and this file's
- * reducer; gjc keeps no background-task records to count.
+ * The status replaces herdr's for the pane only once a turn record was actually read and the
+ * read is current: an empty, missing, unreadable or half-written transcript proves nothing,
+ * so herdr's `working` stands rather than a rest no one saw. The machinery is omo-status.ts's,
+ * composed with the `gjc` identity and this file's reducer; gjc keeps no background-task
+ * records to count. A turn the process holding the session now could not have run (it started
+ * after the record was written) is another process's unfinished work: an interruption, told as
+ * a failed rest, never a finish.
  */
 import type { HerdrPane } from "../shared/protocol.ts";
 import { herdrRpc } from "./herdr/client.ts";
-import { gjcTranscriptForPane, isGjcProcess } from "./gjc-runtime.ts";
+import { gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, type GjcProcess } from "./gjc-runtime.ts";
+import type { OmoAsks } from "./omo-ask.ts";
 import { processStartedAt } from "./process-start.ts";
 import { OmoStatus, type OmoLine, type OmoPane, type OmoStatusDeps, type OmoTurn } from "./omo-status.ts";
 
-/** gjc wakes the parent turn for a finished background job with this custom message */
-const ASYNC_RESULT = "async-result";
+/** the custom messages gjc wakes the parent turn with, displayed or not */
+const WAKE_TYPES = new Set(["async-result", "task-notification", "cron-fire"]);
+
+interface GjcEntry {
+  type?: unknown;
+  customType?: unknown;
+  timestamp?: unknown;
+  message?: { role?: unknown; stopReason?: unknown; content?: unknown; toolCallId?: unknown };
+}
+
+/**
+ * The questions a gjc turn holds open for the user: an `ask` call opens one until the result
+ * for its id arrives — an error result ends the asking the same, since nothing waits on the
+ * user then. Assistant narration that carries no call leaves every question as it was.
+ */
+function gjcAsksAfter(open: OmoAsks, entry: GjcEntry): OmoAsks {
+  if (entry.type !== "message") return open;
+  const message = entry.message;
+  if (message?.role === "assistant" && message.stopReason === "toolUse") {
+    const calls = (Array.isArray(message.content) ? message.content as Record<string, unknown>[] : [])
+      .filter((part) => part?.["type"] === "toolCall" && part["name"] === "ask" && typeof part["id"] === "string" && part["id"] !== "" && part["incomplete"] !== true)
+      .map((part) => ({ id: part["id"] as string, wait: true, args: part["arguments"] }));
+    const ids = new Set(calls.map((call) => call.id));
+    return calls.length > 0 ? [...open.filter((call) => !ids.has(call.id)), ...calls] : open;
+  }
+  if (message?.role === "toolResult" && typeof message.toolCallId === "string") {
+    return open.filter((call) => call.id !== message.toolCallId);
+  }
+  return open;
+}
 
 /**
  * One transcript record applied to the parent turn so far, from a whole line or a projected
  * record's complete JSON (never its text: a record too long to hold says nothing). An
- * assistant message without a readable stopReason keeps the turn as it was.
+ * assistant message without a readable stopReason keeps the turn as it was; a record that is
+ * not an object (a bare value, a list) is no record at all.
  */
 export function gjcTurnAfter(turn: OmoTurn, line: OmoLine): OmoTurn {
   const text = "text" in line ? line.text : line.record;
   if (text === undefined) return turn;
-  let entry: { type?: unknown; customType?: unknown; timestamp?: unknown; message?: { role?: unknown; stopReason?: unknown } };
+  let entry: GjcEntry;
   try { entry = JSON.parse(text); } catch { return turn; }
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return turn;
   const parsed = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
   const at = Number.isFinite(parsed) ? parsed : turn.at;
+  const asks = gjcAsksAfter(turn.asks, entry);
   if (entry.type === "custom_message") {
-    return entry.customType === ASYNC_RESULT ? { status: "working", at, asks: turn.asks } : turn;
+    return typeof entry.customType === "string" && WAKE_TYPES.has(entry.customType) ? { status: "working", at, asks } : { ...turn, asks };
   }
-  if (entry.type !== "message") return turn;
+  if (entry.type !== "message") return { ...turn, asks };
   const role = entry.message?.role;
   const stopReason = entry.message?.stopReason;
-  if (role === "user" || role === "toolResult") return { status: "working", at, asks: turn.asks };
-  if (role !== "assistant") return turn;
-  if (stopReason === "toolUse") return { status: "working", at, asks: turn.asks };
-  if (stopReason === "stop" || stopReason === "length") return { status: "idle", at, asks: turn.asks };
-  if (stopReason === "error" || stopReason === "aborted") return { status: "idle", failed: true, at, asks: turn.asks };
-  return turn;
+  if (role === "user" || role === "toolResult") return { status: "working", at, asks };
+  if (role !== "assistant") return { ...turn, asks };
+  if (stopReason === "toolUse") return { status: "working", at, asks };
+  if (stopReason === "stop" || stopReason === "length") return { status: "idle", at, asks };
+  if (stopReason === "error" || stopReason === "aborted") return { status: "idle", failed: true, at, asks };
+  return { ...turn, asks };
 }
 
-type ProcessInfo = { process_info?: { foreground_processes?: { pid?: unknown; argv?: unknown }[] } } | null;
+type ProcessInfo = { process_info?: { shell_pid?: unknown; foreground_processes?: { pid?: unknown; argv?: unknown }[] } } | null;
+
+/**
+ * How `gjcPanes` finds out what it needs, each part unset meaning the real lookup: the pane's
+ * process info and its transcript (herdr's RPCs), when a pid started (process-start.ts), the
+ * gjc under a Windows pane's shell (gjc-runtime.ts), and the platform that decides between the
+ * two process identities. Tests give their own, so no live RPC is needed to tell the cases.
+ */
+export interface GjcDiscovery {
+  processInfo?: (paneId: string) => Promise<ProcessInfo>;
+  transcript?: (paneId: string, cwd: string) => Promise<string | null>;
+  startedAt?: (pid: number) => number | null;
+  underShell?: (shellPid: unknown) => Promise<GjcProcess | null | undefined>;
+  platform?: string;
+}
 
 /**
  * The panes of a snapshot herdr labels `gjc`, with the exact transcript each holds (null when
  * it cannot be told: herdr's status stands for the pane) and when its native foreground gjc
  * process started, so a turn a resumed session left unfinished is not taken for running work.
- * `agent_session` is never consulted: it may name the provider child, not the gjc parent.
+ * On Windows herdr names only the pane's shell: the gjc under it, and its start, is the PC's
+ * process table's answer. `agent_session` is never consulted: it may name the provider child,
+ * not the gjc parent. The transcript is bound at the pane's current runtime cwd — what the
+ * foreground process runs in now, not where the pane started — the same cwd the chat binds by.
  */
-export async function gjcPanes(panes: HerdrPane[]): Promise<Map<string, OmoPane>> {
+export async function gjcPanes(panes: HerdrPane[], deps: GjcDiscovery = {}): Promise<Map<string, OmoPane>> {
+  const processInfo = deps.processInfo ?? ((paneId: string) => herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: paneId }).catch(() => null));
+  const transcript = deps.transcript ?? ((paneId: string, cwd: string) => gjcTranscriptForPane(paneId, cwd).catch(() => null));
+  const startedAt = deps.startedAt ?? processStartedAt;
+  const underShell = deps.underShell ?? ((shellPid: unknown) => gjcPidUnderShell(shellPid, deps.platform));
   const found = new Map<string, OmoPane>();
   await Promise.all(panes.filter((pane) => pane.agent === "gjc").map(async (pane) => {
-    const info = await herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: pane.pane_id }).catch(() => null);
+    const info = await processInfo(pane.pane_id);
     const starts = (info?.process_info?.foreground_processes ?? [])
       .filter((process) => typeof process.pid === "number" && Array.isArray(process.argv) && isGjcProcess(process.argv.map(String)))
-      .map((process) => processStartedAt(process.pid as number))
+      .map((process) => startedAt(process.pid as number))
       .filter((start): start is number => start !== null);
-    const path = await gjcTranscriptForPane(pane.pane_id, pane.cwd ?? "").catch(() => null);
-    found.set(pane.pane_id, { path, startedAt: starts.length > 0 ? Math.min(...starts) : null });
+    let started = starts.length > 0 ? Math.min(...starts) : null;
+    if (started === null) {
+      const native = await underShell(info?.process_info?.shell_pid).catch(() => undefined);
+      if (native) started = native.started;
+    }
+    const path = await transcript(pane.pane_id, pane.foreground_cwd || pane.cwd || "");
+    found.set(pane.pane_id, { path, startedAt: started });
   }));
   return found;
 }
 
 /**
  * The tracker's GJC composition: the `gjc` identity (herdr gives it no other name, so no
- * aliases), this file's reducer, no background counts, and the readiness gate that releases a
- * transcript nothing was read from back to herdr's status.
+ * aliases), this file's reducer, no background counts, an unfinished turn of a process that is
+ * gone told as the failed rest it is, and the readiness gate that releases a transcript
+ * nothing — or not everything — was read from back to herdr's status.
  */
-export function createGjcStatus(deps: Omit<OmoStatusDeps, "agent" | "aliases" | "turnAfter" | "ready" | "background">): OmoStatus {
+export function createGjcStatus(deps: Omit<OmoStatusDeps, "agent" | "aliases" | "turnAfter" | "ready" | "background" | "staleIsFailure">): OmoStatus {
   return new OmoStatus({
     ...deps,
     agent: "gjc",
     aliases: [],
     turnAfter: gjcTurnAfter,
-    ready: ({ turn }) => turn.status !== null,
+    ready: ({ turn, available, complete }) => turn.status !== null && available && complete,
     background: () => new Map(),
+    staleIsFailure: true,
   });
 }
