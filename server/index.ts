@@ -414,6 +414,8 @@ export function createServer(
     token?: string;
     /** where VAPID keys and push subscriptions persist; tests pass a temp dir */
     stateDir?: string;
+    /** the folder the server-protected manager pin may bind (server/residents.ts); unset, the default ownership root. Tests pass an existing temp folder. */
+    protectedManagerFolder?: string;
     /** the PC's own Tailscale login, for the identity check; tests set it, otherwise `tailscale status` says */
     tailscaleOwner?: string | null;
     /** the operator declares `tailscale serve` as this install's only ingress; HERDR_WEB_TAILSCALE_SERVE_ONLY=1 says the same */
@@ -530,8 +532,12 @@ export function createServer(
   const token = options.token ?? process.env["HERDR_WEB_TOKEN"] ?? "";
   /** paired devices (server/devices.ts) and the PC's Tailscale login: the two ways in besides the token and this PC itself */
   const devices = new DeviceStore(options.stateDir ?? defaultStateDir());
-  // fork: the sidebar's resident agents, shared by every device of this PC
-  const residents = new ResidentStore(join(options.stateDir ?? defaultStateDir(), "residents.json"));
+  // fork: the sidebar's resident agents, shared by every device of this PC; the store pins the
+  // verified native manager itself (protectedManagerFolder is a test seam for the ownership root)
+  const residents = new ResidentStore(join(options.stateDir ?? defaultStateDir(), "residents.json"), {
+    managerFolder: options.protectedManagerFolder,
+    snapshot: () => sessionSnapshot(),
+  });
   const usage = options.usage ?? new UsageService();
   const voice = options.voice ?? new VoiceService({ stateDir: options.stateDir ?? defaultStateDir(), env: process.env, fetch });
   /** a login named here is taken as it is: a tagged node has none of its own to read (HERDR_WEB_TAILSCALE_OWNER) */

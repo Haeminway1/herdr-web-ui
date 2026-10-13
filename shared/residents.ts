@@ -1,3 +1,5 @@
+import type { PaneInfo } from "./herdr-api.generated.ts";
+
 /**
  * fork: the sidebar's resident agents. Folders on this PC whose sessions the classic sidebar keeps
  * apart: `top` ones above everything, the rest under the Resident tab, with a dim row that starts
@@ -13,6 +15,18 @@ export interface ResidentLaunch {
   effort: "" | "low" | "medium" | "high" | "xhigh";
 }
 
+/**
+ * The server's own pin: the PC's verified native manager, bound to the pane it proved. `folder`
+ * is the canonical ownership root the server checked against; the ids are that pane's. The
+ * server writes it after snapshot proof — a stored or sent one is metadata, never authority.
+ */
+export interface SystemResidentPin {
+  folder: string;
+  workspace_id: string;
+  pane_id: string;
+  terminal_id: string;
+}
+
 export interface Residents {
   /** always on top, whichever tab is shown */
   top: string[];
@@ -22,6 +36,8 @@ export interface Residents {
   launch: ResidentLaunch;
   /** a resident's name in the sidebar, by folder; a folder without one shows its own name */
   names: Record<string, string>;
+  /** the verified native manager, kept first in `top`; null when this PC has none */
+  system_pin?: SystemResidentPin | null;
 }
 
 export const DEFAULT_RESIDENTS: Residents = {
@@ -29,10 +45,12 @@ export const DEFAULT_RESIDENTS: Residents = {
   residents: [],
   launch: { kind: "claude", model: "claude-opus-5-5", effort: "medium" },
   names: {},
+  system_pin: null,
 };
 
 const EFFORTS = new Set(["", "low", "medium", "high", "xhigh"]);
 const MAX_PATHS = 64;
+const MAX_ID = 200;
 
 function paths(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -44,6 +62,18 @@ function paths(value: unknown): string[] {
     if (seen.size >= MAX_PATHS) break;
   }
   return [...seen];
+}
+
+/** A pin worth keeping: an absolute folder plus herdr's three ids, every one present. */
+function systemPin(value: unknown): SystemResidentPin | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const folder = typeof record["folder"] === "string" ? record["folder"].trim().replace(/\/+$/, "") : "";
+  const workspace_id = typeof record["workspace_id"] === "string" ? record["workspace_id"].trim() : "";
+  const pane_id = typeof record["pane_id"] === "string" ? record["pane_id"].trim() : "";
+  const terminal_id = typeof record["terminal_id"] === "string" ? record["terminal_id"].trim() : "";
+  if (!folder.startsWith("/") || folder.length > 1024 || [workspace_id, pane_id, terminal_id].some((id) => id.length === 0 || id.length > MAX_ID)) return null;
+  return { folder, workspace_id, pane_id, terminal_id };
 }
 
 /** Whatever was stored or sent, as a valid record: unknown fields dropped, bad ones defaulted. */
@@ -68,6 +98,7 @@ export function sanitizeResidents(value: unknown): Residents {
       effort: typeof launch["effort"] === "string" && EFFORTS.has(launch["effort"]) ? launch["effort"] as ResidentLaunch["effort"] : DEFAULT_RESIDENTS.launch.effort,
     },
     names,
+    system_pin: systemPin(record["system_pin"]),
   };
 }
 
@@ -97,4 +128,34 @@ export function launchArgs(launch: ResidentLaunch): string[] {
 /** The name a resident folder shows: the one given, else the folder's own. */
 export function residentName(residents: Residents, folder: string): string {
   return residents.names[folder] ?? folder.split("/").filter(Boolean).at(-1) ?? folder;
+}
+
+/**
+ * The list with `pin` applied: the protected folder first on top and nowhere else. Everything
+ * else — the order of the other folders, names, launch — is the user's own. A null pin clears
+ * the field and leaves the lists alone.
+ */
+export function normalizeSystemResident(residents: Residents, pin: SystemResidentPin | null): Residents {
+  if (pin === null) return { ...residents, system_pin: null };
+  return {
+    ...residents,
+    top: [pin.folder, ...residents.top.filter((folder) => folder !== pin.folder)],
+    residents: residents.residents.filter((folder) => folder !== pin.folder),
+    system_pin: pin,
+  };
+}
+
+/**
+ * Whether `pane` is the pinned manager: the workspace, pane and terminal ids and the folder all
+ * at once — a label, or the folder alone, never is.
+ */
+export function isSystemResidentPane(
+  pin: SystemResidentPin | null | undefined,
+  pane: Pick<PaneInfo, "workspace_id" | "pane_id" | "terminal_id" | "cwd">,
+): boolean {
+  return pin != null
+    && pane.workspace_id === pin.workspace_id
+    && pane.pane_id === pin.pane_id
+    && pane.terminal_id === pin.terminal_id
+    && pane.cwd === pin.folder;
 }
