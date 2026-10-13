@@ -1,8 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Folder, Star, Terminal } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, Lock, Star, Terminal } from "lucide-react";
 
 import type { Machine } from "../../shared/machines.ts";
-import { paneStorageId } from "../../shared/machines.ts";
+import { LOCAL_MACHINE, paneStorageId } from "../../shared/machines.ts";
+import { isSystemResidentPane } from "../../shared/residents.ts";
+import { useResidents } from "../lib/residents.ts";
 import type { AgentStatus, PlanSummary } from "../../shared/protocol.ts";
 import { useT } from "../lib/i18n.ts";
 import { agentContext, agentTabName, groupRows, paneMark, sidebarAgents, type SidebarAgent } from "../lib/sidebarAgents.ts";
@@ -85,9 +87,15 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const agents = sidebarAgents(machine.snapshot);
     return (byActivity ? activityOrder(agents, (entry) => entry.pane, activity.seqs(machine.id)) : agents).map((entry): AgentRow => ({ machine, entry }));
   }), [machines, byActivity, activity]);
+  // the server's verified manager pin is this PC's own (useResidents) and leads whatever Pin
+  // agents, order or cards say: it is matched by workspace, pane and terminal ids — never a star
+  const { residents } = useResidents();
+  const systemPin = residents.system_pin ?? null;
+  const systemRow = useMemo(() => systemPin === null ? undefined : rows.find(({ machine, entry }) => machine.id === LOCAL_MACHINE && isSystemResidentPane(systemPin, entry.pane)), [rows, systemPin]);
+  const listedRows = useMemo(() => systemRow === undefined ? rows : rows.filter((row) => row !== systemRow), [rows, systemRow]);
   // pins lead: alone, the pinned rows stand first; in cards, each stays in its own card, first there,
   // and a card that holds one comes before the cards that hold none
-  const split = useMemo(() => splitPinnedRows(rows, settings.agentPins ? pinned : NO_PINS, ({ machine, entry }) => sidebarPinKey(machine.id, entry.pane.pane_id)), [rows, pinned, settings.agentPins]);
+  const split = useMemo(() => splitPinnedRows(listedRows, settings.agentPins ? pinned : NO_PINS, ({ machine, entry }) => sidebarPinKey(machine.id, entry.pane.pane_id)), [listedRows, pinned, settings.agentPins]);
   useEffect(() => {
     const live = new Set(rows.map(({ machine, entry }) => sidebarPinKey(machine.id, entry.pane.pane_id)));
     const next = pruneSidebarPins(pinned, live, machines);
@@ -114,7 +122,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   // herdr names a PC only beside another: the rows' line, and a card's head, do the same
   const machineName = (machine: Machine): string | null => machines.length > 1 ? machine.name : null;
 
-  const agentItem = ({ machine, entry }: AgentRow, grouped: boolean) => {
+  const agentItem = ({ machine, entry }: AgentRow, grouped: boolean, system = false) => {
     const { pane, workspace, tab, agent, agentLabel } = entry;
     const selected = machine.id === selectedMachineId && pane.pane_id === selectedPaneId;
     const online = machine.state === "connected";
@@ -135,14 +143,17 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const tooltip = [...new Set([pane.pane_id, title, place, markKind, name, agent?.display_agent, pane.cwd, online ? null : stateWord(machine)].filter(Boolean))].join("\n");
     const pinKey = sidebarPinKey(machine.id, pane.pane_id);
     const isPinned = pinned.includes(pinKey);
-    return <li className={`agent-item${selected ? " is-selected" : ""}${online ? "" : " is-offline"}`} key={paneStorageId(machine.id, pane.pane_id)} data-machine={machine.id} data-pane={pane.pane_id}>
+    return <li className={`agent-item${selected ? " is-selected" : ""}${online ? "" : " is-offline"}${system ? " is-system" : ""}`} key={paneStorageId(machine.id, pane.pane_id)} data-machine={machine.id} data-pane={pane.pane_id}>
       <button type="button" className="agent-select agent-row" disabled={!online} aria-current={selected ? "true" : undefined} title={tooltip} onClick={() => onSelect(machine.id, pane.pane_id)}>
         {/* a saved roster's state is not news: a PC that is away says nothing about its agents */}
         <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} status={online ? activity.status(machine.id, pane) : undefined} />
       </button>
-      {settings.agentPins && <button type="button" className={`agent-pin-toggle${isPinned ? " is-pinned" : ""}`} aria-label={`${t("Pin agent")}: ${[title, machineName(machine), workspace.label].filter(Boolean).join(" · ")}`} aria-pressed={isPinned} title={t(isPinned ? "Unpin agent" : "Pin agent")} data-pin-key={pinKey} onClick={(event) => setPin(pinKey, event.currentTarget)}>
-        <Star aria-hidden="true" fill={isPinned ? "currentColor" : "none"} />
-      </button>}
+      {system
+        // the manager's pin is the server's: the lock is a state, never a toggle, and no star
+        ? <span className="agent-pin-lock" role="img" title={t("System pinned")} aria-label={t("System pinned")}><Lock size={15} aria-hidden="true" /></span>
+        : settings.agentPins && <button type="button" className={`agent-pin-toggle${isPinned ? " is-pinned" : ""}`} aria-label={`${t("Pin agent")}: ${[title, machineName(machine), workspace.label].filter(Boolean).join(" · ")}`} aria-pressed={isPinned} title={t(isPinned ? "Unpin agent" : "Pin agent")} data-pin-key={pinKey} onClick={(event) => setPin(pinKey, event.currentTarget)}>
+          <Star aria-hidden="true" fill={isPinned ? "currentColor" : "none"} />
+        </button>}
     </li>;
   };
 
@@ -154,6 +165,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     </button>
     <div className="agent-list-contents" id={listId} hidden={collapsed}>
       {rows.length === 0 ? <p className="agent-empty" role="status">{t("No agents running")}</p> : <ul className="agent-list">
+        {systemRow !== undefined && agentItem(systemRow, false, true)}
         {groups ? groups.map(({ key, rows: members }, index) => {
           const { machine, entry } = members[0]!;
           const headId = `${listId}-group-${index}`;

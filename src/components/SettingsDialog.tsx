@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ArrowLeft, Bell, Check, ChevronDown, ChevronRight, ChevronUp, Eye, EyeOff, Gauge, Info, Keyboard, MessageSquare, Mic, Monitor, Palette, Plug, Plus, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bell, Check, ChevronDown, ChevronRight, ChevronUp, Eye, EyeOff, Gauge, Info, Keyboard, Lock, MessageSquare, Mic, Monitor, Palette, Plug, Plus, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
@@ -932,10 +932,14 @@ function ResidentSettings() {
   const launch = (change: Partial<ResidentLaunch>) => void updateResidents((current) => ({ ...current, launch: { ...current.launch, ...change } }));
   const name = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path;
   const rows = [...residents.top.map((path) => ({ path, top: true })), ...residents.residents.map((path) => ({ path, top: false }))];
+  const systemFolder = residents.system_pin?.folder ?? null;
   return <>
     <SettingsRow label={t("Resident agents")} description={t("Pin a session in the sidebar to add its folder. Rename one here; On top stays above the Resident / Work toggle.")} wide>
       {rows.length === 0 ? <span className="settings-resident-empty">{t("None yet")}</span> : <ul className="settings-residents">
-        {rows.map(({ path, top }) => <li key={path} title={path}>
+        {rows.map(({ path, top }) => {
+          // the verified manager's row is the server's pin: on top and unremovable here
+          const system = path === systemFolder;
+          return <li key={path} title={path}>
           <input className="input settings-resident-name" aria-label={t("Name of {folder}", { folder: name(path) })} defaultValue={residentName(residents, path)} key={residentName(residents, path)} placeholder={name(path)}
             onBlur={(event) => {
               const given = event.target.value.trim();
@@ -947,12 +951,15 @@ function ResidentSettings() {
               });
             }}
             onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
-          <Toggle label={t("On top")} checked={top} onChange={(on) => void updateResidents((current) => on
+          <Toggle label={t("On top")} checked={system || top} disabled={system} onChange={(on) => void updateResidents((current) => on
             ? { ...current, top: [...current.top, path], residents: current.residents.filter((other) => other !== path) }
             : { ...current, top: current.top.filter((other) => other !== path), residents: [path, ...current.residents] })} />
           <span className="settings-resident-top">{t("On top")}</span>
-          <button type="button" className="btn btn-ghost" onClick={() => void updateResidents((current) => ({ ...current, top: current.top.filter((other) => other !== path), residents: current.residents.filter((other) => other !== path) }))}>{t("Remove")}</button>
-        </li>)}
+          {system
+            ? <span className="settings-resident-top" title={t("System pinned")}><Lock size={12} aria-hidden="true" /> {t("System pinned")}</span>
+            : <button type="button" className="btn btn-ghost" onClick={() => void updateResidents((current) => ({ ...current, top: current.top.filter((other) => other !== path), residents: current.residents.filter((other) => other !== path) }))}>{t("Remove")}</button>}
+        </li>;
+        })}
       </ul>}
     </SettingsRow>
     <SettingsRow label={t("Start resident agents with")} description={t("A dim resident row starts this agent in its folder")} wide>
