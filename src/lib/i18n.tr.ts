@@ -985,6 +985,7 @@ export const TR: Record<string, string> = {
   "Rename workspace {name}": "{name} çalışma alanını yeniden adlandır",
   "Rename {title}": "{title} yeniden adlandır",
   "Resident": "Kalıcı",
+  "System pinned": "Sistem tarafından sabitlendi",
   "Resident agents": "Kalıcı ajanlar",
   "Running {what}": "Çalıştırılıyor: {what}",
   "Sent": "Gönderildi",
