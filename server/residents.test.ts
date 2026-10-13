@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -227,6 +227,74 @@ describe("ResidentStore", () => {
     }
     expect(readFileSync(file, "utf8")).toBe(before);
   });
+
+  it("saves the verified pin when the first request ever is a refused write, so an outage cannot unpin it", async () => {
+    const dir = temp();
+    const mgr = realpathSync(temp("herdr-manager-"));
+    const file = join(dir, "residents.json");
+    writeFileSync(file, JSON.stringify({
+      top: ["/a/first"],
+      residents: ["/a/one"],
+      names: { "/a/one": "One" },
+      launch: { kind: "codex", model: "gpt-5.5", effort: "high" },
+    }));
+    let current = snapshots({ agents: [agent({})], panes: [pane({ cwd: mgr })], workspaces: [workspace("w1")] });
+    const s = store(file, mgr, () => current());
+    // no read happened first: a PUT that drops the manager is refused, but the proof is saved
+    await expect(s.write({ top: ["/a/first"], residents: ["/a/one"] })).rejects.toBeInstanceOf(SystemPinProtectedError);
+    expect(saved(file).system_pin).toEqual(pinFor(mgr));
+    expect(saved(file).top).toEqual([mgr, "/a/first"]);
+    // herdr unreachable afterwards: the retained binding still refuses
+    current = async (): Promise<SessionSnapshot> => { throw new Error("connect_failed: down"); };
+    await expect(s.write({ top: ["/a/first"], residents: ["/a/one"] })).rejects.toBeInstanceOf(SystemPinProtectedError);
+    // and an answered snapshot with no manager keeps it too
+    current = snapshots({ panes: [pane({ cwd: "/elsewhere" })], workspaces: [workspace("w9")] });
+    await expect(s.write({ top: ["/a/first"], residents: ["/a/one"] })).rejects.toBeInstanceOf(SystemPinProtectedError);
+    const record = saved(file);
+    expect(record.system_pin).toEqual(pinFor(mgr));
+    expect(record.top).toEqual([mgr, "/a/first"]);
+    // the refusals applied none of the requests and kept the user's own record
+    expect(record.residents).toEqual(["/a/one"]);
+    expect(record.names).toEqual({ "/a/one": "One" });
+    expect(record.launch).toEqual({ kind: "codex", model: "gpt-5.5", effort: "high" });
+  });
+
+  it("heals a raw file whose bound manager is padded, duplicated or cross-listed, to the canonical record", async () => {
+    const dir = temp();
+    const mgr = realpathSync(temp("herdr-manager-"));
+    const file = join(dir, "residents.json");
+    const down = async (): Promise<SessionSnapshot> => { throw new Error("down"); };
+    writeFileSync(file, JSON.stringify({
+      top: [` ${mgr} `, mgr, "/a/first"],
+      residents: ["/a/one", `${mgr}/`],
+      names: { "/a/one": " One ", "/gone": "gone" },
+      system_pin: { folder: `${mgr} `, workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term_1" },
+    }));
+    const s = store(file, mgr, down);
+    const residents = await s.read();
+    expect(residents.top).toEqual([mgr, "/a/first"]);
+    expect(residents.residents).toEqual(["/a/one"]);
+    expect(residents.names).toEqual({ "/a/one": "One" });
+    expect(residents.system_pin).toEqual(pinFor(mgr));
+    // the file itself is healed, not just the answer: it parses to the canonical record
+    expect(readFileSync(file, "utf8")).toBe(`${JSON.stringify(residents, null, 2)}\n`);
+  });
+
+  it("writes nothing when the file already holds the canonical record", async () => {
+    const dir = temp();
+    const mgr = realpathSync(temp("herdr-manager-"));
+    const file = join(dir, "residents.json");
+    const down = async (): Promise<SessionSnapshot> => { throw new Error("down"); };
+    const s = store(file, mgr, down);
+    writeFileSync(file, JSON.stringify({ top: [mgr, "/a/first"], residents: [], system_pin: pinFor(mgr) }));
+    const healed = await s.read(); // first read heals the compact file to the canonical record
+    expect(readFileSync(file, "utf8")).toBe(`${JSON.stringify(healed, null, 2)}\n`);
+    // a second read over that record writes nothing: persist renames a fresh temp file into
+    // place, which would give the file a new inode
+    const inode = statSync(file).ino;
+    expect(await s.read()).toEqual(healed);
+    expect(statSync(file).ino).toBe(inode);
+  });
 });
 
 describe("/api/residents", () => {
@@ -268,7 +336,9 @@ describe("/api/residents", () => {
     ]) {
       const response = await put(base, JSON.stringify(demoting));
       expect(response.status).toBe(409);
-      expect(((await response.json()) as { error: { code: string } }).error.code).toBe("system_pin_protected");
+      const error = ((await response.json()) as { error: { code: string; message: string } }).error;
+      expect(error.code).toBe("system_pin_protected");
+      expect(error.message).toBe("The manager is system pinned and cannot be unpinned");
     }
     // the saved record — the user's folders and names included — is untouched by a refusal
     expect(saved(file)).toEqual({ top: [mgr, "/a/first"], residents: ["/a/one"], names: { "/a/one": "One" }, system_pin: pinFor(mgr) });

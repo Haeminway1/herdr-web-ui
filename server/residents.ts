@@ -114,11 +114,13 @@ export class ResidentStore {
     return run;
   }
 
-  private load(): Residents {
+  /** `raw` is the record exactly as stored — undefined when the file is missing or unreadable. */
+  private load(): { raw: unknown; residents: Residents } {
     try {
-      return sanitizeResidents(JSON.parse(readFileSync(this.file, "utf8")));
+      const raw: unknown = JSON.parse(readFileSync(this.file, "utf8"));
+      return { raw, residents: sanitizeResidents(raw) };
     } catch {
-      return sanitizeResidents({});
+      return { raw: undefined, residents: sanitizeResidents({}) };
     }
   }
 
@@ -131,21 +133,27 @@ export class ResidentStore {
 
   async read(): Promise<Residents> {
     return this.enqueue(async () => {
-      const loaded = this.load();
+      const { raw, residents: loaded } = this.load();
       const normalized = normalizeSystemResident(loaded, await this.trustedPin(loaded.system_pin ?? null));
-      // a legacy, demoted or duplicated manager file is healed on read; a foreign pin dropped
-      if (JSON.stringify(normalized) !== JSON.stringify(loaded)) this.persist(normalized);
+      // a legacy, demoted or duplicated manager file is healed on read; a foreign pin dropped.
+      // the record on disk decides: one already parsing to the canonical state is left untouched
+      if (JSON.stringify(normalized) !== JSON.stringify(raw ?? loaded)) this.persist(normalized);
       return normalized;
     });
   }
 
   async write(value: unknown): Promise<Residents> {
     return this.enqueue(async () => {
-      const loaded = this.load();
+      const { residents: loaded } = this.load();
       // the trusted binding comes from the file and the snapshot; the body's own say-so never rules
       const pin = await this.trustedPin(loaded.system_pin ?? null);
       const requested = sanitizeResidents(value);
       if (pin !== null && (requested.top[0] !== pin.folder || requested.residents.includes(pin.folder))) {
+        // none of the request is applied, but the verified protection itself is saved when the
+        // record did not already carry it: the first operation ever may be a refused PUT, and
+        // the proof has to survive an outage afterwards
+        const protectedState = normalizeSystemResident(loaded, pin);
+        if (JSON.stringify(protectedState) !== JSON.stringify(loaded)) this.persist(protectedState);
         throw new SystemPinProtectedError();
       }
       const normalized = normalizeSystemResident(requested, pin);
@@ -159,7 +167,8 @@ export class ResidentStore {
  * GET /api/residents → the list, with the verified manager pin applied (and persisted when it
  * was missing, demoted or duplicated); PUT with a whole record replaces it and answers what was
  * kept. PUT is a PC-local mutation: same-origin plus the app's machine header, like the other
- * machine routes. Refusing a demotion answers 409 and leaves the saved record untouched.
+ * machine routes. Refusing a demotion answers 409 and applies nothing the request asked for —
+ * though the verified protection itself is persisted first, so an outage cannot unpin it.
  */
 export async function handleResidentsRequest(request: Request, store: ResidentStore): Promise<Response> {
   try {
@@ -176,7 +185,7 @@ export async function handleResidentsRequest(request: Request, store: ResidentSt
     }
     return jsonResponse(await store.write(payload));
   } catch (error) {
-    if (error instanceof SystemPinProtectedError) return conflictResponse("system_pin_protected", "The pinned manager stays first on this PC's list; it can only be closed in herdr itself");
+    if (error instanceof SystemPinProtectedError) return conflictResponse("system_pin_protected", "The manager is system pinned and cannot be unpinned");
     return errorResponse(error);
   }
 }
