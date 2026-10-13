@@ -1005,6 +1005,7 @@ export const KO: Record<string, string> = {
   "Resident agents": "상시 에이전트",
   "None yet": "아직 없음",
   "On top": "맨 위",
+  "System pinned": "시스템 고정",
   "Remove": "빼기",
   "Start resident agents with": "상시 에이전트 시작 방식",
   "A dim resident row starts this agent in its folder": "흐린 상시 행을 누르면 이 에이전트를 그 폴더에서 시작합니다",

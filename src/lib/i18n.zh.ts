@@ -1009,6 +1009,7 @@ export const ZH: Record<string, string> = {
   "Resident agents": "常驻智能体",
   "None yet": "暂无",
   "On top": "置顶",
+  "System pinned": "系统固定",
   "Remove": "移除",
   "Start resident agents with": "常驻智能体启动方式",
   "A dim resident row starts this agent in its folder": "点击灰色的常驻行会在其文件夹中启动此智能体",

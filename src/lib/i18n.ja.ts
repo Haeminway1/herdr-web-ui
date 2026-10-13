@@ -1007,6 +1007,7 @@ export const JA: Record<string, string> = {
   "Resident agents": "常駐エージェント",
   "None yet": "まだありません",
   "On top": "一番上",
+  "System pinned": "システム固定",
   "Remove": "外す",
   "Start resident agents with": "常駐エージェントの起動",
   "A dim resident row starts this agent in its folder": "薄い常駐の行を押すと、このエージェントをそのフォルダーで起動します",
