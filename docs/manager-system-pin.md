@@ -18,9 +18,9 @@ manager is trusted to live in. Exactly one workspace and exactly one pane may qu
 claimants is ambiguity, and ambiguity is never a pin. The pin the server answers is the
 `system_pin` record `{ folder, workspace_id, pane_id, terminal_id }` (`shared/residents.ts`).
 
-A `system_pin` read from the file or from a request body is metadata, never authority: the store
-re-verifies against a fresh snapshot on every GET and PUT. A pin whose folder is not the
-ownership root is dropped. On every response the manager's folder is normalized to `top[0]` and
+Request-body `system_pin` values are ignored. A well-formed binding in the trusted local state
+file is retained when its folder matches the ownership root. Fresh native snapshots re-verify
+the binding on every GET and PUT; a binding outside the ownership root is dropped. On every response the manager's folder is normalized to `top[0]` and
 removed from `residents`.
 
 What the client owes to that binding (`isSystemResidentPane`): the sidebar's protected row is
@@ -38,10 +38,10 @@ Two different things are protected, and they must not be confused:
   the latest snapshot, the *last validated binding* stands. An outage cannot unpin the manager,
   and a reconnect re-verifies the same pane. The client keeps showing the lock from the saved
   pin, and a demoting PUT still fails 409 `system_pin_protected`.
-- **Undeployed protection**: a `system_pin` record the server itself never verified — stored
-  before the feature existed, forged in a request body, or pointing at a folder outside the
-  ownership root — is dropped, not honored. Protection follows the verified binding only; nothing
-  persists an unverified one.
+- **Operational status**: the live version remains `6e2e4a1`. Its ordinary manager top pin
+  was restored without restarting the manager or changing its terminal, conversation or auth.
+  The system-pin implementation is tested in the isolated worktree and is not deployed.
+  Existing local state is trusted; untrusted request-body bindings are never accepted.
 
 Corollary for the UI: when the manager's pane is gone from the snapshot but the pin stands, the
 sidebar draws a locked ghost at the protected folder — selectable nowhere and never a "click to
@@ -73,8 +73,8 @@ in `scripts/ci-browser.sh`.
 
 ## Deployment
 
-Nothing is deployed or restarted for the pin itself; it is a behavior of the running server and
-client that ship together:
+Deploy the bridge server and client together through the existing release workflow. Deployment
+is outside this task. Never stop or restart the native manager to apply this feature:
 
 1. Land the server and client on a build that carries `system_pin` support. The route pair
    (`GET`/`PUT /api/residents`) is one handler; the client treats a missing `system_pin` as no
@@ -89,5 +89,5 @@ client that ship together:
    design, since the answer carries the last validated binding.
 
 To retire or move the pin: the server drops a binding whose folder is not the ownership root and
-heals the file on the next read. Never edit `residents.json` to create a pin — an unverified one
-is ignored — and never push a `system_pin` in a PUT body expecting it to stick.
+heals the file on the next read. Do not mint a binding by editing the trusted local state file; use native verification and
+the normal server flow. A `system_pin` in a PUT body is always ignored.
