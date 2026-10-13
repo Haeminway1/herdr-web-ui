@@ -380,10 +380,9 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
                   <div className="cl-pane-actions">
                     {residentsOn && pane.cwd && (() => {
                       const folder = residentFolder(pane.cwd, [...residents.top, ...residents.residents]);
-                      // the protected folder cannot come off the top from any row: a lock, not an unpinner
-                      if (folder !== null && folder === systemPin?.folder) {
-                        return <span className="cl-pane-lock" role="img" aria-label={t("System pinned")} title={t("System pinned")}><Lock size={15} aria-hidden="true" /></span>;
-                      }
+                      // the protected folder belongs to the verified manager pane alone: an
+                      // ordinary row that merely shares it gets neither the lock nor a pin action
+                      if (folder !== null && folder === systemPin?.folder) return null;
                       const name = cwdBasename(folder ?? pane.cwd);
                       return <button type="button" className={`cl-sidebar-row-action cl-pane-pin${folder ? " is-pinned" : ""}`} aria-label={folder ? t("Take {name} off residents", { name }) : t("Keep {name} resident", { name })} title={folder ? t("Take {name} off residents", { name }) : t("Keep {name} resident", { name })} onClick={() => void toggleResident(folder ?? pane.cwd!)}>
                         {folder ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}

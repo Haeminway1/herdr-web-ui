@@ -12,7 +12,7 @@ let current: Residents = DEFAULT_RESIDENTS;
 let loaded = false;
 let loading: Promise<void> | null = null;
 let mutating: Promise<void> = Promise.resolve();
-/** bumped when a mutation starts: a read begun before it would answer with older state */
+/** bumped when a mutation starts and again when it ends: a read begun before it finished would answer with older state */
 let epoch = 0;
 const listeners = new Set<() => void>();
 const notify = (): void => { for (const listener of listeners) listener(); };
@@ -23,9 +23,11 @@ async function load(): Promise<void> {
     const response = await fetch("/api/residents", { cache: "no-store" });
     if (!response.ok) return;
     const residents = sanitizeResidents(await response.json());
+    // a mutation begun or finished since this read started already holds a newer state than the answer
+    if (epoch !== seen) return;
+    current = residents;
     loaded = true;
-    // a mutation begun since this read started already holds a newer state than the answer
-    if (epoch === seen) { current = residents; notify(); }
+    notify();
   } catch { /* offline: the last list stays */ }
 }
 
@@ -46,8 +48,13 @@ export function updateResidents(change: (residents: Residents) => Residents): Pr
       const response = await fetch("/api/residents", { method: "PUT", headers: { "content-type": "application/json", "x-herdr-machine": "1" }, body: JSON.stringify(next) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       current = sanitizeResidents(await response.json());
+      // a read begun while this write was in flight must not revert what the server committed
+      epoch += 1;
+      loaded = true;
       notify();
     } catch {
+      // the rollback supersedes a read begun while the write was in flight just the same
+      epoch += 1;
       current = before;
       notify();
       // a refusal can mean the server pinned a manager this list never carried: read it back
