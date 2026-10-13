@@ -7,6 +7,11 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.803] - 2026-10-14
+
+### Fixed
+- Fork: the verified native manager stays system-pinned first, with locked desktop and mobile controls and server-side unpin protection. Other resident pins retain their settings and order.
+
 ### Changed
 - Fork: after v0.4.6, the pane area, tab strip and command palette look and work as before.
   Upstream's herdr-style panes (every pane of a split tab side by side, the tab strip's

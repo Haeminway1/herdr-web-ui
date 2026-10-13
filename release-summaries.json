@@ -1,4 +1,11 @@
 {
+  "0.4.803": {
+    "en": {"fixed": ["The native manager stays system-pinned first; desktop, phone and server requests cannot unpin it."]},
+    "ko": {"fixed": ["관리자를 최상단 시스템 고정으로 보호해 데스크톱·휴대폰·서버 요청으로 해제할 수 없게 했습니다."]},
+    "ja": {"fixed": ["管理エージェントを最上部にシステム固定し、デスクトップ・スマートフォン・サーバー要求による解除を防ぎます。"]},
+    "zh": {"fixed": ["管理代理始终作为系统固定项置顶，桌面、手机和服务器请求均无法取消固定。"]},
+    "tr": {"fixed": ["Yönetici en üstte sistem tarafından sabitlenir; masaüstü, telefon ve sunucu istekleri sabitlemeyi kaldıramaz."]}
+  },
   "0.4.8": {
     "en": {
       "new": [
