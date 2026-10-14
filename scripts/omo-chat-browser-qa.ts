@@ -114,10 +114,7 @@ try {
     return created.root_pane.pane_id;
   };
   const [paneA, paneB, paneL, paneN] = [await made(), await made(), await made(), await made()];
-  const snapshotPanes = (await sessionSnapshot()).panes;
-  const paneCwd = snapshotPanes.find((pane) => pane.pane_id === paneA)?.cwd;
-  assert.ok(typeof paneCwd === "string" && paneCwd !== "", "herdr reports the fixture pane's cwd");
-  assert.ok([paneB, paneL, paneN].every((id) => snapshotPanes.find((pane) => pane.pane_id === id)?.cwd === paneCwd), "all fixture panes share the cwd");
+  const paneCwd = root;
 
   const agentDirA = join(root, "alpha-agent");
   const agentDirB = join(root, "beta-agent");
@@ -137,16 +134,19 @@ try {
   // the default store resolves under HOME: keep it inside the fixture root
   process.env["HOME"] = root;
   const run = (launcher: string, dir: string, id: string, control: string) =>
-    `exec ${quote(process.execPath)} ${quote(launcher)} ${quote(dir)} ${quote(id)} ${quote(control)} ${quote(paneCwd)}`;
+    `cd ${quote(root)} && exec ${quote(process.execPath)} ${quote(launcher)} ${quote(dir)} ${quote(id)} ${quote(control)} ${quote(paneCwd)}`;
   await startShellAgent("omo", paneA, [], { command: `export OMO_CODING_AGENT_DIR=${quote(agentDirA)}; ${run(launcherA, dirA, SHARED_ID, controlA)}` });
   await startShellAgent("omo", paneB, [], { command: `export OMO_CODING_AGENT_DIR=${quote(agentDirB)}; ${run(launcherB, dirB, SHARED_ID, controlB)}` });
   await startShellAgent("omo", paneL, [], { command: run(launcherL, dirL, LEGACY_ID, controlL) });
   // a process with no omo evidence at all is sent raw, never through the agent start
-  await herdrRpc("pane.send_text", { pane_id: paneN, text: `exec ${quote(process.execPath)} ${quote(neutral)}\n` });
+  await herdrRpc("pane.send_text", { pane_id: paneN, text: `cd ${quote(root)} && exec ${quote(process.execPath)} ${quote(neutral)}\n` });
   await until("the neutral fixture runs", async () => {
     const info = await herdrRpc<{ process_info?: { foreground_processes?: { argv?: string[] }[] } }>("pane.process_info", { pane_id: paneN });
     return info.process_info?.foreground_processes ?? [];
   }, (procs) => procs.some((proc) => (proc.argv ?? []).includes(neutral)));
+
+  const snapshotPanes = (await sessionSnapshot()).panes;
+  assert.ok([paneA, paneB, paneL, paneN].every((id) => snapshotPanes.find((pane) => pane.pane_id === id)?.cwd === paneCwd), "all fixture panes share the cwd after their launch commands");
 
   // tailscaleOwner null: the plain-HTTP page below reaches the server under a name that is not
   // loopback, which a PC running Tailscale would otherwise send to pairing
