@@ -1666,6 +1666,7 @@ export function createServer(
   const collector = startStatusCollector({
     onStatus: (paneId, read, agent, replay) => {
       const raw = launchedAgents.settle(paneId, read);
+      gjc.poll();
       // read back from a snapshot around a gap between subscriptions. An OmO pane's status there
       // is OmO's own or herdr's by turns (server/omo-status.ts), and a difference is no change;
       // a GJC pane's may be a provider child's while gjc's own transcript is tracked
