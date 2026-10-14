@@ -25,6 +25,7 @@ const outcomes: { scenario: string; outcome: "passed" }[] = [];
 let server: ReturnType<typeof createServer> | undefined, browser: Browser | undefined;
 let statusSocket: WebSocket | undefined, page: Page | undefined;
 let socketError: Error | undefined, origin = "", scenario = "fixture setup";
+let deferredCleanupError: AggregateError | undefined;
 
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
@@ -250,7 +251,10 @@ console.log(JSON.stringify({ type: "broker_response", ok: true, result: {
         try {
           const cleanup = await Promise.allSettled(workspaces.map((id) => workspaceClose(id)));
           const failures = cleanup.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
-          if (failures.length) throw new AggregateError(failures, "Owned GJC workspace cleanup failed");
+          if (failures.length) {
+            deferredCleanupError = new AggregateError(failures, "Owned GJC workspace cleanup failed");
+            console.error(deferredCleanupError);
+          }
         } finally {
           if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
           if (oldSocket === undefined) delete process.env.HERDR_SOCKET; else process.env.HERDR_SOCKET = oldSocket;
@@ -261,3 +265,4 @@ console.log(JSON.stringify({ type: "broker_response", ok: true, result: {
     }
   }
 }
+if (deferredCleanupError) throw deferredCleanupError;
