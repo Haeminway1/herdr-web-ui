@@ -1,12 +1,12 @@
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, readFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, herdrSocketPath, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
-import { gjcTranscriptForPane, gjcTerminal, isGjcProcess } from "../server/gjc-runtime.ts";
+import { gjcTranscriptForPane, isGjcProcess } from "../server/gjc-runtime.ts";
 import { UsageService } from "../server/usage.ts";
 import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
 
@@ -15,6 +15,9 @@ type NativeRecord = Readonly<Record<string, unknown>>;
 const root = mkdtempSync(join(tmpdir(), "herdr-gjc-status-browser-"));
 const store = join(root, ".gjc", "agent", "sessions", "v2-fixture");
 const script = join(root, "gjc");
+const oldPath = process.env.PATH;
+const sdkRows: Record<string, unknown>[] = [];
+const sdkRegistry = join(root, "sdk-fixture.json");
 const oldHome = process.env.HOME, oldSocket = process.env.HERDR_SOCKET;
 const evidenceDirectory = process.env.UI_EVIDENCE_DIR || process.env.CHECK_BROWSER_EVIDENCE_DIR;
 const workspaces: string[] = [], frames: ServerMessage[] = [];
@@ -59,21 +62,21 @@ async function fixture(transcript: string): Promise<string> {
   const result = await workspaceCreate({ cwd: root, label: "Synthetic GJC status" });
   workspaces.push(result.workspace.workspace_id);
   const paneId = result.root_pane.pane_id;
-  await herdrRpc("pane.send_text", { pane_id: paneId, text: `${quote(process.execPath)} ${quote(script)} ${quote(transcript)}\n` });
+  await herdrRpc("pane.send_text", { pane_id: paneId, text: `cd ${quote(root)} && ${quote(process.execPath)} ${quote(script)} ${quote(transcript)}\n` });
   let foreground: { pid: number; argv?: string[] } | undefined;
   await until(async () => {
     const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; argv?: string[] }[] } }>("pane.process_info", { pane_id: paneId });
     foreground = info.process_info?.foreground_processes?.find((item) => item.argv?.includes(script));
     return foreground !== undefined;
-  }, "owned GJC descriptor process");
+  }, "owned GJC process");
   assert.ok(foreground?.argv);
   assert.ok(isGjcProcess(foreground.argv), "fixture must be recognized as GJC");
-  const terminal = gjcTerminal(foreground.pid);
-  if (terminal) {
-    const directory = join(root, ".gjc", "agent", "terminal-sessions");
-    mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, terminal.id), `${root}\n${transcript}\n`);
-  }
+  const header: { id: string } = JSON.parse(readFileSync(transcript, "utf8").split("\n")[0] ?? "");
+  sdkRows.push({ sessionId: header.id, pid: foreground.pid, hostIncarnation: "owned-fixture",
+    endpointGeneration: 1, identityProvenance: "composite", live: true, terminal: false,
+    terminalUncertain: false, ambiguous: false,
+    locator: { cwd: root, worktreeRoot: null, stateRoot: join(root, ".gjc", "agent") }, path: transcript });
+  writeFileSync(sdkRegistry, JSON.stringify(sdkRows));
   await until(async () => await gjcTranscriptForPane(paneId, root, root) === transcript, "exact native transcript binding");
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "gjc", state: "working" });
   await herdrRpc("pane.report_agent_session", { pane_id: paneId, source: "herdr:codex", agent: "codex", seq: Date.now(), agent_session_id: "01a00000-0000-7000-8000-000000000001" });
@@ -133,6 +136,22 @@ function passed(): void {
 process.env.HERDR_SOCKET = herdrSocketPath();
 process.env.HOME = root;
 try {
+  const sdkBin = join(root, "bin");
+  mkdirSync(sdkBin);
+  const sdkCommand = join(sdkBin, "gjc");
+  writeFileSync(sdkCommand, `#!${process.execPath}
+import { readFileSync } from "node:fs";
+const rows = JSON.parse(readFileSync(${JSON.stringify(sdkRegistry)}, "utf8"));
+const at = process.argv.indexOf("--json-input");
+const input = at < 0 ? {} : JSON.parse(process.argv[at + 1]);
+const row = rows.find((candidate) => candidate.sessionId === input.resolveSessionId);
+console.log(JSON.stringify({ type: "broker_response", ok: true, result: {
+  indexSeq: 1, sessions: rows, continuationCursor: null,
+  savedSession: row ? { id: row.sessionId, path: row.path } : null,
+} }));
+`);
+  chmodSync(sdkCommand, 0o755);
+  process.env.PATH = `${sdkBin}:${oldPath ?? ""}`;
   mkdirSync(store, { recursive: true });
   if (evidenceDirectory) mkdirSync(evidenceDirectory, { recursive: true });
   writeFileSync(script, "import { openSync } from 'node:fs'; globalThis.held = openSync(process.argv[2], 'r'); console.log('Synthetic GJC fixture'); setInterval(() => {}, 1000);\n");
@@ -235,6 +254,7 @@ try {
         } finally {
           if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
           if (oldSocket === undefined) delete process.env.HERDR_SOCKET; else process.env.HERDR_SOCKET = oldSocket;
+          if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
           rmSync(root, { recursive: true, force: true });
         }
       }
