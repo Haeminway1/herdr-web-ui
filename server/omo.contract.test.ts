@@ -29,7 +29,7 @@ async function launch(command: string, marker: string): Promise<string> {
   for (let attempt = 0; attempt < 100; attempt++) {
     const info = await herdrRpc<{ process_info?: { foreground_processes?: { argv?: string[] }[] } }>("pane.process_info", { pane_id: paneId });
     // the stand-in itself, by its path: the shell's own startup processes come and go before it
-    if (info.process_info?.foreground_processes?.some((process) => process.argv?.includes(marker))) return paneId;
+    if (info.process_info?.foreground_processes?.some((entry) => entry.argv?.includes(marker) && entry.argv[0] === process.execPath)) return paneId;
     await Bun.sleep(50);
   }
   throw new Error("test omo process did not start");
@@ -105,8 +105,14 @@ it("starts omo through the pane's shell and waits until omo is its foreground pr
 
 // omo keeps no descriptor on its session file; it publishes a holder record instead
 const hold = async (paneId: string, id: string, store = dir, marker = script) => {
-  const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; argv?: string[] }[] } }>("pane.process_info", { pane_id: paneId });
-  const pid = info.process_info!.foreground_processes!.find((process) => process.argv?.includes(marker))!.pid;
+  let pid: number | undefined;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const info = await herdrRpc<{ process_info?: { foreground_processes?: { pid: number; argv?: string[] }[] } }>("pane.process_info", { pane_id: paneId });
+    const candidate = info.process_info?.foreground_processes?.find((entry) => entry.argv?.includes(marker) && entry.argv[0] === process.execPath)?.pid;
+    if (candidate !== undefined && processStartedAt(candidate) !== null) { pid = candidate; break; }
+    await Bun.sleep(50);
+  }
+  if (pid === undefined) throw new Error(`test holder process did not become ready: ${marker}`);
   const holders = join(store, "session-holders", encodeURIComponent(id));
   mkdirSync(holders, { recursive: true });
   writeFileSync(join(holders, `${pid}.json`), JSON.stringify({ pid, bootAtMs: 0, processStartedAtMs: Math.floor(processStartedAt(pid)! / 1000) * 1000, cwd: root }));
