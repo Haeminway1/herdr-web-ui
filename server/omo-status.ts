@@ -85,6 +85,7 @@ const workingScreens = new WeakSet<HerdrPane>();
 
 export async function correctOmoBlockedPanes(panes: readonly HerdrPane[], readScreen: OmoScreenReader): Promise<HerdrPane[]> {
   return Promise.all(panes.map(async (pane) => {
+    if (pane.agent_status !== "blocked" && pane.agent_status !== "working") return pane;
     if (!isOmoStatusCandidate(pane.agent) && pane.agent_session?.agent !== "omo") return pane;
     const screen = await readScreen(pane.pane_id).catch(() => null);
     if (screen === null || !omoScreenShowsWork(screen)) return pane;

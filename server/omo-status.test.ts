@@ -324,7 +324,7 @@ describe("OmO panes' status in place of herdr's", () => {
     expect(told.at(-1)).toEqual(["omo", "idle", 0, true]);
   });
 
-  it.each(["blocked", "working", "idle"])("keeps a current Working footer through transcript normalization from raw %s and tells screen-only changes", async (rawStatus) => {
+  it.each(["blocked", "working"])("keeps a current Working footer through transcript normalization from raw %s and tells screen-only changes", async (rawStatus) => {
     const { omo, told, state } = setup(lines(asking("queued", false), acceptedResult("queued"), message("assistant", "stop")));
     const raw = () => snapshotOf(pane("omo", "pi", rawStatus));
     const working = "── • Working (1m 33s • esc to interrupt) ──\n❯\n────────\n(😺 OmO Native by Q Kim) Pursuing goal (9m) ◉ watching SWE-2 Max worker (2m)";
