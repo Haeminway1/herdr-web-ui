@@ -81,6 +81,8 @@ export async function checkAttentionInbox(browser: Browser, origin: string): Pro
       const state = snapshot.panes.find((candidate) => candidate.pane_id === pane)?.attention;
       return !!state && state.finished_at > before && state.seen_at !== null && state.seen_at >= state.finished_at;
     }, { pane: answerPane, before: read.finished_at! }, { polling: 250 });
+    // the page catches up with the server's read mark on its next roster
+    await answerRow(toRead).waitFor({ state: "detached", timeout: 10_000 });
     assert.equal(await answerRow(toRead).count(), 0, "a pane finishing in front of the user is read already");
     console.log("PASS a pane that finishes while open is read at once");
     assert.deepEqual(errors, []);

@@ -55,7 +55,7 @@ async function assertKeyline(page: Page, theme: string): Promise<void> {
 /**
  * In-app alerts on a phone-sized page: real herdr status changes reach the open app, which
  * drops a card for a pane other than the open one (and none for the open one). A tap opens
- * that pane; a flick up puts one away; one left alone goes by itself.
+ * that pane; a flick up puts one away (fork: the island has no close button); one left alone goes by itself.
  */
 export async function checkDroplet(browser: Browser, origin: string): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-droplet-"));

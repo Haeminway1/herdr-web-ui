@@ -1,5 +1,5 @@
 import type { AgentStatus, HerdrPane } from "../shared/protocol.ts";
-import { HerdrError, herdrRpc, paneRead, subscribeEvents, type EventFrame, type Subscription } from "./herdr/client.ts";
+import { HerdrError, paneRead, sessionSnapshot, subscribeEvents, type EventFrame, type Subscription } from "./herdr/client.ts";
 import { correctOmoBlockedPanes, correctedOmoStatus, isOmoStatusCandidate, type OmoScreenReader } from "./omo-status.ts";
 
 /**
@@ -107,7 +107,7 @@ export interface StatusCollectorDeps {
 
 const DEFAULT_DEPS: StatusCollectorDeps = {
   subscribe: subscribeEvents,
-  snapshot: async () => (await herdrRpc<{ snapshot: { panes: HerdrPane[] } }>("session.snapshot", {})).snapshot,
+  snapshot: () => sessionSnapshot(),
   omoScreen: async (paneId) => (await paneRead({ paneId, source: "visible", format: "text" })).text,
   reconnectMinMs: RECONNECT_MIN_MS,
   reconnectMaxMs: RECONNECT_MAX_MS,

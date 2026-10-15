@@ -5,12 +5,15 @@
  * `--term-*` tokens of each theme for PaneTerminal's theme object.
  */
 
-import { REPORTED_SETTINGS, type ReportedSetting } from "../../shared/telemetry.ts";
+import type { TelemetrySettings } from "../../shared/telemetry.ts";
+import { SHARED_SETTING_KEYS, type SharedSettingKey } from "../../shared/preferences.ts";
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
 import type { AlertPrefs, DoneAlerts } from "../../shared/notify-policy.ts";
 import { chatFontStack, sanitizeFontFamily } from "./fontFamily.ts";
+import { fontScale, sanitizeUiFontSize } from "./typography.ts";
 import { sanitizeKeyBarExtras, type KeyBarExtra } from "./keys.ts";
+import { paletteFor } from "./paletteFor.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems, sanitizeKeyBarItems, type KeyBarItem } from "./keyBar.ts";
 
 export type ThemeSetting = "dark" | "light" | "system";
@@ -27,9 +30,13 @@ export type SidebarGrouping = "repo" | "directory" | "workspace";
  * navigator.webdriver) starts on upstream's, which upstream's UI regressions are written against.
  */
 const AUTOMATED = typeof navigator !== "undefined" && navigator.webdriver === true;
+/** fork: an automation browser starts on upstream's defaults (see AUTOMATED) */
+export const automatedBrowser = AUTOMATED;
 const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = AUTOMATED ? "agents" : "classic";
 /** the Agents list's order: herdr's workspace order, or a waiting agent first and then the latest change */
 export type AgentOrder = "workspace" | "activity";
+/** how agent logos are drawn: in their brand colors, or without color: Claude's in the text color, the others in grey (data-marks on <html>) */
+export type AgentMarks = "color" | "mono";
 /** what the plan meters count: the share of a limit used, or what is left of it */
 export type UsageCount = "used" | "left";
 /** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
@@ -64,11 +71,8 @@ export const DICTATION_LANGUAGES = [
 export type DictationLanguage = "auto" | (typeof DICTATION_LANGUAGES)[number];
 /** the lens a pane opens in until it is switched there: auto is chat for an agent on a touch screen, else terminal */
 export type DefaultView = "auto" | "chat" | "terminal";
-/** the terminal cursor's shape (xterm's cursorStyle); a program can still change it with DECSCUSR */
-export type TerminalCursorStyle = "block" | "bar" | "underline";
-export const TERMINAL_CURSOR_STYLES: readonly TerminalCursorStyle[] = ["block", "bar", "underline"];
-
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "./shortcutBindings.ts";
+import type { StatusIndicators } from "./status.ts";
 
 export interface Settings {
   terminalInputMode: "auto" | "line" | "direct";
@@ -98,30 +102,29 @@ export interface Settings {
   openLastWork: boolean;
   /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
   agentOrder: AgentOrder;
-  /** In the Workspaces order, each workspace's agents sit in a card under its name. */
-  agentCards: boolean;
-  /** Each agent row carries a star that keeps it on top of the Agents list. */
-  agentPins: boolean;
   /** A plan opens as a flow of boxes with a switch to its list; off, as the list alone. */
   planFlow: boolean;
   /** The header carries the selected pane's plan count, which opens the plan. */
   planButton: boolean;
   /** fork: upstream #846's plan inside the composer's background-task chip instead of the header button and its dialog */
   planInChip: boolean;
-  /** a DONE opened here since it finished reads as ready, as herdr's own view would make it (per browser and PC) */
-  quietOpenedDone: boolean;
-  /** the chrome color family, keyed as data-palette in src/styles.css */
-  palette: Palette;
+  /** fork: upstream #951's strip under the message box naming the pane's folder and branch, off as before it */
+  composerStrip: boolean;
   /** Claude panes: the Anthropic logo, or the Claude Code mascot */
   claudeMark: ClaudeMarkStyle;
   /** Codex panes: the OpenAI logo, or the blue Codex app icon */
   codexMark: CodexMarkStyle;
+  /** Agent logos: brand colors, or without color, so a list of one agent is not a stripe of tiles */
+  agentMarks: AgentMarks;
+  /** the sidebar's state marks: this app's own, or herdr's dots or symbols, as its `[ui] status_indicators` (lib/status.ts) */
+  statusIndicators: StatusIndicators;
+  /** the chrome color family, keyed as data-palette in src/styles.css */
+  palette: Palette;
+  /** System theme only: the palette drawn while the OS is light, and while it is dark (see paletteFor) */
+  paletteLight: Palette;
+  paletteDark: Palette;
   /** xterm font size in px */
   terminalFontSize: number;
-  /** xterm cursorStyle; a program's own DECSCUSR still changes it, as before this setting existed */
-  terminalCursorStyle: TerminalCursorStyle;
-  /** xterm cursorBlink */
-  terminalCursorBlink: boolean;
   /** mouse reports sent to herdr per wheel event in the terminal: 1 is what xterm sends by itself */
   terminalWheelSpeed: number;
   /** fonts tried before the built-in terminal stack, as a CSS font-family list; "" keeps the built-in one */
@@ -134,19 +137,23 @@ export interface Settings {
   /** a desktop tab out of use for a moment detaches its pane (PaneTerminal's release) and only watches it, so herdr's own
    *  window keeps the pane at its size; paused where the server cannot watch. Off: the tab keeps the pane and its size. */
   releasePaneAway: boolean;
-  /** a split pane under 80 columns draws in a smaller font to reach them (lib/narrowPaneFont.ts). Off: every pane keeps terminalFontSize. */
-  narrowPaneFont: boolean;
-  /** chat text size in px (its body text; the rest scales with it); null follows the density */
+  /** chat text size in px (its body text; the rest scales with it); null follows the interface size */
   chatFontSize: number | null;
   /** fonts tried before the UI font in the chat's prose (code stays mono), as a CSS font-family list; "" keeps the UI font */
   chatFontFamily: string;
+  /** the interface's body size in px (--fs-md; every other --fs-* scales with it as --ui-scale); null follows the density.
+   *  The chat follows it until it has a size of its own; the terminal keeps terminalFontSize */
+  uiFontSize: number | null;
   /** how wide the chat lane may run on a large screen, keyed as data-chat-width in src/styles.css; default follows the pane
-   *  (chatLaneWidth, written by PaneTerminal); a narrower pane is never affected */
+   *  (chatLaneWidth, written by lib/chatLane.ts); a narrower pane is never affected */
   chatWidth: ChatWidth;
   /** true: Enter sends in the composer, Shift+Enter breaks the line; false: Ctrl/Cmd+Enter sends */
   enterSends: boolean;
   /** true: a message sent while the agent works goes by itself when the turn ends; false: it waits for Send now */
   autoSendQueued: boolean;
+  /** on a touch screen, a chip above the message box offers the prompt the agent suggests next.
+   * Not `showSuggestionChip`: that key was on by default until 0.4.9 and is still stored on phones */
+  suggestionChip: boolean;
   /** show the agent's folded reasoning blocks in the chat view */
   showThinking: boolean;
   /** request a screen wake lock while a pane is open in this visible tab */
@@ -167,13 +174,9 @@ export interface Settings {
   quickReplies: string[];
   /** whether the quick replies show above the composer at all */
   showQuickReplies: boolean;
-  /** touch screens: a chip above the message box takes the prompt Claude suggests next */
-  showSuggestionChip: boolean;
   /** the plan meters beside Settings in the sidebar (GET /api/usage); off until chosen, as it sends this PC's sign-ins out */
   showUsage: boolean;
   usageCount: UsageCount;
-  /** the meters show each limit's pace: the mark of an even pace, the rate so far and when it runs out before its reset. Off: none of it. */
-  usagePace: boolean;
   usageGlance: UsageGlance;
   /** fork: chips beside Settings, or the panel at the top of the sidebar */
   usagePlacement: UsagePlacement;
@@ -190,13 +193,120 @@ export interface Settings {
   voicePolishChat: boolean;
   /** off by default: a terminal line is usually a command, kept as spoken */
   voicePolishTerminal: boolean;
-  /** code is colored by its language; off, it is plain text */
-  highlightCode: boolean;
+  /** the file viewer wraps long lines instead of scrolling sideways */
+  wrapCode: boolean;
+  /** the width of a Markdown preview: the chat's lane (--chat-w), centered, or the viewer's width */
+  markdownWidth: MarkdownWidth;
+  /** a repository diff as one column of old and new lines, or the two side by side (a phone shows one column either way) */
+  diffStyle: DiffStyle;
 }
 
-/** The appearance settings that differ from their defaults, by name: what the anonymous counts tell (shared/telemetry.ts). */
-export function changedSettings(settings: Settings): ReportedSetting[] {
-  return REPORTED_SETTINGS.filter((name) => settings[name] !== DEFAULT_SETTINGS[name]);
+export const MARKDOWN_WIDTHS = ["readable", "full"] as const;
+export type MarkdownWidth = (typeof MARKDOWN_WIDTHS)[number];
+export const DIFF_STYLES = ["unified", "split"] as const;
+export type DiffStyle = (typeof DIFF_STYLES)[number];
+
+/** Raw custom text, key combinations and account keys are never copied. Requiring every other
+ * Settings field in the projection makes a new field require an explicit collection decision. */
+type TelemetrySourceSettings = Omit<Settings,
+  "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
+  | "quickReplies" | "usageOrder" | "usageHidden"
+  // fork settings: the telemetry Worker refuses a snapshot with a key it does not know
+  | "dashboardSidebar" | "sidebarLayout" | "sidebarGrouping" | "tuiPanes" | "openLastWork" | "planFlow" | "planButton"
+  | "planInChip" | "composerStrip" | "claudeMark" | "codexMark" | "usagePlacement">;
+
+/** Compare structured custom settings by content against this app's built-in defaults. */
+function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
+  return JSON.stringify(value) !== JSON.stringify(defaultValue);
+}
+
+/** fork: the telemetry Worker knows upstream's three palettes only; a fork palette counts as the default it stands in for */
+function upstreamPalette(palette: Palette): "amber" | "charcoal" | "catppuccin" {
+  return palette === "charcoal" || palette === "catppuccin" ? palette : "amber";
+}
+
+/** Full allowlisted snapshot. Text and account-key values are only used for safe summaries. */
+export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings & TelemetrySourceSettings {
+  return {
+    terminalInputMode: settings.terminalInputMode,
+    theme: settings.theme,
+    density: settings.density,
+    sidebarRows: settings.sidebarRows,
+    agentOrder: settings.agentOrder,
+    agentMarks: settings.agentMarks,
+    statusIndicators: settings.statusIndicators,
+    palette: upstreamPalette(settings.palette),
+    paletteLight: upstreamPalette(settings.paletteLight),
+    paletteDark: upstreamPalette(settings.paletteDark),
+    terminalFontSize: settings.terminalFontSize,
+    terminalWheelSpeed: settings.terminalWheelSpeed,
+    paneClipboard: settings.paneClipboard,
+    releasePaneAway: settings.releasePaneAway,
+    chatFontSize: settings.chatFontSize,
+    uiFontSize: settings.uiFontSize,
+    chatWidth: settings.chatWidth,
+    enterSends: settings.enterSends,
+    autoSendQueued: settings.autoSendQueued,
+    suggestionChip: settings.suggestionChip,
+    showThinking: settings.showThinking,
+    keepScreenOn: settings.keepScreenOn,
+    language: settings.language,
+    alertsOn: settings.alertsOn,
+    alertInput: settings.alertInput,
+    alertDone: settings.alertDone,
+    alertInApp: settings.alertInApp,
+    alertSound: settings.alertSound,
+    showQuickReplies: settings.showQuickReplies,
+    showUsage: settings.showUsage,
+    usageCount: settings.usageCount,
+    usageGlance: settings.usageGlance,
+    defaultView: settings.defaultView,
+    voiceInput: settings.voiceInput,
+    voiceLanguage: settings.voiceLanguage,
+    voicePolishChat: settings.voicePolishChat,
+    voicePolishTerminal: settings.voicePolishTerminal,
+    wrapCode: settings.wrapCode,
+    markdownWidth: settings.markdownWidth,
+    diffStyle: settings.diffStyle,
+    terminalFontCustom: settings.terminalFontFamily !== DEFAULT_SETTINGS.terminalFontFamily,
+    chatFontCustom: settings.chatFontFamily !== DEFAULT_SETTINGS.chatFontFamily,
+    shortcutsCustom: differsFromDefault(settings.shortcutOverrides, DEFAULT_SETTINGS.shortcutOverrides),
+    keyBarCustom: differsFromDefault(settings.keyBarItems, DEFAULT_SETTINGS.keyBarItems)
+      || differsFromDefault(settings.keyBarExtras, DEFAULT_SETTINGS.keyBarExtras),
+    quickRepliesCustom: differsFromDefault(settings.quickReplies, DEFAULT_SETTINGS.quickReplies),
+    quickReplyCount: settings.quickReplies.length,
+    usageHiddenCount: settings.usageHidden.length,
+    usageOrderCustom: settings.usageOrder.length > 0,
+  };
+}
+
+/**
+ * Which settings every browser of this server shares (shared/preferences.ts, lib/preferencesSync.ts)
+ * and which stay this device's: its screen, keyboard, terminal, alerts and microphone. A new setting
+ * must be placed here, or the build fails; when in doubt it is the device's.
+ */
+export const SETTING_SCOPE = {
+  theme: "shared", palette: "shared", language: "shared", sidebarRows: "shared", agentOrder: "shared",
+  agentMarks: "shared", autoSendQueued: "shared", showThinking: "shared", quickReplies: "shared",
+  showQuickReplies: "shared", showUsage: "shared", usageCount: "shared",
+  usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device", suggestionChip: "device",
+  terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", shortcutOverrides: "device", density: "device",
+  terminalFontSize: "device",
+  terminalWheelSpeed: "device", terminalFontFamily: "device", paneClipboard: "device", releasePaneAway: "device",
+  chatFontSize: "device", chatFontFamily: "device", uiFontSize: "device", chatWidth: "device", enterSends: "device",
+  keepScreenOn: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertInApp: "device", alertSound: "device",
+  paletteLight: "device", paletteDark: "device", statusIndicators: "device",
+  voiceInput: "device", voiceLanguage: "device", voicePolishChat: "device", voicePolishTerminal: "device",
+  // Viewer layout follows this screen, as chatWidth does.
+  wrapCode: "device", markdownWidth: "device", diffStyle: "device",
+  // fork settings (DEPLOY-FORK.md) stay each device's, as they were before settings were shared
+  dashboardSidebar: "device", sidebarLayout: "device", sidebarGrouping: "device", tuiPanes: "device", openLastWork: "device",
+  planFlow: "device", planButton: "device", planInChip: "device", composerStrip: "device", claudeMark: "device", codexMark: "device", usagePlacement: "device",
+} as const satisfies Record<keyof Settings, "shared" | "device">;
+
+/** The shared part of `settings`, by the names shared/preferences.ts lists. */
+export function sharedSettings(settings: Settings): Partial<Record<SharedSettingKey, unknown>> {
+  return Object.fromEntries(SHARED_SETTING_KEYS.map((key) => [key, settings[key]]));
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -216,26 +326,28 @@ export const DEFAULT_SETTINGS: Settings = {
   claudeMark: "logo",
   codexMark: "logo",
   agentOrder: "workspace",
-  agentCards: false,
-  agentPins: false,
   planFlow: true,
   planButton: true,
   // fork: the header's plan button stays the default; automation starts on upstream's chip, which its UI tests check
   planInChip: AUTOMATED,
-  quietOpenedDone: false,
+  composerStrip: AUTOMATED,
+  agentMarks: "color",
+  statusIndicators: "classic",
+  paletteLight: "report",
+  paletteDark: "report",
   terminalFontSize: 13,
-  terminalCursorStyle: "block",
-  terminalCursorBlink: true,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
   paneClipboard: true,
   releasePaneAway: false,
-  narrowPaneFont: true,
   chatFontSize: null,
   chatFontFamily: "",
+  uiFontSize: null,
   chatWidth: "default",
   enterSends: true,
   autoSendQueued: true,
+  // fork: the chip stays on as before upstream #1185 (automation starts on upstream's off)
+  suggestionChip: !AUTOMATED,
   showThinking: false,
   keepScreenOn: false,
   language: "system",
@@ -246,12 +358,10 @@ export const DEFAULT_SETTINGS: Settings = {
   alertSound: false,
   quickReplies: ["continue", "yes", "no", "commit and push", "retry"],
   showQuickReplies: false,
-  showSuggestionChip: true,
   // fork deployment: the plan meters on by default, at the top of the sidebar
   showUsage: true,
   usageCount: "used",
   usagePlacement: "top",
-  usagePace: false,
   defaultView: "auto",
   usageGlance: "week",
   usageOrder: [],
@@ -260,7 +370,9 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceLanguage: "auto",
   voicePolishChat: true,
   voicePolishTerminal: false,
-  highlightCode: true,
+  wrapCode: false,
+  markdownWidth: "readable",
+  diffStyle: "unified",
 };
 
 export const QUICK_REPLIES_MAX = 12;
@@ -298,6 +410,8 @@ export function alertPrefs(settings: Settings): AlertPrefs {
   return { input: settings.alertInput, done: settings.alertDone };
 }
 
+const PALETTES: readonly Palette[] = ["amber", "report", "charcoal", "catppuccin", "lilac", "forest"];
+
 const STORAGE_KEY = "herdr-web-ui:settings";
 export const TERMINAL_FONT_MIN = 10;
 export const TERMINAL_FONT_MAX = 22;
@@ -306,16 +420,21 @@ export const TERMINAL_WHEEL_SPEED_MAX = 10;
 
 export const CHAT_FONT_MIN = 11;
 export const CHAT_FONT_MAX = 24;
-/** each density's body size, --fs-md in src/styles.css: the chat's size when none is chosen */
-const CHAT_BASE_FONT: Record<Density, number> = { comfortable: 14, compact: 13 };
+/** each density's body size, --fs-md in src/styles.css: the interface's size when none is chosen, and through it the chat's */
+const BODY_FONT: Record<Density, number> = { comfortable: 14, compact: 13 };
 
 function clampFont(size: number): number {
   return Math.min(TERMINAL_FONT_MAX, Math.max(TERMINAL_FONT_MIN, Math.round(size)));
 }
 
-/** The chat's body text size in px: the chosen one, or the density's. */
+/** The interface's body text size in px: the chosen one, or the density's. */
+export function uiFontSize(settings: Settings): number {
+  return settings.uiFontSize ?? BODY_FONT[settings.density];
+}
+
+/** The chat's body text size in px: the chosen one, or the interface's. */
 export function chatFontSize(settings: Settings): number {
-  return settings.chatFontSize ?? CHAT_BASE_FONT[settings.density];
+  return settings.chatFontSize ?? uiFontSize(settings);
 }
 
 /** The Default chat lane never runs narrower than this, in px: --content-w, the Narrow step. */
@@ -336,7 +455,7 @@ function chatLaneFollow(paneWidth: number): number {
 }
 
 /**
- * The Default chat lane for a pane this wide, as the CSS length PaneTerminal writes to --chat-w:
+ * The Default chat lane for a pane this wide, as the CSS length lib/chatLane.ts writes to --chat-w:
  * 71.43% of the pane, min 820px, max 60rem.
  * A length with no percentage in it: the lane's columns sit in boxes of different widths (the
  * transcript and the composer column inside a gutter, the held list and the menus outside it),
@@ -363,6 +482,7 @@ export function chatLaneWidth(paneWidth: number, rootFontPx: number = ROOT_FONT_
 export function sanitizeSettings(raw: unknown): Settings {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   const theme = record["theme"];
+  const palette = PALETTES.find((name) => name === record["palette"]) ?? DEFAULT_SETTINGS.palette;
   const density = record["density"];
   const font = record["terminalFontSize"];
   const chatFont = record["chatFontSize"];
@@ -386,18 +506,17 @@ export function sanitizeSettings(raw: unknown): Settings {
     claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
     codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,
     agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
-    agentCards: record["agentCards"] === true,
-    agentPins: record["agentPins"] === true,
     planFlow: record["planFlow"] !== false,
     planButton: record["planButton"] !== false,
     planInChip: typeof record["planInChip"] === "boolean" ? record["planInChip"] : DEFAULT_SETTINGS.planInChip,
-    quietOpenedDone: record["quietOpenedDone"] === true,
-    palette: record["palette"] === "amber" || record["palette"] === "report" || record["palette"] === "charcoal" || record["palette"] === "catppuccin" || record["palette"] === "lilac" || record["palette"] === "forest" ? record["palette"] : DEFAULT_SETTINGS.palette,
+    composerStrip: typeof record["composerStrip"] === "boolean" ? record["composerStrip"] : DEFAULT_SETTINGS.composerStrip,
+    agentMarks: record["agentMarks"] === "color" || record["agentMarks"] === "mono" ? record["agentMarks"] : DEFAULT_SETTINGS.agentMarks,
+    statusIndicators: record["statusIndicators"] === "classic" || record["statusIndicators"] === "dots" || record["statusIndicators"] === "symbols" ? record["statusIndicators"] : DEFAULT_SETTINGS.statusIndicators,
+    palette,
+    // a record from before the pair starts both from its one palette, so System mode looks as it did
+    paletteLight: PALETTES.find((name) => name === record["paletteLight"]) ?? palette,
+    paletteDark: PALETTES.find((name) => name === record["paletteDark"]) ?? palette,
     terminalFontSize: typeof font === "number" && Number.isFinite(font) ? clampFont(font) : DEFAULT_SETTINGS.terminalFontSize,
-    terminalCursorStyle: TERMINAL_CURSOR_STYLES.includes(record["terminalCursorStyle"] as TerminalCursorStyle)
-      ? record["terminalCursorStyle"] as TerminalCursorStyle
-      : DEFAULT_SETTINGS.terminalCursorStyle,
-    terminalCursorBlink: typeof record["terminalCursorBlink"] === "boolean" ? record["terminalCursorBlink"] : DEFAULT_SETTINGS.terminalCursorBlink,
     terminalWheelSpeed: typeof record["terminalWheelSpeed"] === "number" && Number.isFinite(record["terminalWheelSpeed"])
       ? Math.min(TERMINAL_WHEEL_SPEED_MAX, Math.max(TERMINAL_WHEEL_SPEED_MIN, Math.round(record["terminalWheelSpeed"])))
       : DEFAULT_SETTINGS.terminalWheelSpeed,
@@ -405,13 +524,15 @@ export function sanitizeSettings(raw: unknown): Settings {
       ? Math.min(CHAT_FONT_MAX, Math.max(CHAT_FONT_MIN, Math.round(chatFont)))
       : DEFAULT_SETTINGS.chatFontSize,
     terminalFontFamily: sanitizeFontFamily(record["terminalFontFamily"]),
+    uiFontSize: sanitizeUiFontSize(record["uiFontSize"]),
     paneClipboard: typeof record["paneClipboard"] === "boolean" ? record["paneClipboard"] : DEFAULT_SETTINGS.paneClipboard,
     releasePaneAway: typeof record["releasePaneAway"] === "boolean" ? record["releasePaneAway"] : DEFAULT_SETTINGS.releasePaneAway,
-    narrowPaneFont: typeof record["narrowPaneFont"] === "boolean" ? record["narrowPaneFont"] : DEFAULT_SETTINGS.narrowPaneFont,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     autoSendQueued: typeof record["autoSendQueued"] === "boolean" ? record["autoSendQueued"] : DEFAULT_SETTINGS.autoSendQueued,
+    // fork: a phone that turned the chip off under its old key keeps it off
+    suggestionChip: typeof record["suggestionChip"] === "boolean" ? record["suggestionChip"] : typeof record["showSuggestionChip"] === "boolean" ? record["showSuggestionChip"] : DEFAULT_SETTINGS.suggestionChip,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
     language: LANGUAGE_SETTINGS.includes(record["language"] as LanguageSetting) ? record["language"] as LanguageSetting : DEFAULT_SETTINGS.language,
@@ -425,10 +546,8 @@ export function sanitizeSettings(raw: unknown): Settings {
       ? record["quickReplies"].filter((reply): reply is string => typeof reply === "string").slice(0, QUICK_REPLIES_MAX).map((reply) => reply.slice(0, QUICK_REPLY_MAX_CHARS))
       : [...DEFAULT_SETTINGS.quickReplies],
     showQuickReplies: typeof record["showQuickReplies"] === "boolean" ? record["showQuickReplies"] : DEFAULT_SETTINGS.showQuickReplies,
-    showSuggestionChip: typeof record["showSuggestionChip"] === "boolean" ? record["showSuggestionChip"] : DEFAULT_SETTINGS.showSuggestionChip,
     showUsage: typeof record["showUsage"] === "boolean" ? record["showUsage"] : DEFAULT_SETTINGS.showUsage,
     usageCount: record["usageCount"] === "used" || record["usageCount"] === "left" ? record["usageCount"] : DEFAULT_SETTINGS.usageCount,
-    usagePace: record["usagePace"] === true,
     usageGlance: record["usageGlance"] === "week" || record["usageGlance"] === "session" ? record["usageGlance"] : DEFAULT_SETTINGS.usageGlance,
     usagePlacement: record["usagePlacement"] === "top" || record["usagePlacement"] === "footer" ? record["usagePlacement"] : DEFAULT_SETTINGS.usagePlacement,
     defaultView: record["defaultView"] === "chat" || record["defaultView"] === "terminal" || record["defaultView"] === "auto" ? record["defaultView"] : DEFAULT_SETTINGS.defaultView,
@@ -438,7 +557,9 @@ export function sanitizeSettings(raw: unknown): Settings {
     voiceLanguage: DICTATION_LANGUAGES.includes(record["voiceLanguage"] as (typeof DICTATION_LANGUAGES)[number]) ? record["voiceLanguage"] as DictationLanguage : DEFAULT_SETTINGS.voiceLanguage,
     voicePolishChat: typeof record["voicePolishChat"] === "boolean" ? record["voicePolishChat"] : DEFAULT_SETTINGS.voicePolishChat,
     voicePolishTerminal: typeof record["voicePolishTerminal"] === "boolean" ? record["voicePolishTerminal"] : DEFAULT_SETTINGS.voicePolishTerminal,
-    highlightCode: typeof record["highlightCode"] === "boolean" ? record["highlightCode"] : DEFAULT_SETTINGS.highlightCode,
+    wrapCode: typeof record["wrapCode"] === "boolean" ? record["wrapCode"] : DEFAULT_SETTINGS.wrapCode,
+    markdownWidth: MARKDOWN_WIDTHS.find((width) => width === record["markdownWidth"]) ?? DEFAULT_SETTINGS.markdownWidth,
+    diffStyle: DIFF_STYLES.find((style) => style === record["diffStyle"]) ?? DEFAULT_SETTINGS.diffStyle,
   };
 }
 
@@ -510,27 +631,35 @@ const THEME_COLOR: Record<Palette, Record<ResolvedTheme, string>> = {
   forest: { dark: "#16231d", light: "#f7fbf8" },
 };
 
-function applyToDocument(settings: Settings, resolved: ResolvedTheme, language: Language): void {
+function applyToDocument(settings: Settings, resolved: ResolvedTheme, palette: Palette, language: Language): void {
   const root = document.documentElement;
   root.lang = LOCALE_TAGS[language];
   root.dataset["theme"] = resolved;
   root.dataset["density"] = settings.density;
-  root.dataset["palette"] = settings.palette;
+  root.dataset["palette"] = palette;
   root.dataset["chatWidth"] = settings.chatWidth;
-  // ChatView.css scales its type tokens by this: the chosen size over the density's
-  root.style.setProperty("--chat-scale", String(chatFontSize(settings) / CHAT_BASE_FONT[settings.density]));
-  // ChatView.css sets the transcript's prose in this, and falls back to --font-ui without it
+  // src/components/AgentMark.css keys the mono logos on it
+  root.dataset["marks"] = settings.agentMarks;
+  // src/styles.css multiplies every --fs-* token but --fs-input by this: the interface's body size over the density's
+  const uiPx = uiFontSize(settings);
+  root.style.setProperty("--ui-scale", String(fontScale(uiPx, BODY_FONT[settings.density])));
+  // ChatView.css scales its type tokens by this (the chat's and a Markdown preview's): the chat's size over the
+  // interface's, so a chosen chat size is drawn as itself whatever the interface size, and an unchosen one follows it
+  root.style.setProperty("--chat-scale", String(fontScale(chatFontSize(settings), uiPx)));
+  // ChatView.css sets the transcript's and a Markdown preview's prose in this, and falls back to --font-ui without it
   const chatFont = chatFontStack(settings.chatFontFamily);
   if (chatFont === null) root.style.removeProperty("--font-chat");
   else root.style.setProperty("--font-chat", chatFont);
   root.style.colorScheme = resolved;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLOR[settings.palette][resolved]);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLOR[palette][resolved]);
 }
 
 interface SettingsContextValue {
   settings: Settings;
   /** the theme after resolving `system` against the OS preference */
   resolvedTheme: ResolvedTheme;
+  /** the palette drawn now: `settings.palette`, or in System mode the Light or Dark one (lib/paletteFor.ts) */
+  resolvedPalette: Palette;
   /** the language after resolving `system` against the browser's */
   resolvedLanguage: Language;
   update: (patch: Partial<Settings>) => void;
@@ -552,6 +681,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const resolvedTheme: ResolvedTheme = settings.theme === "system" ? (systemDark ? "dark" : "light") : settings.theme;
 
+  const resolvedPalette = paletteFor(settings, resolvedTheme);
+
   const [browserLanguages, setBrowserLanguages] = useState<readonly string[]>(() => (typeof navigator !== "undefined" ? navigator.languages : []));
   useEffect(() => {
     const onChange = (): void => setBrowserLanguages([...navigator.languages]);
@@ -563,8 +694,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   setCurrentLanguage(resolvedLanguage);
 
   useEffect(() => {
-    applyToDocument(settings, resolvedTheme, resolvedLanguage);
-  }, [settings, resolvedTheme, resolvedLanguage]);
+    applyToDocument(settings, resolvedTheme, resolvedPalette, resolvedLanguage);
+  }, [settings, resolvedTheme, resolvedPalette, resolvedLanguage]);
 
   const update = useCallback((patch: Partial<Settings>) => {
     setSettings((current) => {
@@ -574,7 +705,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const value = useMemo(() => ({ settings, resolvedTheme, resolvedLanguage, update }), [settings, resolvedTheme, resolvedLanguage, update]);
+  const value = useMemo(() => ({ settings, resolvedTheme, resolvedPalette, resolvedLanguage, update }), [settings, resolvedTheme, resolvedPalette, resolvedLanguage, update]);
   return createElement(SettingsContext.Provider, { value }, children);
 }
 

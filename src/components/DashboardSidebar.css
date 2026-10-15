@@ -39,7 +39,7 @@
 .is-dashboard .dashboard-card-menu summary { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-sm); color: var(--text-dim); cursor: pointer; list-style: none; }
 .is-dashboard .dashboard-card-menu summary::-webkit-details-marker { display: none; }
 .is-dashboard .dashboard-card-menu summary svg { width: 16px; height: 16px; }
-.is-dashboard .dashboard-card-menu-items { position: absolute; z-index: 5; top: 28px; right: 0; width: max-content; max-width: min(260px, 90vw); max-height: 220px; overflow-y: auto; padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); box-shadow: 0 8px 20px #0008; }
+.is-dashboard .dashboard-card-menu-items { position: absolute; z-index: 5; top: 28px; right: 0; width: max-content; max-width: min(260px, 90vw); max-height: 220px; overflow-y: auto; padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); box-shadow: var(--shadow-card); }
 .is-dashboard .dashboard-card-menu-items button { display: block; width: 100%; padding: var(--space-2); border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
 .is-dashboard .dashboard-card-meta { display: flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--text-dim); font-size: var(--fs-xs); white-space: nowrap; }
 .is-dashboard .dashboard-card-meta svg { flex: none; width: 15px; height: 15px; }
