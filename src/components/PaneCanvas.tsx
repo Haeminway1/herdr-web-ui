@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
-import { Columns2, Ellipsis, Eraser, Maximize2, MousePointer2, Pencil, Rows2, ArrowLeftRight, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type DragEvent, type MouseEvent, type MutableRefObject, type PointerEvent, type ReactNode } from "react";
+import { Columns2, Ellipsis, Eraser, Maximize2, Pencil, Rows2, ArrowLeftRight, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { HerdrPane, PaneLayoutSnapshot, SessionSnapshot } from "../../shared/protocol.ts";
-import { useMachineApi } from "../lib/machineContext.tsx";
+import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
+import { PANE_DRAG_TYPE, paneDragData, type SplitSide } from "../lib/split.ts";
 import { PaneSubmitRetention } from "../lib/paneSubmitRetention.ts";
-import { PanePresentedContext, PaneShownContext, PaneSubmitContext } from "../lib/paneSubmitContext.ts";
-import { PaneAwayContext } from "../lib/paneAwayContext.ts";
+import { PaneCachedContext, PanePresentedContext, PaneShownContext, PaneSubmitContext } from "../lib/paneSubmitContext.ts";
+import { cachedPaneCells, visitPaneTab } from "../lib/paneTabCache.ts";
 import { ApiError, routeMissing } from "../lib/api.ts";
 import { layoutCells, zoomMode } from "../lib/layoutMap.ts";
 import { layoutTopology, paneContextPress, SOLO_PANE_QUERY, soloPane, splitPath, splitRatioAt } from "../lib/paneCanvas.ts";
@@ -27,11 +28,12 @@ interface Props {
   onSelect: (paneId: string, focusInput?: boolean) => void;
   onChanged: () => void;
   renderPane: (pane: HerdrPane | null, active: boolean, split: boolean) => ReactNode;
-  isTerminal: (pane: HerdrPane) => boolean;
   /** fork (settings.tuiPanes off): only the selected pane, full size, with no frame chrome, dividers or pane menu */
   single?: boolean;
   /** filled with this canvas's pane actions on each render: a phone's tab menu offers them for the open pane (TabStrip) */
   actionsRef?: MutableRefObject<((target: HerdrPane) => RowMenuItem[]) | null>;
+  /** where the split view can be drawn: a pane opened in a half of it, from its menu or by dragging its title (lib/split.ts) */
+  onOpenInHalf?: (paneId: string, side: SplitSide) => void;
 }
 type Menu = { paneId: string; anchor: HTMLElement; point?: { x: number; y: number }; previousFocus: HTMLElement | null };
 interface Drag {
@@ -54,18 +56,18 @@ interface Drag {
 }
 
 /** The active tab, drawn from herdr's rectangles. No browser-owned layout or PTY state. */
-export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, isTerminal, actionsRef, single: onlySelected = false }: Props) {
+export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged, renderPane, actionsRef, onOpenInHalf, single: onlySelected = false }: Props) {
   const t = useT();
+  const machineId = useMachineId();
   const apple = /Mac|iPhone|iPad/.test(navigator.platform);
   const coarse = useMediaQuery("(pointer: coarse)");
   const narrow = useMediaQuery(SOLO_PANE_QUERY);
   const api = useMachineApi();
   const canvas = useRef<HTMLDivElement>(null);
-  // Survives workspace/tab switches, but the PC-keyed canvas owns this memory exclusively.
-  const awayReleased = useRef(false);
   const [submits] = useState(() => new PaneSubmitRetention());
   const retainedIds = useSyncExternalStore(submits.subscribe, submits.snapshot, submits.snapshot);
   const lastCells = useRef(new Map<string, ReturnType<typeof layoutCells>[number]>());
+  const visitedTabs = useRef<readonly string[]>([]);
   useEffect(() => {
     const live = new Set(snapshot?.panes.map((item) => item.pane_id) ?? []);
     submits.reconcile(live);
@@ -75,7 +77,6 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   const [renaming, setRenaming] = useState<HerdrPane | null>(null);
   const [closing, setClosing] = useState<HerdrPane | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [passthrough, setPassthrough] = useState<Set<string>>(() => new Set());
   // A new pane can be selected before its snapshot arrives, and a selected pane can close
   // before App confirms its replacement. Keep the prior tab's surviving mounts (and their
   // connection-owned pending sends) through either gap, with selection/input still pending.
@@ -128,17 +129,15 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     setMenu({ paneId: target.pane_id, anchor, point,
       previousFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null });
   };
-  const sendsRightClick = (target: HerdrPane, event: MouseEvent<HTMLElement>): boolean =>
-    passthrough.has(target.pane_id) && isTerminal(target) && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
-      && event.target instanceof Element && !!event.target.closest('.pane-terminal[data-mouse-reporting]');
   // a long press on a touch screen is the phone's own: select text, copy (the tab's menu has the pane's actions)
   const touchPress = useRef(false);
   const context = (event: MouseEvent<HTMLElement>, target: HerdrPane): void => {
     const pointer = (event.nativeEvent as Partial<globalThis.PointerEvent>).pointerType;
-    if (pointer === "touch" || pointer === "pen" || (pointer === undefined && touchPress.current)) return;
+    // Android Chrome ends a dragged text selection with a second contextmenu typed "mouse" and no
+    // press of its own: only a mouse or the keyboard pressing since the touch makes it the app's
+    if (pointer === "touch" || pointer === "pen" || touchPress.current) return;
     event.preventDefault();
     event.stopPropagation();
-    if (sendsRightClick(target, event)) return;
     const rect = event.currentTarget.getBoundingClientRect();
     showMenu(target, event.currentTarget, { x: event.clientX || rect.left + 8, y: event.clientY || rect.top + 8 });
   };
@@ -168,8 +167,6 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
         await api.zoomPane(target.pane_id, layout ? zoomMode(layout, target.pane_id) : "on");
         if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(target.pane_id);
       }) },
-    { id: "right-click", label: t(passthrough.has(target.pane_id) ? "Use Herdr right-click menu" : "Send right-clicks to pane"), icon: MousePointer2,
-      run: () => setPassthrough((old) => { const next = new Set(old); if (next.has(target.pane_id)) next.delete(target.pane_id); else next.add(target.pane_id); return next; }) },
     { id: "close", label: t("Close pane"), icon: X, danger: true, run: () => requestClose(target) },
   ];
   const items = target ? itemsFor(target) : [];
@@ -215,33 +212,43 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     flush(current);
   };
   const cells = layout && !onlySelected ? layoutCells(layout) : pane ? [{ paneId: pane.pane_id, left: 0, top: 0, width: 100, height: 100, focused: true }] : [];
-  for (const cell of cells) lastCells.current.set(cell.paneId, cell);
+  const alone = onlySelected ? null : soloPane(layout, cells.map((cell) => cell.paneId), selectedPaneId, narrow);
+  const stacked = alone !== null && !layout?.zoomed;
+  for (const cell of cells) lastCells.current.set(cell.paneId, alone === cell.paneId || stacked
+    ? { ...cell, left: 0, top: 0, width: 100, height: 100 } : cell);
   const shownIds = new Set(cells.map((cell) => cell.paneId));
+  visitedTabs.current = visitPaneTab(visitedTabs.current, presented?.tab_id ?? null,
+    new Set(snapshot?.panes.map((item) => item.tab_id) ?? []));
+  const cachedCells = cachedPaneCells(visitedTabs.current, presented?.tab_id ?? null, snapshot?.panes ?? [], lastCells.current, shownIds);
+  const cachedIds = new Set(cachedCells.map((cell) => cell.paneId));
   // Every frame stays under the same keyed array, including a frame returning before its ACK.
-  // Retention ends at the receipt, disconnect timeout, native close, or PC canvas teardown.
-  const mountedCells = [...cells.map((cell) => ({ ...cell, retained: false })), ...retainedIds.flatMap((id) => {
+  // Retention ends when the submit/queue settles, on disconnect, native close, or PC canvas teardown.
+  const mountedCells = [...cells.map((cell) => ({ ...cell, retained: false, cached: false })),
+    ...cachedCells.map((cell) => ({ ...cell, retained: retainedIds.includes(cell.paneId), cached: true })),
+    ...retainedIds.flatMap((id) => {
     const cell = lastCells.current.get(id);
-    return !shownIds.has(id) && cell ? [{ ...cell, retained: true }] : [];
+    return !shownIds.has(id) && !cachedIds.has(id) && cell ? [{ ...cell, retained: true, cached: false }] : [];
   })];
+  const mountedIds = new Set(mountedCells.map((cell) => cell.paneId));
+  for (const id of lastCells.current.keys()) if (!mountedIds.has(id)) lastCells.current.delete(id);
   // herdr's zoomed pane, whatever the web selected: the selection follows it (App). A phone has
   // no room for a split, so it shows the selected pane alone the same way and leaves herdr's
   // layout as it is; the tab's menu lists the other panes (TabStrip). The one-pane view (fork, tuiPanes off) shows the selected pane alone already.
-  const alone = onlySelected ? null : soloPane(layout, cells.map((cell) => cell.paneId), selectedPaneId, narrow);
   // a phone's hidden siblings take the whole canvas too, so each keeps the grid it is shown with
-  const stacked = alone !== null && !layout?.zoomed;
-  return <PaneSubmitContext.Provider value={submits}><PaneAwayContext.Provider value={awayReleased}><div className={`pane-canvas${!pane && presented ? " is-pending" : ""}`} ref={canvas} aria-busy={!pane && presented ? true : undefined}>
+  return <PaneSubmitContext.Provider value={submits}><div className={`pane-canvas${!pane && presented ? " is-pending" : ""}`} ref={canvas} aria-busy={!pane && presented ? true : undefined}>
     {cells.length === 0 && renderPane(pane, true, false)}
     {mountedCells.map((cell) => {
       const item = snapshot?.panes.find((item) => item.pane_id === cell.paneId);
       if (!item) return null;
-      const active = !cell.retained && item.pane_id === selectedPaneId;
-      const hidden = cell.retained || (alone !== null && alone !== item.pane_id);
-      const single = cells.length === 1 || alone === item.pane_id;
+      const offTab = cell.retained || cell.cached;
+      const active = !offTab && item.pane_id === selectedPaneId;
+      const hidden = offTab || (alone !== null && alone !== item.pane_id);
+      const single = offTab ? cell.width === 100 && cell.height === 100 : cells.length === 1 || alone === item.pane_id;
       // Capture contextmenu before xterm focuses its helper textarea; the menu keeps focus on the original pane.
       return <section key={item.pane_id} data-layout-pane={item.pane_id}
         className={`pane-frame${active ? " is-current" : ""}${single ? " is-single" : ""}${hidden ? " is-hidden" : ""}`}
-        aria-label={displayPaneTitle(item)} aria-current={active ? "true" : undefined} aria-hidden={hidden || undefined} tabIndex={-1}
-        style={alone === item.pane_id || (stacked && !cell.retained) ? { left: 0, top: 0, width: "100%", height: "100%" }
+        aria-label={displayPaneTitle(item)} aria-current={active ? "true" : undefined} aria-hidden={hidden || undefined} inert={hidden || undefined} tabIndex={-1}
+        style={!offTab && (alone === item.pane_id || stacked) ? { left: 0, top: 0, width: "100%", height: "100%" }
           : { left: `${cell.left}%`, top: `${cell.top}%`, width: `${cell.width}%`, height: `${cell.height}%` }}
         // a menu asked for from the keyboard (Shift+F10, the Menu key) comes with no pointer: the last touch is not it
         onKeyDownCapture={() => { touchPress.current = false; }}
@@ -254,6 +261,9 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
           const element = event.target instanceof Element ? event.target : null;
           const titleOrFrame = element?.closest(".pane-frame-head") || element === event.currentTarget;
           if (event.button === 0 && !paneContextPress(event, apple) && !coarse && titleOrFrame && !element?.closest("button")) {
+            // Cancelling pointerdown also cancels the title's native mouse drag.
+            // A click focuses below; a drag suppresses that click.
+            if (onOpenInHalf && element?.closest(".pane-frame-head")) return;
             // A title has no native focus action. Prevent its default blur and take typing
             // even when this pane was already selected but a menu/tab still held focus.
             event.preventDefault();
@@ -269,18 +279,33 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
         onDropCapture={() => { if (!active) onSelect(item.pane_id, false); }}
         onFocusCapture={(event) => { if (!active && event.currentTarget.contains(event.target)) onSelect(item.pane_id, false); }}
         onMouseDownCapture={(event) => {
-          if (!onlySelected && paneContextPress(event, apple) && !sendsRightClick(item, event)) { event.preventDefault(); event.stopPropagation(); }
+          if (!onlySelected && paneContextPress(event, apple)) { event.preventDefault(); event.stopPropagation(); }
         }}
         onMouseUpCapture={(event) => {
-          if (!onlySelected && paneContextPress(event, apple) && !sendsRightClick(item, event)) { event.preventDefault(); event.stopPropagation(); }
+          if (!onlySelected && paneContextPress(event, apple)) { event.preventDefault(); event.stopPropagation(); }
         }}
         onContextMenuCapture={onlySelected ? undefined : (event) => context(event, item)}>
-        {!onlySelected && <div className="pane-frame-head">
+        {!onlySelected && <div className="pane-frame-head" draggable={onOpenInHalf !== undefined && !coarse}
+          onClick={(event) => {
+            if (!onOpenInHalf || coarse || paneContextPress(event, apple) || (event.target instanceof Element && event.target.closest("button"))) return;
+            const frame = event.currentTarget.parentElement;
+            const input = frame?.querySelector<HTMLElement>(".secret-input input")
+              ?? frame?.querySelector<HTMLElement>(".find-bar input")
+              ?? (frame?.querySelector(".terminal-stack.is-chat")
+                ? frame.querySelector<HTMLElement>(".composer-text")
+                : frame?.querySelector<HTMLElement>(".terminal-input textarea") ?? frame?.querySelector<HTMLElement>(".xterm-helper-textarea"));
+            input?.focus({ preventScroll: true });
+          }}
+          onDragStart={(event: DragEvent<HTMLDivElement>) => {
+            // dropped on a half of the pane area, the title opens its pane there (App's drop)
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData(PANE_DRAG_TYPE, paneDragData({ machineId, paneId: item.pane_id }));
+          }}>
           <span className="pane-frame-title">{displayPaneTitle(item)}</span>
           <button type="button" className="icon-button pane-frame-menu" aria-label={t("Pane actions for {name}", { name: displayPaneTitle(item) })}
             onClick={(event) => showMenu(item, event.currentTarget)}><Ellipsis aria-hidden="true" /></button>
         </div>}
-        <div className="pane-frame-body"><PanePresentedContext.Provider value={!cell.retained}><PaneShownContext.Provider value={alone === null || alone === item.pane_id}>{renderPane(item, active, alone === null && cells.length > 1)}</PaneShownContext.Provider></PanePresentedContext.Provider></div>
+        <div className="pane-frame-body"><PaneCachedContext.Provider value={cell.cached && !cell.retained}><PanePresentedContext.Provider value={!offTab}><PaneShownContext.Provider value={!hidden}>{renderPane(item, active, alone === null && cells.length > 1)}</PaneShownContext.Provider></PanePresentedContext.Provider></PaneCachedContext.Provider></div>
       </section>;
     })}
     {!onlySelected && alone === null && layout?.splits.map((item) => {
@@ -310,7 +335,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     {closing && <ConfirmDialog title={t("Close pane {name}?", { name: displayPaneTitle(closing) })}
       body={t("The pane's running processes will stop. Closing its last pane also closes the workspace.")}
       confirmLabel={t("Close pane")} onClose={() => setClosing(null)} onConfirm={async () => { await api.closePane(closing.pane_id); setClosing(null); onChanged(); }} />}
-  </div></PaneAwayContext.Provider></PaneSubmitContext.Provider>;
+  </div></PaneSubmitContext.Provider>;
 }
 
 function PaneRename({ pane, onClose, onSave }: { pane: HerdrPane; onClose: () => void; onSave: (label: string) => Promise<void> }) {

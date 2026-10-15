@@ -8,6 +8,10 @@
  *   orphans every subscribed device, so a malformed file is an error, never a rotation.
  * - push-subscriptions.json: survives restarts, so a reboot does not unsubscribe phones.
  *   A 404/410 from a push service means the device dropped it; the record is deleted.
+ * - push-retired.json: the endpoint is also remembered, as a hash only (`RETIRED_LIMIT`, `RETIRED_TTL_MS`),
+ *   so a restart does not forget it: a browser can keep handing over a subscription its push
+ *   service retired, and registering it again would only fail the next push, so it is refused as
+ *   `subscription_gone` and the device subscribes anew (#1038).
  *
  * Requests are built by web-push's generateRequestDetails (RFC 8291 aes128gcm + RFC
  * 8292 VAPID) and sent with fetch; its sendNotification path goes through node:https
@@ -27,6 +31,7 @@
  * would go out, so a window brought forward while the alert waits still holds it back.
  */
 
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import webpush from "web-push";
@@ -50,6 +55,10 @@ import { isLoopbackHost } from "./access.ts";
 const PUSH_TTL_SECONDS = 12 * 60 * 60;
 const PUSH_TIMEOUT_MS = 10_000;
 const DEFAULT_SUBJECT = "https://github.com/devswha/herdr-web-ui";
+/** How many retired endpoints are remembered; the oldest is forgotten first. */
+const RETIRED_LIMIT = 1000;
+/** How long a retired endpoint is remembered: a browser that kept it this long has long since moved on. */
+const RETIRED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** How long an alert waits for the pane to change first, and the turn a finish is worth telling. */
 export interface AlertTiming {
@@ -97,6 +106,8 @@ export interface PushService {
    * endpoint is not this device's subscription. While on screen, its alerts are not pushed.
    */
   presence(endpoint: string, visible: boolean, deviceId: string | null | undefined, tab?: string, seq?: number): boolean;
+  /** whether a push service answered 404/410 for this endpoint since the server started */
+  retired(endpoint: string): boolean;
   /** One confirmation push to one device, so enabling alerts proves the whole path works. */
   sendTest(endpoint: string): Promise<PushDelivery | null>;
   /** The collector's view of every pane: status baselines and the titles notifications use. */
@@ -199,6 +210,13 @@ export function createPushService(options: PushServiceOptions): PushService {
   const onScreen = new Map<string, Map<string, { until: number; seq: number; heard: number }>>();
   const away = (subscription: PushSubscriptionRecord): boolean =>
     ![...(onScreen.get(subscription.endpoint)?.values() ?? [])].some((tab) => tab.until > now());
+  // the workspace a pane was last seen in: an alert names it, so the tap of an ended pane can open
+  // its workspace (src/lib/deepLink.ts resolveLink) once herdr has dropped the pane
+  const workspaces = new Map<string, string>();
+  const retiredPath = join(options.stateDir, "push-retired.json");
+  /** sha256 of each endpoint a push service retired -> when, oldest first; loaded on first need */
+  let retiredEndpoints: Map<string, number> | null = null;
+  const endpointHash = (endpoint: string): string => createHash("sha256").update(endpoint).digest("base64url");
 
   /** Created on first need: a server nobody subscribes to never writes a key. */
   function keys(): { publicKey: string; privateKey: string } {
@@ -231,6 +249,24 @@ export function createPushService(options: PushServiceOptions): PushService {
       }
     }
     return subscriptions;
+  }
+
+  function retiredStore(): Map<string, number> {
+    if (retiredEndpoints) return retiredEndpoints;
+    retiredEndpoints = new Map();
+    let stored: unknown;
+    try {
+      stored = readJson(retiredPath);
+    } catch {
+      return retiredEndpoints; // an unreadable file only means a retired endpoint registers again once
+    }
+    if (!Array.isArray(stored)) return retiredEndpoints;
+    const cutoff = (options.now ?? Date.now)() - RETIRED_TTL_MS;
+    for (const entry of stored.slice(-RETIRED_LIMIT)) {
+      const { hash, at } = (entry ?? {}) as { hash?: unknown; at?: unknown };
+      if (typeof hash === "string" && typeof at === "number" && at > cutoff) retiredEndpoints.set(hash, at);
+    }
+    return retiredEndpoints;
   }
 
   function persist(): void {
@@ -267,6 +303,12 @@ export function createPushService(options: PushServiceOptions): PushService {
     // 404/410: the device unsubscribed or the browser dropped the subscription
     const gone = status === 404 || status === 410;
     if (gone) {
+      const hash = endpointHash(subscription.endpoint);
+      const retired = retiredStore();
+      retired.delete(hash);
+      retired.set(hash, (options.now ?? Date.now)());
+      if (retired.size > RETIRED_LIMIT) retired.delete(retired.keys().next().value!);
+      writeJsonPrivate(retiredPath, [...retired].map(([key, at]) => ({ hash: key, at })));
       if (store().delete(subscription.endpoint)) persist();
     } else {
       console.error(`web push to ${new URL(subscription.endpoint).host} failed: ${status ?? "no response"}`);
@@ -282,6 +324,12 @@ export function createPushService(options: PushServiceOptions): PushService {
         }),
       ),
     );
+  }
+
+  /** Where an alert's pane is: its PC (absent for this one) and the workspace it was last seen in. */
+  function where(key: string, machineId: string): Pick<PushPayload, "machine_id" | "workspace_id"> {
+    const workspace = workspaces.get(key);
+    return { ...(machineId === "local" ? {} : { machine_id: machineId }), ...(workspace ? { workspace_id: workspace } : {}) };
   }
 
   async function titleOf(paneId: string): Promise<string> {
@@ -382,6 +430,8 @@ export function createPushService(options: PushServiceOptions): PushService {
       if (store().delete(endpoint)) persist();
     },
 
+    retired: (endpoint) => retiredStore().has(endpointHash(endpoint)),
+
     async sendTest(endpoint) {
       const subscription = store().get(endpoint);
       if (!subscription) return null;
@@ -393,6 +443,7 @@ export function createPushService(options: PushServiceOptions): PushService {
         // only fill gaps: an event already seen is newer than any snapshot
         const key = paneStorageId(machineId, pane.pane_id);
         titles.set(key, `${machineName ? machineName + " · " : ""}${paneTitle(pane)}`);
+        workspaces.set(key, pane.workspace_id);
         if (!lastStatus.has(key)) lastStatus.set(key, pane.agent_status);
       }
     },
@@ -463,7 +514,7 @@ export function createPushService(options: PushServiceOptions): PushService {
           return current && current.device_id === subscription.device_id ? [current] : [];
         });
         // an app on screen shows the alert itself: no push on top of it
-        await broadcast({ ...statusMessage(paneId, title, status, at), ...(machineId === "local" ? {} : { machine_id: machineId }), tag: paneNotificationTag(paneId, machineId) }, status === "blocked" ? "high" : "normal", live.filter(away));
+        await broadcast({ ...statusMessage(paneId, title, status, at), ...where(key, machineId), tag: paneNotificationTag(paneId, machineId) }, status === "blocked" ? "high" : "normal", live.filter(away));
       });
     },
 
@@ -475,7 +526,7 @@ export function createPushService(options: PushServiceOptions): PushService {
       const to = [...store().values()].filter((subscription) => (subscription.alerts ?? DEFAULT_ALERTS).done !== "off" && away(subscription));
       if (to.length === 0 || options.inUse?.()) return;
       // the pane may already be gone from herdr: the seeded title is what is left
-      await broadcast({ ...endedMessage(paneId, titles.get(key) ?? paneId, now()), ...(machineId === "local" ? {} : { machine_id: machineId }), tag: paneNotificationTag(paneId, machineId) }, "normal", to);
+      await broadcast({ ...endedMessage(paneId, titles.get(key) ?? paneId, now()), ...where(key, machineId), tag: paneNotificationTag(paneId, machineId) }, "normal", to);
     },
 
     async settled() {
@@ -489,10 +540,15 @@ export function createPushService(options: PushServiceOptions): PushService {
  * a subscription receives pane titles until it is removed.
  *   GET    /api/push                        -> { public_key }
  *   POST   /api/push/subscribe { subscription, alerts? } -> 204 (alerts: this device's AlertPrefs)
+ *          | 410 subscription_gone (its push service retired the endpoint: subscribe anew)
  *   DELETE /api/push/subscribe { endpoint } -> 204
- *   POST   /api/push/test      { endpoint } -> 204 | 404 subscription_not_found | 502 push_failed
+ *   POST   /api/push/test      { endpoint } -> 204 | 404 subscription_not_found | 410 subscription_gone | 502 push_failed
  *   POST   /api/push/presence  { endpoint, visible, tab, seq } -> 204 | 400 | 404 subscription_not_found
  */
+function subscriptionGone(): Response {
+  return jsonResponse({ error: { code: "subscription_gone", message: "the push service retired this subscription; subscribe again" } }, 410);
+}
+
 export async function handlePushRequest(request: Request, pathname: string, push: PushService, deviceId: string | null | undefined): Promise<Response | null> {
   const route = `${request.method} ${pathname}`;
   if (route === "GET /api/push") return jsonResponse({ public_key: push.publicKey() });
@@ -512,6 +568,7 @@ export async function handlePushRequest(request: Request, pathname: string, push
   if (route === "POST /api/push/subscribe") {
     const subscription = push.parse(body.subscription);
     if (!subscription) return badRequest("invalid_subscription", "subscription needs an https endpoint and p256dh/auth keys");
+    if (push.retired(subscription.endpoint)) return subscriptionGone();
     push.subscribe(subscription, body.alerts === undefined ? undefined : parseAlerts(body.alerts), deviceId);
     return new Response(null, { status: 204 });
   }
@@ -529,7 +586,11 @@ export async function handlePushRequest(request: Request, pathname: string, push
     return new Response(null, { status: 204 });
   }
   const delivery = await push.sendTest(body.endpoint);
-  if (!delivery) return jsonResponse({ error: { code: "subscription_not_found", message: "this device is not subscribed" } }, 404);
+  if (!delivery) {
+    return push.retired(body.endpoint) ? subscriptionGone()
+      : jsonResponse({ error: { code: "subscription_not_found", message: "this device is not subscribed" } }, 404);
+  }
   if (delivery.ok) return new Response(null, { status: 204 });
+  if (delivery.gone) return subscriptionGone();
   return jsonResponse({ error: { code: "push_failed", message: `push service answered ${delivery.status ?? "nothing"}` } }, 502);
 }

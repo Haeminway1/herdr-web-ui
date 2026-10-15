@@ -6,6 +6,8 @@ import { PaneTerminal } from "../src/components/PaneTerminal.tsx";
 import { ChatView } from "../src/components/ChatView.tsx";
 import { useWholeOutput } from "../src/lib/useWholeOutput.ts";
 import { MachineContext } from "../src/lib/machineContext.tsx";
+import { useUpdates } from "../src/lib/updates.ts";
+import { UpdateNotice } from "../src/components/UpdateControls.tsx";
 import "../src/styles.css";
 
 declare global { interface Window { qa: { requests: { url: string; signal: AbortSignal; resolve: (text: string) => void; reject: () => void }[]; frames: { pane: string | null; text: string }[]; commits: string[][]; answered: string[]; target: (url: string, scope: string) => void; chat: (pane: string, machine?: string, agent?: string | null, session?: string) => void; select: (pane: string, machine: string, agent?: string) => void; refresh: () => void } } }
@@ -29,6 +31,10 @@ window.fetch = (input, init) => {
   return new Promise((resolve, reject) => window.qa.requests.push({ url, signal: init!.signal as AbortSignal,
     resolve: (text) => resolve(new Response(text)), reject: () => reject(new Error("late failure")) }));
 };
+/** The app's update line as App mounts it, without a server to poll: math-browser-qa.ts reads its reload line. */
+function UpdatesLine() {
+  return <UpdateNotice updates={useUpdates(false)} onOpen={() => {}} />;
+}
 function Fixture() {
   const [target, setTarget] = useState({ url: "/qa-output?pane=a&ref=x", scope: "one" });
   const [pane, setPane] = useState("a");
@@ -40,7 +46,7 @@ function Fixture() {
   window.qa.target = (url, scope) => setTarget({ url, scope });
   window.qa.chat = (pane, machine = "local", agent = null, session = "") => { setPane(pane); setMachine(machine); setAgent(agent); setSession(session); };
   window.qa.refresh = () => setRefresh((value) => value + 1);
-  return <><button id="fetch-output" onClick={() => { output.load(); output.load(); }}>Load output</button><output id="output">{output.state}:{output.text}</output>
+  return <><UpdatesLine /><button id="fetch-output" onClick={() => { output.load(); output.load(); }}>Load output</button><output id="output">{output.state}:{output.text}</output>
     <div style={{ position: "relative", height: 600 }}><MachineContext.Provider value={machine}><Profiler id="chat" onRender={() => { const node = document.querySelector(".chat-view"); window.qa.frames.push({ pane: node?.getAttribute("aria-label") ?? null, text: node?.textContent ?? "" }); }}><ChatView key={`${machine}:${pane}:${session}`} paneId={pane} refreshKey={refresh} connected={false} ended={false} agent={agent} agentStatus={null} /></Profiler></MachineContext.Provider></div></>;
 }
 function Product({ pane, machine, agent }: { pane: string; machine: string; agent: string }) {
