@@ -125,6 +125,13 @@ async function agentListed(origin: string, paneId: string): Promise<void> {
 // `nth` one is in, that attach has done whatever it does to the grid
 const attached = (page: Page, nth = 1) => page.waitForFunction((count) => (window as unknown as { frames_: { dir: string; type: string }[] }).frames_.filter((f) => f.dir === "in" && f.type === "input-ready").length >= count, nth, { timeout: 15_000 });
 
+async function assertNoAttachInput(page: Page): Promise<void> {
+  await page.waitForFunction(() => (window as unknown as { frames_: Frame[] }).frames_
+    .some((frame) => frame.dir === "out" && frame.type === "pty-ack"), undefined, { timeout: 10_000 });
+  assert.deepEqual((await framesOf(page)).filter((frame) => frame.dir === "out" && frame.type === "input"), [],
+    "parsing a fresh or replayed attachment must not generate pane input");
+}
+
 /**
  * The chat lens leaves the shared terminal's size alone (#361): a desktop tab drives a pane's grid
  * from its terminal lens, a phone opens the same pane in the chat lens, and the program in the pane
@@ -149,6 +156,7 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
     const desktop = await open({ viewport: { width: 1280, height: 800 } }, { language: "en", defaultView: "terminal" });
     await attached(desktop);
     const desktopSize = await size();
+    await assertNoAttachInput(desktop);
 
     const phone = await open({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }, { language: "en", defaultView: "chat" });
     await phone.locator(".terminal-stack.is-chat").waitFor({ state: "attached" });
@@ -156,6 +164,7 @@ export async function checkChatKeepsTerminalSize(browser: Browser, origin: strin
     // the chat lens attaches without driving the grid, and sends no resize of its own
     assert.deepEqual(await sent(phone), [{ dir: "out", type: "attach", keep_size: true }]);
     assert.equal(await size(), desktopSize, "the phone's chat lens leaves the desktop's grid");
+    await assertNoAttachInput(phone);
     if (process.env.UI_EVIDENCE_DIR) await desktop.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "chat-size-desktop.png") });
     console.log(`PASS a phone's chat lens leaves the shared grid at the desktop's ${desktopSize}`);
 

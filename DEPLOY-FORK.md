@@ -23,6 +23,10 @@ This branch runs beside the canonical `devswha.herdr-web-ui` plugin as a second 
 - The plugin picks a release up within five minutes; every open app shows its reload banner.
 - OMO queued questions do not mark a pane as needing input while its current bottom
   Working footer confirms work. Missing screen evidence or a later dialog keeps INPUT.
+- Attach startup capability probes stay out of replay, so a browser reconnect cannot
+  answer an old host probe into the pane's shell. Later application output is unchanged.
+- Browser release checks use a fresh owned herdr session per run; old failed fixtures
+  cannot pollute palette searches or keyboard navigation checks.
 - Retire: once the PRs are merged upstream, uninstall this plugin and use the canonical app.
 
 ## Fork features (keep working through every sync)

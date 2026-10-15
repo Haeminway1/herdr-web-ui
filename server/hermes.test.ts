@@ -23,9 +23,44 @@ import type { ConversationPart, ConversationTurn } from "../shared/protocol.ts";
 import { toolSummary } from "./transcript-records.ts";
 
 describe("hermes paths", () => {
+  let originalHermesHome: string | undefined;
+  let originalHome: string | undefined;
+
+  beforeEach(() => {
+    originalHermesHome = process.env["HERMES_HOME"];
+    originalHome = process.env["HOME"];
+    delete process.env["HERMES_HOME"];
+    process.env["HOME"] = "/test/env-home";
+  });
+
+  afterEach(() => {
+    if (originalHermesHome === undefined) delete process.env["HERMES_HOME"];
+    else process.env["HERMES_HOME"] = originalHermesHome;
+    if (originalHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = originalHome;
+  });
+
   it("computes default hermes home and db path", () => {
     expect(defaultHermesHome("/test/home")).toBe("/test/home/.hermes");
     expect(hermesDbPath("/test/home/.hermes")).toBe("/test/home/.hermes/state.db");
+  });
+
+  it("uses HOME when no user home is supplied", () => {
+    expect(defaultHermesHome()).toBe("/test/env-home/.hermes");
+    expect(hermesDbPath()).toBe("/test/env-home/.hermes/state.db");
+  });
+
+  it("prefers HERMES_HOME over both supplied and environment homes", () => {
+    process.env["HERMES_HOME"] = "/test/hermes-profile";
+    expect(defaultHermesHome("/test/home")).toBe("/test/hermes-profile");
+    expect(hermesDbPath()).toBe("/test/hermes-profile/state.db");
+    expect(hermesDbPath("/test/explicit")).toBe("/test/explicit/state.db");
+  });
+
+  it("falls back when HERMES_HOME is empty", () => {
+    process.env["HERMES_HOME"] = "";
+    expect(defaultHermesHome("/test/home")).toBe("/test/home/.hermes");
+    expect(defaultHermesHome()).toBe("/test/env-home/.hermes");
   });
 });
 

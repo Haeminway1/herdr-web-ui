@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, exists
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
-import { createServer } from "./index.ts";
+import { AttachCapabilityPreamble, createServer } from "./index.ts";
 import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, PushKey, RemoteAccess, SessionSnapshot, TabMoved, PaneFindResponse, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
 import { noInstalledNotes, unmanagedUpdateStatus, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes } from "../shared/update.ts";
@@ -41,6 +41,39 @@ afterAll(() => {
 });
 
 const base = () => `http://localhost:${server.port}`;
+
+describe("attach host capability preamble", () => {
+  const modes = "\x1b[?1006l\x1b[?1016l\x1b[?1049h";
+  const probe = "\x1b[?1016$p\x1b[c";
+  const screen = "\x1b[H\x1b[2Jshell$ ";
+
+  it("consumes only the startup probe at every PTY read boundary", () => {
+    const stream = modes + probe + screen + probe;
+    for (let split = 0; split <= stream.length; split++) {
+      const preamble = new AttachCapabilityPreamble();
+      expect(preamble.push(stream.slice(0, split)) + preamble.push(stream.slice(split)) + preamble.flush())
+        .toBe(modes + screen + probe);
+    }
+    const preamble = new AttachCapabilityPreamble();
+    expect([...stream].map((byte) => preamble.push(byte)).join("") + preamble.flush())
+      .toBe(modes + screen + probe);
+  });
+
+  it("preserves app queries, control strings, and an incomplete startup on exit", () => {
+    for (const stream of [
+      screen + probe,
+      modes + "\x1b[6n" + probe,
+      modes + "\x1b[?1016$p\x1b[0c" + screen,
+      modes + "\x1b]2;" + probe + "\x07" + screen,
+      modes + "\x1bP" + probe + "\x1b\\" + screen,
+      modes + "\x1b[?1016$",
+      modes + "\x1b[?1016$p",
+    ]) {
+      const preamble = new AttachCapabilityPreamble();
+      expect([...stream].map((byte) => preamble.push(byte)).join("") + preamble.flush()).toBe(stream);
+    }
+  });
+});
 
 describe("Grok conversation API", () => {
   it.skipIf(process.platform !== "linux")("uses exact process/session evidence, validators and revision-bound output refs", async () => {
@@ -1593,6 +1626,18 @@ describe("WebSocket /ws", () => {
     const frame = await streamed;
     expect(typeof frame.data).toBe("string");
     expect(frame.data.length).toBeGreaterThan(0);
+    expect(frame.data).not.toContain("\x1b[?1016$p");
+    expect(frame.data).not.toContain("\x1b[c");
+
+    const joiner = await RecordingSocket.connect(`ws://localhost:${server.port}/ws`);
+    try {
+      joiner.send({ type: "attach", pane_id: paneId, cols: 100, rows: 30 });
+      const replay = await joiner.waitFor((message) => message.type === "pty-data" && message.pane_id === paneId, "replayed pty-data", 15_000);
+      expect(replay.data).not.toContain("\x1b[?1016$p");
+      expect(replay.data).not.toContain("\x1b[c");
+    } finally {
+      joiner.close();
+    }
 
     ws.send(JSON.stringify({ type: "detach", pane_id: paneId }));
     ws.close();

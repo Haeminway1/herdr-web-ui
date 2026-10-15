@@ -297,7 +297,7 @@ export class VoiceService {
     const cancelled = new AbortController();
     const upstream = AbortSignal.any([signal, cancelled.signal]);
     const form = new FormData();
-    form.append("file", new File([clip.audio], clip.filename, { type: clip.audio.type }));
+    form.append("file", clip.audio, clip.filename);
     form.append("model", transcribeModel);
     form.append("stream", "true");
     for (const language of clip.languages) form.append("languages[]", language);

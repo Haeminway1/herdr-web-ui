@@ -19,7 +19,8 @@ import { ping, sessionSnapshot, workspaceCreate } from "../server/herdr/client.t
 // resolved, so a fixture made under the unresolved path never matches the pane it is for
 process.env["TMPDIR"] = realpathSync(tmpdir());
 
-export const TEST_SESSION = process.env["HERDR_TEST_SESSION"] || "herdr-web-ui-test";
+export const TEST_SESSION = process.env["HERDR_TEST_SESSION"] ||
+  (process.argv[1]?.endsWith("ui-regression.ts") ? `herdr-web-ui-browser-${process.pid}-${Date.now()}` : "herdr-web-ui-test");
 
 /** Where herdr puts a named session's socket (it follows XDG_CONFIG_HOME, as remote-entry.ts does). */
 export function testSocketPath(): string {

@@ -53,6 +53,19 @@ describe("rankPanes", () => {
     expect(rankPanes("zzq", panes, workspaces)).toEqual([]);
   });
 
+  it("ranks an exact workspace target ahead of substring and fuzzy path matches", () => {
+    const query = "herdr-web-ui-test-browser-b";
+    const roster = [
+      pane("fuzzy", { cwd: "/tmp/herdr-web-ui-test-browser-a/browser-cache" }),
+      pane("substring", { title: `${query} logs` }),
+      pane("exact", { workspace_id: "w2", tab_id: "t2" }),
+      pane("wrong-order", { title: "herdr-web-ui-test-b-browser" }),
+    ];
+    const named = workspaces.map((workspace) => workspace.workspace_id === "w2" ? { ...workspace, label: query } : workspace);
+
+    expect(ids(rankPanes(query, roster, named))).toEqual(["exact", "substring", "fuzzy"]);
+  });
+
   it("finds a pane by its tab's label", () => {
     expect(ids(rankPanes("reviewing", panes, workspaces, { tabs }))).toEqual(["beta"]);
     expect(ids(rankPanes("editing", panes, workspaces, { tabs }))).toEqual(["alpha", "gamma"]);

@@ -147,6 +147,48 @@ const ATTACH_HOLD_MS = 100;
  * with something else.
  */
 const ATTACH_PREAMBLE_RE = /^(?:\x1b\[\?[\d;]+[hl])*(?:\x1b(?:\[(?:\?[\d;]*)?)?)?$/;
+/**
+ * The attach CLI's host probe, before it connects to the pane. It must never enter
+ * replay: a browser joining later would answer it into the now-live pane's stdin.
+ * This bridge has no single host pixel geometry, so leave that optional capability
+ * unanswered. Consume only this startup exchange, never a query in the pane's output.
+ */
+export class AttachCapabilityPreamble {
+  private pending = "";
+  private startup = true;
+
+  push(data: string): string {
+    if (!this.startup) return data;
+    let text = this.pending + data;
+    this.pending = "";
+    let visible = "";
+    const probe = "\x1b[?1016$p\x1b[c";
+    while (text) {
+      const mode = /^\x1b\[\?[\d;]+[hl]/.exec(text)?.[0];
+      if (mode) {
+        visible += mode;
+        text = text.slice(mode.length);
+      } else if (text.startsWith(probe)) {
+        this.startup = false;
+        return visible + text.slice(probe.length);
+      } else if (probe.startsWith(text) || /^\x1b(?:\[(?:\?[\d;]*)?)?$/.test(text)) {
+        this.pending = text;
+        return visible;
+      } else {
+        this.startup = false;
+        return visible + text;
+      }
+    }
+    return visible;
+  }
+
+  flush(): string {
+    const data = this.pending;
+    this.pending = "";
+    this.startup = false;
+    return data;
+  }
+}
 /** how often a terminal another web bridge holds is tried again, while clients here still want it */
 const ATTACH_HELD_RETRY_MS = 3_000;
 /**
@@ -1270,6 +1312,7 @@ export function createServer(
       let heldSince = 0;
       let holding = false;
       let holdTimer: ReturnType<typeof setTimeout> | undefined;
+      const capabilities = new AttachCapabilityPreamble();
       const outputTail = new AttachOutputTail();
       let tailTimer: ReturnType<typeof setTimeout> | undefined;
       const flushTail = (taken = false): void => {
@@ -1372,6 +1415,9 @@ export function createServer(
         takeover = null;
         takingOver = null;
         trying = true; // a live-handoff lookup owns the next start until it finishes
+        const pending = capabilities.flush();
+        if (held !== null) held += pending;
+        else if (pending) publish(pending);
         release();
         flushTail();
         const finish = (): void => {
@@ -1431,8 +1477,10 @@ export function createServer(
         onData: (data) => {
           if (retired || attachments.get(paneId) !== attachment) return;
           output = (output + data).slice(-1024);
-          if (held === null) return publish(data);
-          held += data;
+          const visible = capabilities.push(data);
+          if (!visible) return;
+          if (held === null) return publish(visible);
+          held += visible;
           if (!holding && !ATTACH_PREAMBLE_RE.test(held)) {
             holding = true;
             heldSince = Date.now();

@@ -70,13 +70,16 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
     // Also verify the effect in a real readline process inside the owned pane.
     const fixture = mkdtempSync(join(tmpdir(), "herdr-command-backspace-"));
     const result = join(fixture, "line.txt");
+    const bytes = join(fixture, "stdin.bin");
     const script = join(fixture, "readline.cjs");
     writeFileSync(script, `const fs = require("node:fs");
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 rl.on("SIGINT", () => process.exit(0));
-process.stdout.write("\\x1b[2J\\x1b[HOwned Cmd+Backspace readline test\\r\\n");
+fs.writeFileSync(${JSON.stringify(bytes)}, "");
+process.stdout.write("\\x1b[?2004h\\x1b[2J\\x1b[HOwned Cmd+Backspace readline test\\r\\n");
 process.stdin.on("data", (data) => {
+  fs.appendFileSync(${JSON.stringify(bytes)}, data);
   if (data.includes(7)) fs.writeFileSync(${JSON.stringify(result)}, rl.line);
 });
 `);
@@ -101,6 +104,26 @@ process.stdin.on("data", (data) => {
       await probe("remove this entire input");
       await input.press("Meta+Backspace");
       await probe("");
+      await page.waitForFunction(() => document.querySelector(".xterm-rows")?.textContent
+        ?.includes("Owned Cmd+Backspace readline test"), undefined, { timeout: 10_000 });
+      const payload = "literal \x1b[?1016;2$y\x1b[?1;2c\x1b[?1016$p\x1b[c";
+      const beforePaste = readFileSync(bytes);
+      const beforeFrames = inputs.length;
+      await input.evaluate((element, text) => {
+        const clipboardData = new DataTransfer();
+        clipboardData.setData("text/plain", text);
+        element.dispatchEvent(new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }));
+      }, payload);
+      const pasted = Buffer.from(`\x1b[200~${payload}\x1b[201~`);
+      const pasteDeadline = Date.now() + 5_000;
+      while (readFileSync(bytes).length < beforePaste.length + pasted.length) {
+        if (Date.now() > pasteDeadline) throw new Error("bracketed paste did not reach the owned readline PTY");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.deepEqual(readFileSync(bytes), Buffer.concat([beforePaste, pasted]),
+        "literal capability replies and queries in bracketed paste reach pane stdin byte for byte");
+      assert.deepEqual(inputs.slice(beforeFrames).map(({ text }) => text), [pasted.toString()],
+        "a user paste containing capability sequences remains one unmodified input frame");
     } finally {
       await paneSendKeys(paneId, ["ctrl+c"]);
       rmSync(fixture, { recursive: true, force: true });

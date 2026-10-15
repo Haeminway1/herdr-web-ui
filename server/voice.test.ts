@@ -226,7 +226,33 @@ describe("voice transcribe", () => {
     expect(form.getAll("languages[]")).toEqual(["ko", "en"]);
     expect(form.getAll("keywords[]")).toEqual(["git", "server/voice.ts"]);
     expect(form.get("prompt")).toBe("Dictation of a shell command line typed into a terminal");
-    expect((form.get("file") as File).name).toBe("audio.webm");
+    const uploaded = await new Request(request!.url, request!.init).formData();
+    expect((uploaded.get("file") as File).name).toBe("audio.webm");
+  });
+
+  it.each([
+    ["private-recording.WEBM", "audio/webm;codecs=opus", "audio.webm"],
+    ["private-recording.m4a", "audio/mp4", "audio.m4a"],
+    ["private-recording.mp4", "audio/mp4", "audio.mp4"],
+    ["private-recording.ogg", "audio/ogg", "audio.ogg"],
+    ["private-recording.wav", "audio/wav", "audio.wav"],
+  ])("uploads %s with a generic filename and unchanged bytes", async (name, type, filename) => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    handler = async (url, init) => {
+      const upload = await new Request(url, init).formData();
+      const file = upload.get("file");
+      expect(file).toBeInstanceOf(File);
+      if (file === null || typeof file === "string") throw new TypeError("Expected an uploaded audio file");
+      expect(file.name).toBe(filename);
+      expect(new Uint8Array(await file.arrayBuffer())).toEqual(bytes);
+      return transcriptAnswer();
+    };
+    const response = await transcribe(service({ HERDR_WEB_OPENAI_API_KEY: KEY }), clipForm({
+      audio: new Blob([bytes], { type }), name,
+    }));
+    expect(response.status).toBe(200);
+    expect((await events(response)).at(-1)).toEqual({ type: "done", text: DELTAS.join("") });
+    expect(requests).toHaveLength(1);
   });
 
   it("adds the polished text when asked", async () => {

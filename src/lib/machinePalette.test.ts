@@ -40,6 +40,23 @@ describe("all-PC palette", () => {
     expect(rankMachinePanes("remote-only", [machines[0]!, remote], "all", branches, t).map((entry) => entry.machineId)).toEqual(["remote"]);
     expect(rankMachinePanes("", [machines[0]!, remote], "blocked", branches, t).map((entry) => entry.machineId)).toEqual(["remote"]);
   });
+  it("keeps the exact target first across PCs while retaining ordered fuzzy matches", () => {
+    const roster = [machine("local", "Laptop", "browser-a/build"), machine("remote", "Build PC", "browser-b")];
+
+    const ranked = search("browser-b", roster);
+
+    expect(ranked.map(targetKey)).toEqual(['["remote","p1"]', '["local","p1"]']);
+    expect(groupMachinePanes(ranked, roster, true).flatMap((group) => group.panes.map(targetKey))).toEqual(ranked.map(targetKey));
+  });
+  it("adds and reranks only the owning PC's panes when branch metadata arrives", () => {
+    const roster = [machine("local", "Laptop", "browser-a/initial"), machine("remote", "Build PC")];
+    const branches = new Map([["remote", new Map([["w1", { branch: "browser/initial", checkoutPath: "/tmp/repo", isDetached: false }]])]]);
+    expect(search("browser/initial", roster).map(targetKey)).toEqual(['["local","p1"]']);
+
+    const ranked = rankMachinePanes("browser/initial", roster, "all", branches, t);
+
+    expect(ranked.map(targetKey)).toEqual(['["remote","p1"]', '["local","p1"]']);
+  });
   it("keeps recent targets separate, skips vanished/offline panes and excludes only the selected tuple", () => {
     const local = { machineId: "local", paneId: "p1" }; const remote = { machineId: "remote", paneId: "p1" };
     const recent = rememberTarget(remote, rememberTarget(local, [remote]));

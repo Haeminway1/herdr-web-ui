@@ -1,5 +1,5 @@
 /** Real-browser regressions against owned herdr panes. Run after `bun run build`. */
-import "./test-herdr.ts"; // a herdr session of its own: nothing shows in the user's
+import { TEST_SESSION } from "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { copyFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { chromium } from "playwright-core";
 import type { BrowserContext, Page } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
-import type { PaneMoved, SessionSnapshot, WorkspaceCreated, WorktreeOpened } from "../shared/protocol.ts";
+import type { PaneMoved, PluginActionsResponse, SessionSnapshot, WorkspaceCreated, WorktreeOpened } from "../shared/protocol.ts";
 import type { Machine } from "../shared/machines.ts";
 import { alertsOffMarked, alertsState, runMoreItem } from "./header-more.ts";
 import { checkPushSettings } from "./push-settings-regression.ts";
@@ -51,6 +51,9 @@ import { assertCspClean, watchCsp } from "./csp-violations.ts";
 import type { CspWatch } from "./csp-violations.ts";
 import { browserEvidencePage, browserEvidenceTracing, startBrowserEvidence } from "./browser-evidence.ts";
 import type { BrowserEvidenceSession } from "./browser-evidence.ts";
+
+// Browser assertions need a clean roster, not fixtures retained by an earlier failed run.
+const ownedTestSession = !process.env.HERDR_TEST_SESSION && process.env.HERDR_TEST_LIVE !== "1";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-browser-")));
 const workspaces: string[] = [];
@@ -199,15 +202,45 @@ try {
   // must close without selecting the highlighted result, and Enter on a row runs that row.
   const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
   const paletteSearch = palette.getByRole("searchbox", { name: "Search panes and actions", exact: true });
+  const palettePlugins = { plugins: [{
+    plugin_id: "browser.palette", name: "Browser fixture", version: "1.0.0", description: null, enabled: true,
+    actions: [{ action_id: "inspect", title: "Inspect browser/initial", description: null, contexts: ["pane"] }],
+  }] } satisfies PluginActionsResponse;
+  let palettePluginGate = Promise.resolve();
+  const unroutePalettePlugins = await routeDrained(page, "**/api/plugins/actions", async (route) => {
+    await palettePluginGate;
+    await route.fulfill({ json: palettePlugins });
+  });
+  // Read the current DOM in one task: async plugin/branch responses can change the rows and
+  // their indices between Playwright calls. The ARIA target must be the sole selected option,
+  // inside its controlled list and fully visible, with typing focus still in search.
+  const activePaletteEdge = (edge: "first" | "last") => paletteSearch.evaluate((input, at) => {
+    const list = document.getElementById(input.getAttribute("aria-controls") ?? "");
+    if (!list) return false;
+    const options = [...list.querySelectorAll<HTMLElement>('[role="option"]')];
+    const option = at === "first" ? options[0] : options.at(-1);
+    if (!option || option.id !== input.getAttribute("aria-activedescendant") || option.getAttribute("aria-selected") !== "true"
+      || options.filter((row) => row.getAttribute("aria-selected") === "true").length !== 1 || document.activeElement !== input) return false;
+    const row = option.getBoundingClientRect();
+    const bounds = list.getBoundingClientRect();
+    return row.top >= bounds.top - 1 && row.bottom <= bounds.bottom + 1;
+  }, edge);
+  const rankedOtherPane = async (): Promise<boolean> => await palette.locator(".palette-pane").first().getAttribute("data-pane") === paneB
+    && await palette.locator(`.palette-pane[data-machine="local"][data-pane="${paneB}"]`).getAttribute("aria-selected") === "true"
+    && await activePaletteEdge("first");
   const selectedPane = () => page.evaluate(() => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "null")?.pane_id as string | undefined);
-  const openPalette = async (): Promise<void> => {
+  const openPalette = async (waitForPlugins = true): Promise<void> => {
     await page.keyboard.press("ControlOrMeta+Shift+k");
     await palette.waitFor();
     await until(async () => await paletteSearch.evaluate((input) => document.activeElement === input), "palette search takes focus");
+    if (waitForPlugins) await palette.locator(".palette-plugin-action").waitFor();
   };
   await openPalette();
   await paletteSearch.fill("herdr-web-ui-test-browser-b");
-  await until(async () => await palette.locator(".palette-pane").count() === 1, "the other pane is the palette's only result");
+  await until(rankedOtherPane, "the exact workspace target ranks first and is the active result, ahead of any fuzzy metadata matches").catch(async (error) => {
+    console.error("Palette diagnostic", await palette.evaluate((node) => ({ text: node.textContent, options: [...node.querySelectorAll('[role="option"]')].map((row) => ({ id: row.id, pane: row.getAttribute("data-pane"), machine: row.getAttribute("data-machine"), selected: row.getAttribute("aria-selected") })), input: node.querySelector("input")?.outerHTML, focus: document.activeElement?.outerHTML })));
+    throw error;
+  });
   await page.keyboard.press("Tab");
   assert.equal(await palette.getByRole("button", { name: "Close command palette", exact: true }).evaluate((button) => document.activeElement === button), true,
     "Tab reaches the close button from search");
@@ -250,7 +283,7 @@ try {
 
   await openPalette();
   await paletteSearch.fill("herdr-web-ui-test-browser-b");
-  await until(async () => await palette.locator(".palette-pane").count() === 1, "IME check has a matching result to avoid activating");
+  await until(rankedOtherPane, "IME check has the intended ranked target to avoid activating");
   const paletteComposition = await paletteSearch.evaluate((input) => [
     { key: "Enter", isComposing: true },
     { key: "Enter", keyCode: 229 },
@@ -263,8 +296,36 @@ try {
   assert.equal(await palette.isVisible(), true, "IME Enter and Escape leave the palette open");
   assert.equal(await selectedPane(), paneA, "IME Enter never activates its matching pane");
   assert.equal(await paletteSearch.inputValue(), "herdr-web-ui-test-browser-b", "IME cancellation leaves the query alone");
-  await paletteSearch.press("Escape");
+  await paletteSearch.press("Enter");
   await palette.waitFor({ state: "hidden" });
+  await until(async () => await selectedPane() === paneB, "ordinary Enter selects the exact ranked target after IME keys left it alone");
+  await page.locator(`.pane-select[title^="${paneA} —"]`).click();
+  await until(async () => await selectedPane() === paneA, "return to the first pane after ranked search selection");
+
+  // A late plugin response appends options after the selected app action. Preserve that action
+  // by identity, then walk the new row and wrap only at the current end of the list.
+  let releasePalettePlugins = () => {};
+  palettePluginGate = new Promise<void>((resolve) => { releasePalettePlugins = resolve; });
+  try {
+    await openPalette(false);
+    await paletteSearch.fill(">");
+    const refreshOption = palette.getByRole("option", { name: "Refresh", exact: true });
+    await refreshOption.waitFor();
+    assert.equal(await palette.locator(".palette-plugin-action").count(), 0, "plugin actions are held outside the list");
+    await paletteSearch.press("ArrowUp");
+    await until(async () => await refreshOption.getAttribute("aria-selected") === "true" && await activePaletteEdge("last"), "ArrowUp selects the last app action before plugins arrive");
+    releasePalettePlugins();
+    await palette.locator(".palette-plugin-action").waitFor();
+    assert.equal(await refreshOption.getAttribute("aria-selected"), "true", "app action selection survives asynchronously appended plugin rows");
+    await paletteSearch.press("ArrowDown");
+    await until(async () => await palette.locator(".palette-plugin-action").getAttribute("aria-selected") === "true" && await activePaletteEdge("last"), "ArrowDown reaches the newly appended plugin action");
+    await paletteSearch.press("ArrowDown");
+    await until(() => activePaletteEdge("first"), "ArrowDown wraps from the new last action to the first action");
+    await paletteSearch.press("Escape");
+    await palette.waitFor({ state: "hidden" });
+  } finally {
+    releasePalettePlugins();
+  }
 
   // Short desktop and phone lists both overflow. Wrapping up from the first result and down
   // from the last keeps the active option visible while typing focus stays in search.
@@ -275,23 +336,15 @@ try {
     await page.mouse.move(0, 0);
     assert.equal(await palette.locator(".palette-results").evaluate((list) => list.scrollHeight > list.clientHeight), true,
       "the short palette has a scrollable list");
-    const optionCount = await palette.getByRole("option").count();
-    const visibleActiveOption = () => palette.locator(".palette-results").evaluate((list) => {
-      const option = list.querySelector<HTMLElement>('[aria-selected="true"]');
-      if (!option) return false;
-      const row = option.getBoundingClientRect();
-      const bounds = list.getBoundingClientRect();
-      return row.top >= bounds.top - 1 && row.bottom <= bounds.bottom + 1;
-    });
     await paletteSearch.press("ArrowUp");
-    await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === `palette-item-${optionCount - 1}` && await visibleActiveOption(),
+    await until(() => activePaletteEdge("last"),
       "ArrowUp wraps to the last visible palette option");
     if (process.env.UI_EVIDENCE_DIR) {
       mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
       await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `palette-arrow-${viewport.width <= 640 ? "mobile" : "desktop"}.png`) });
     }
     await paletteSearch.press("ArrowDown");
-    await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0" && await visibleActiveOption(),
+    await until(() => activePaletteEdge("first"),
       "ArrowDown wraps back to the first visible palette option");
     assert.equal(await paletteSearch.evaluate((input) => document.activeElement === input), true, "arrow navigation keeps typing focus in search");
     await paletteSearch.press("Escape");
@@ -302,21 +355,22 @@ try {
   // pointer move still does.
   await page.setViewportSize({ width: 1280, height: 400 });
   await openPalette();
-  const restingOptionCount = await palette.getByRole("option").count();
   const firstOption = (await palette.locator("#palette-item-0").boundingBox())!;
   await page.mouse.move(firstOption.x + firstOption.width / 2, firstOption.y + firstOption.height / 2);
   await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0", "the resting pointer is over the first option");
-  await palette.locator(".palette-results").evaluate((list) => {
-    const hovered: string[] = [];
-    (window as unknown as { paletteHovered: string[] }).paletteHovered = hovered;
-    list.addEventListener("mouseover", (event) => hovered.push((event.target as HTMLElement).closest("[role=option]")?.id ?? ""));
-  });
   await paletteSearch.press("ArrowUp");
-  await until(async () => await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.some((id) => id !== "" && id !== "palette-item-0")),
-    "the scroll moves another option under the resting pointer");
-  assert.equal(await paletteSearch.getAttribute("aria-activedescendant"), `palette-item-${restingOptionCount - 1}`,
+  await until(async () => await palette.locator(".palette-results").evaluate((list) => list.scrollTop > 0),
+    "arrow selection scrolls the list while the pointer stays still");
+  assert.equal(await activePaletteEdge("last"), true,
     "a scroll under a resting pointer leaves the arrow's selection alone");
-  const hoveredId = await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.findLast((id) => id !== "")!);
+  const hoveredId = await palette.locator(".palette-results").evaluate((list) => {
+    const bounds = list.getBoundingClientRect();
+    return [...list.querySelectorAll<HTMLElement>('[role="option"]')].find((row) => {
+      const rect = row.getBoundingClientRect();
+      return row.getAttribute("aria-selected") !== "true" && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+    })?.id;
+  });
+  assert.ok(hoveredId, "a second visible option is available for a real pointer move");
   const hoveredBox = (await palette.locator(`#${hoveredId}`).boundingBox())!;
   await page.mouse.move(hoveredBox.x + hoveredBox.width / 2 + 4, hoveredBox.y + hoveredBox.height / 2);
   await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === hoveredId, "a real pointer move selects the option under it");
@@ -326,6 +380,7 @@ try {
   await page.setViewportSize(paletteViewport);
   console.log("PASS palette buttons keep native Enter, IME keeps its keys, and arrow selection stays visible on short desktop and phone lists");
   await checkPaletteKeys(page, { workspaceId: workspaces[1]! });
+  await unroutePalettePlugins();
 
   // Hold a real machines response, then deliver a newer status through herdr/SSE.
   const badge = page.locator(".pane-item.is-selected .badge");
@@ -1265,6 +1320,42 @@ try {
   await until(async () => await initialRow.locator(".workspace-name").textContent() === "Existing checkout", "a named worktree's row is titled by its workspace name");
   assert.equal(await initialRow.locator(".worktree-workspace-label").textContent(), "browser/initial", "the list API discovers an existing worktree's exact branch, said after the name");
   assert.equal(await repoRow.locator(".workspace-name").textContent(), "herdr-web-ui-test-repo", "the parent keeps its workspace name");
+  let releasePaletteBranches = () => {};
+  const heldPaletteBranches = new Promise<void>((resolve) => { releasePaletteBranches = resolve; });
+  let paletteBranchesCaptured = false;
+  const unroutePaletteBranches = await routeDrained(page, "**/api/worktree/list?*", async (route) => {
+    const response = await route.fetch();
+    paletteBranchesCaptured = true;
+    await heldPaletteBranches;
+    await route.fulfill({ response });
+  });
+  const unrouteBranchPlugins = await routeDrained(page, "**/api/plugins/actions", async (route) => {
+    await route.fulfill({ json: palettePlugins });
+  });
+  try {
+    await openPalette();
+    await until(() => paletteBranchesCaptured, "the palette's branch inventory is held");
+    await paletteSearch.fill("browser/initial");
+    await palette.locator(".palette-plugin-action").waitFor();
+    await paletteSearch.press("ArrowUp");
+    await until(async () => await palette.locator(".palette-plugin-action").getAttribute("aria-selected") === "true" && await activePaletteEdge("last"), "the matching plugin is selected before branch metadata arrives");
+    releasePaletteBranches();
+    await palette.locator(".palette-section-branch").filter({ hasText: "browser/initial" }).waitFor();
+    const initialPalettePane = palette.locator(`.palette-pane[data-machine="local"][data-pane="${initialWorktree.pane_id}"]`);
+    await until(async () => await palette.locator(".palette-pane").first().getAttribute("data-pane") === initialWorktree.pane_id,
+      "the exact branch target ranks ahead of fuzzy metadata matches after inventory arrives");
+    assert.equal(await palette.locator(".palette-plugin-action").getAttribute("aria-selected"), "true", "branch results entering before the selected plugin preserve its identity");
+    await until(() => activePaletteEdge("last"), "the plugin's updated ARIA index remains valid and visible after branch results arrive");
+    await paletteSearch.press("ArrowDown");
+    await until(async () => await initialPalettePane.getAttribute("aria-selected") === "true" && await activePaletteEdge("first"), "ArrowDown wraps from the plugin to the new top branch result");
+    await paletteSearch.press("Enter");
+    await palette.waitFor({ state: "hidden" });
+    await until(async () => await selectedPane() === initialWorktree.pane_id, "Enter selects the branch result's intended pane");
+  } finally {
+    releasePaletteBranches();
+    await unroutePaletteBranches();
+    await unrouteBranchPlugins();
+  }
   // A list read from before creation must not erase the branch supplied by the create response.
   let releaseWorktreeList!: () => void;
   const heldWorktreeList = new Promise<void>((resolve) => { releaseWorktreeList = resolve; });
@@ -2109,4 +2200,8 @@ try {
   if (repo) try { rmdirSync(join(homedir(), ".herdr", "worktrees", basename(repo))); } catch { /* not there, or not empty: not ours */ }
   for (const id of workspaces) await workspaceClose(id);
   rmSync(root, { recursive: true, force: true });
+  if (ownedTestSession) {
+    const herdr = process.env.HERDR_WEB_HERDR_BIN ?? Bun.which("herdr");
+    if (herdr) Bun.spawnSync([herdr, "--session", TEST_SESSION, "server", "stop"]);
+  }
 }
