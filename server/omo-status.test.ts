@@ -3,11 +3,11 @@ import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, statSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
+import type { AgentInfo, AgentStatus, HerdrPane, PaneInfo, SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker, type OmoRest } from "./completion.ts";
 import { paneAfterStatus } from "./machines.ts";
 import { earliestStart, holderStartedAt } from "./omo.ts";
-import { noTurn, OMO_ALIASES, omoBackgroundTasks, omoSessionId, OmoStatus, omoTurnAfter, omoTurnStatus, readLines, type OmoLine, type OmoPane } from "./omo-status.ts";
+import { correctOmoBlockedSnapshot, correctedOmoStatus, isOmoStatusCandidate, noTurn, OMO_ALIASES, omoBackgroundTasks, omoScreenShowsWork, omoSessionId, OmoStatus, omoTurnAfter, omoTurnStatus, readLines, type OmoLine, type OmoPane } from "./omo-status.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-omo-status-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -324,6 +324,37 @@ describe("OmO panes' status in place of herdr's", () => {
     expect(told.at(-1)).toEqual(["omo", "idle", 0, true]);
   });
 
+  it.each(["blocked", "working", "idle"])("keeps a current Working footer through transcript normalization from raw %s and tells screen-only changes", async (rawStatus) => {
+    const { omo, told, state } = setup(lines(asking("queued", false), acceptedResult("queued"), message("assistant", "stop")));
+    const raw = () => snapshotOf(pane("omo", "pi", rawStatus));
+    const working = "── • Working (1m 33s • esc to interrupt) ──\n❯\n────────\n(😺 OmO Native by Q Kim) Pursuing goal (9m) ◉ watching SWE-2 Max worker (2m)";
+    const normalize = (screen: string | null) => correctOmoBlockedSnapshot(raw(), async () => screen);
+    const active = await normalize(working);
+    await omo.refresh(active.panes);
+    expect(omo.apply(active).panes[0]?.agent_status).toBe("working");
+    expect(omo.apply(active).agents[0]?.agent_status).toBe("working");
+    expect(told).toEqual([["omo", "working", 0, true]]);
+    omo.poll();
+    await omo.refresh((await normalize(working)).panes);
+    expect(told).toHaveLength(1);
+    const blocked = await normalize(`${working}\n╭─ Allow this action? ─╮\n│ ❯ Yes   No │\n╰─────────────────────╯`);
+    await omo.refresh(blocked.panes);
+    expect(omo.apply(blocked).panes[0]?.agent_status).toBe("blocked");
+    expect(omo.apply(blocked).agents[0]?.agent_status).toBe("blocked");
+    expect(told).toEqual([["omo", "working", 0, true], ["omo", "blocked", 0, true]]);
+    expect(state.lookups).toBe(1);
+  });
+
+  it.each([null, "Question pending (1 unanswered)\nOMO Native"])("withdraws Working screen evidence on a later unreadable or idle screen: %s", async (screen) => {
+    const { omo, told } = setup(lines(asking("queued", false), acceptedResult("queued")));
+    const raw = () => snapshotOf(pane("omo", "pi", "blocked"));
+    await omo.refresh((await correctOmoBlockedSnapshot(raw(), async () => "── • Working (1m • esc to interrupt)\nOMO Native")).panes);
+    const next = await correctOmoBlockedSnapshot(raw(), async () => screen);
+    await omo.refresh(next.panes);
+    expect(omo.apply(next).panes[0]?.agent_status).toBe("blocked");
+    expect(told.at(-1)).toEqual(["omo", "blocked", 0, true]);
+  });
+
   it("tells a turn that ended while the panes were being looked up again", async () => {
     const { omo, told, append, state } = setup(lines(message("user")));
     await omo.refresh(herdr().panes);
@@ -576,5 +607,225 @@ describe("OmO panes' status in place of herdr's", () => {
     state.clock += 6000;
     await omo.refresh(herdr().panes);
     expect(state.lookups).toBe(2);
+  });
+});
+
+describe("OMO current-screen correction", () => {
+  const PENDING_LINE = "Question pending (1 unanswered), enter or alt+up to answer";
+  const WORKING_FOOTER = "── • Working (1m 33s • esc to interrupt)";
+  const BRAND = "OMO Native";
+  const CAPTURED_FOOTER = [
+    "── • Working (1m 33s • esc to interrupt) ──────────────────────────────────────────────────────────────────",
+    "❯",
+    "───────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "~/dev/agents/kmong-agent • main • … • 196K/500K (39.3%) (auto)                              gpt-6.1-sol:low",
+    "(😺 OmO Native by Q Kim) Pursuing goal (9m) ◉ watching SWE-2 Max worker (2m)",
+  ];
+  const CAPTURED_SCREEN = [
+    "? Question pending (1 unanswered) · 30m",
+    "  Which channel?",
+    "[ existing ] [ new ] [ own answer… ]",
+    "click an option · shift+drag to select text",
+    "enter or alt+up to answer · /answer · or just type your reply",
+    ...CAPTURED_FOOTER,
+  ].join("\n");
+
+  describe("isOmoStatusCandidate", () => {
+    it("names the labels a pane carries while OMO runs in it", () => {
+      expect(isOmoStatusCandidate("pi")).toBe(true);
+      expect(isOmoStatusCandidate("omo")).toBe(true);
+      expect(isOmoStatusCandidate("claude")).toBe(false);
+      expect(isOmoStatusCandidate("codex")).toBe(false);
+      expect(isOmoStatusCandidate(null)).toBe(false);
+      expect(isOmoStatusCandidate(undefined)).toBe(false);
+    });
+  });
+
+  describe("omoScreenShowsWork", () => {
+    it("recognizes the captured pending question above the empty composer and cwd/model footer", () => {
+      expect(omoScreenShowsWork(CAPTURED_SCREEN)).toBe(true);
+      expect(omoScreenShowsWork(`\n${CAPTURED_SCREEN}\n\n`)).toBe(true);
+    });
+
+    it.each([
+      ["permission dialog", "╭─ Allow running bun test? ─╮\n│ ❯ Yes   No    Always │\n╰─────────────────────────╯"],
+      ["answer dialog", "? Question pending (1 unanswered)\nWhich channel?\n[ existing ] [ new ] [ own answer… ]"],
+      ["filled composer", "❯ start a new task"],
+      ["ordinary output", "The worker finished; waiting for your reply."],
+    ])("rejects a later %s even with bottom branding", (_name, later) => {
+      const screen = [WORKING_FOOTER, later, ...CAPTURED_FOOTER.slice(2)].join("\n");
+      expect(omoScreenShowsWork(screen)).toBe(false);
+      expect(omoScreenShowsWork(`${CAPTURED_SCREEN}\n${later}`)).toBe(false);
+    });
+
+    it("rejects a historical footer above a new empty prompt and question", () => {
+      const screen = [WORKING_FOOTER, "❯", PENDING_LINE, ...CAPTURED_FOOTER.slice(2)].join("\n");
+      expect(omoScreenShowsWork(screen)).toBe(false);
+    });
+
+    it("requires the Working row to be rule-prefixed chrome", () => {
+      for (const quoted of ["• Working (1m 33s • esc to interrupt)", `The old footer was ${WORKING_FOOTER}`, `> ${WORKING_FOOTER}`]) {
+        expect(omoScreenShowsWork([quoted, ...CAPTURED_FOOTER.slice(1)].join("\n"))).toBe(false);
+      }
+    });
+
+    it("rejects OMO branding embedded in arbitrary pasted prose", () => {
+      expect(omoScreenShowsWork([WORKING_FOOTER, "This pasted example uses OMO Native branding."].join("\n"))).toBe(false);
+      expect(omoScreenShowsWork([BRAND, WORKING_FOOTER, "❯"].join("\n"))).toBe(false);
+      expect(omoScreenShowsWork([WORKING_FOOTER, "OMO Native says to answer now"].join("\n"))).toBe(false);
+      expect(omoScreenShowsWork([WORKING_FOOTER, "(A pasted line mentions OMO Native)"].join("\n"))).toBe(false);
+    });
+
+    it("only accepts the cwd/model status row immediately before branding", () => {
+      expect(omoScreenShowsWork([WORKING_FOOTER, CAPTURED_FOOTER[3], "❯", BRAND].join("\n"))).toBe(false);
+    });
+
+    it("sees work under a stale pending question", () => {
+      const screen = [
+        "● watching worker w48:p2",
+        PENDING_LINE,
+        WORKING_FOOTER,
+        BRAND,
+      ].join("\n");
+      expect(omoScreenShowsWork(screen)).toBe(true);
+    });
+
+    it("accepts the brand riding on the footer line itself", () => {
+      const screen = [
+        "● watching worker w48:p2",
+        PENDING_LINE,
+        `${WORKING_FOOTER}   ${BRAND}`,
+      ].join("\n");
+      expect(omoScreenShowsWork(screen)).toBe(true);
+    });
+
+    it("does not see work on an idle pending question", () => {
+      const screen = [
+        "● answered: deploy the fix",
+        PENDING_LINE,
+        "> ",
+        BRAND,
+      ].join("\n");
+      expect(omoScreenShowsWork(screen)).toBe(false);
+    });
+
+    it("does not see work when a real dialog sits under the footer", () => {
+      const screen = [
+        BRAND,
+        PENDING_LINE,
+        WORKING_FOOTER,
+        "╭─ Allow running bun test? ─╮",
+        "│ ❯ Yes   No    Always      │",
+        "╰───────────────────────────╯",
+      ].join("\n");
+      expect(omoScreenShowsWork(screen)).toBe(false);
+    });
+
+    it("ignores a Working line above a newer prompt: history, not the live footer", () => {
+      const screen = [
+        WORKING_FOOTER,
+        "… output scrolled past …",
+        PENDING_LINE,
+        BRAND,
+      ].join("\n");
+      expect(omoScreenShowsWork(screen)).toBe(false);
+    });
+
+    it("needs unmistakable OMO branding: another agent's Working footer is not enough", () => {
+      const screen = [
+        "some pi pane without the brand",
+        PENDING_LINE,
+        WORKING_FOOTER,
+      ].join("\n");
+      expect(omoScreenShowsWork(screen)).toBe(false);
+    });
+
+    it("ignores screens without a Working footer at all", () => {
+      expect(omoScreenShowsWork(["output", BRAND].join("\n"))).toBe(false);
+      expect(omoScreenShowsWork("")).toBe(false);
+    });
+  });
+
+  describe("correctedOmoStatus", () => {
+    const workingScreen = [PENDING_LINE, WORKING_FOOTER, BRAND].join("\n");
+    const idleScreen = [PENDING_LINE, BRAND].join("\n");
+
+    it("turns blocked into working only while the screen shows live work", () => {
+      expect(correctedOmoStatus("blocked", workingScreen)).toBe("working");
+      expect(correctedOmoStatus("blocked", idleScreen)).toBe("blocked");
+    });
+
+    it("preserves the raw status on a failed or unknown read", () => {
+      expect(correctedOmoStatus("blocked", null)).toBe("blocked");
+    });
+
+    it("never rewrites a status that is not blocked", () => {
+      expect(correctedOmoStatus("idle", workingScreen)).toBe("idle");
+      expect(correctedOmoStatus("working", workingScreen)).toBe("working");
+    });
+  });
+
+  const paneOf = (pane_id: string, agent_status: string, agent?: string | null, extra: Partial<PaneInfo> = {}): PaneInfo =>
+    ({ pane_id, agent_status, agent, focused: false, revision: 0, tab_id: "test:t1", terminal_id: "test:term", workspace_id: "test", ...extra });
+  const agentOf = (pane_id: string, agent_status: string, agent?: string | null): AgentInfo =>
+    ({ ...paneOf(pane_id, agent_status, agent) });
+  const snapOf = (panes: PaneInfo[], agents: AgentInfo[]): SessionSnapshot =>
+    ({ panes, agents, workspaces: [], tabs: [], layouts: [], protocol: 22, version: "test" });
+
+  describe("correctOmoBlockedSnapshot", () => {
+    const workingScreen = [PENDING_LINE, WORKING_FOOTER, BRAND].join("\n");
+
+    it("corrects a false-blocked pane and its agent entry together", async () => {
+      const snapshot = snapOf(
+        [paneOf("w1:p1", "blocked", "pi")],
+        [agentOf("w1:p1", "blocked", "pi")],
+      );
+      const out = await correctOmoBlockedSnapshot(snapshot, async () => workingScreen);
+      expect(out.panes[0]?.agent_status).toBe("working");
+      expect(out.agents[0]?.agent_status).toBe("working");
+    });
+
+    it("reads candidate panes for transcript evidence, never other agents", async () => {
+      const reads: string[] = [];
+      const snapshot = snapOf(
+        [
+          paneOf("w1:p1", "blocked", "pi"),
+          paneOf("w1:p2", "blocked", "codex"),
+          paneOf("w1:p3", "working", "pi"),
+        ],
+        [agentOf("w1:p1", "blocked", "pi"), agentOf("w1:p2", "blocked", "codex")],
+      );
+      const out = await correctOmoBlockedSnapshot(snapshot, async (paneId) => {
+        reads.push(paneId);
+        return workingScreen;
+      });
+      expect(reads).toEqual(["w1:p1", "w1:p3"]);
+      expect(out.panes.map((pane) => pane.agent_status)).toEqual(["working", "blocked", "working"]);
+      expect(out.agents.map((agent) => agent.agent_status)).toEqual(["working", "blocked"]);
+    });
+
+    it("counts a pane with an omo session tag as a candidate", async () => {
+      const snapshot = snapOf(
+        [paneOf("w1:p1", "blocked", "claude", { agent_session: { agent: "omo", kind: "path", source: "herdr:omo", value: "/s.jsonl" } })],
+        [agentOf("w1:p1", "blocked", "claude")],
+      );
+      const out = await correctOmoBlockedSnapshot(snapshot, async () => workingScreen);
+      expect(out.panes[0]?.agent_status).toBe("working");
+      expect(out.agents[0]?.agent_status).toBe("working");
+    });
+
+    it("preserves blocked when the screen read fails", async () => {
+      const snapshot = snapOf([paneOf("w1:p1", "blocked", "pi")], [agentOf("w1:p1", "blocked", "pi")]);
+      const out = await correctOmoBlockedSnapshot(snapshot, () => Promise.reject(new Error("pane gone")));
+      expect(out.panes[0]?.agent_status).toBe("blocked");
+      expect(out.agents[0]?.agent_status).toBe("blocked");
+    });
+
+    it("returns the snapshot untouched when nothing corrects", async () => {
+      const snapshot = snapOf([paneOf("w1:p1", "blocked", "codex")], [agentOf("w1:p1", "blocked", "codex")]);
+      const out = await correctOmoBlockedSnapshot(snapshot, async () => workingScreen);
+      expect(out).toBe(snapshot);
+      expect(out.panes[0]?.agent_status).toBe("blocked");
+    });
   });
 });

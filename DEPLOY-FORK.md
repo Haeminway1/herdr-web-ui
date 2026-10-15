@@ -21,6 +21,8 @@ This branch runs beside the canonical `devswha.herdr-web-ui` plugin as a second 
 - Fork-only overlay: identity (plugin id, names, version, config-dir lookup), plan meters on at the
   top by default, and the two tests that assume upstream's usage defaults adjusted to match.
 - The plugin picks a release up within five minutes; every open app shows its reload banner.
+- OMO queued questions do not mark a pane as needing input while its current bottom
+  Working footer confirms work. Missing screen evidence or a later dialog keeps INPUT.
 - Retire: once the PRs are merged upstream, uninstall this plugin and use the canonical app.
 
 ## Fork features (keep working through every sync)

@@ -13,6 +13,7 @@ import type {
 } from "../../shared/protocol.ts";
 import type { AgentInfo, AgentManifestInfo, AgentStartParams, PaneInfo, PaneLayoutSnapshot, PaneMoveParams, PaneMoveResult, PaneScrollInfo, TabInfo, WorkspaceInfo } from "../../shared/herdr-api.generated.ts";
 import type { HerdrIdentity } from "../../shared/machines.ts";
+import { correctOmoBlockedSnapshot } from "../omo-status.ts";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -175,8 +176,13 @@ export async function ping(socketPath?: string): Promise<HerdrIdentity> {
 }
 
 export async function sessionSnapshot(socketPath?: string, timeoutMs?: number): Promise<SessionSnapshot> {
+  const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
   const result = await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {}, socketPath, timeoutMs);
-  return result.snapshot;
+  return correctOmoBlockedSnapshot(result.snapshot, async (paneId) => {
+    const remaining = deadline === undefined ? undefined : deadline - Date.now();
+    if (remaining !== undefined && remaining <= 0) return null;
+    return (await paneRead({ paneId, source: "visible", format: "text", timeoutMs: remaining }, socketPath)).text;
+  });
 }
 
 /** One pane's metadata; an unknown pane rejects with herdr's `pane_not_found`. */

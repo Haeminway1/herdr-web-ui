@@ -22,10 +22,9 @@
  * ends the turn is the finish after all. Nothing of OmO's or Claude's is installed or changed
  * for this: files are read.
  *
- * A question OmO asks the user (omo-ask.ts) holds the pane at INPUT while it is open, whatever the
- * turn does: one that waits for its answer stopped the turn for a tool (RUN until now), and one
- * that does not wait lets the turn go on or end (RUN or DONE until now) with the question still
- * open over the input box.
+ * A question OmO asks the user (omo-ask.ts) holds the pane at INPUT while it is open, unless
+ * its current screen positively shows the bottom Working footer. A queued question can stay
+ * above that footer while the turn goes on. Without that screen evidence the question stands.
  *
  * The status replaces herdr's for the pane before CompletionTracker sees it, in status events and
  * in snapshots alike, under the one identity `omo`: herdr has named such a pane `pi` and `claude`
@@ -41,6 +40,71 @@ export { readOmoLines as readLines, type OmoLine } from "./omo-records.ts";
 import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { omoAsksAfter, type OmoAsks } from "./omo-ask.ts";
 import type { OmoRest } from "./completion.ts";
+
+export type OmoScreenReader = (paneId: string) => Promise<string | null>;
+
+export function isOmoStatusCandidate(agent: string | null | undefined): boolean {
+  return agent === "pi" || agent === "omo";
+}
+
+const OMO_BRAND_RE = /^(?:OMO\s+Native|\((?:😺\s*)?OMO\s+Native(?:\s+by\s+Q\s+Kim)?\)(?:\s+Pursuing goal\b.*)?)$/i;
+const WORKING_FOOTER_RE = /^[─━═╌–—-]{2,}\s*[•●⏺]\s*Working\s+\([^()]*\besc to interrupt\)\s*[─━═╌–—-]*(?:\s+OMO\s+Native)?$/i;
+const FOOTER_CHROME_RE = /^[\s─━═╌–—\-•·]+$/;
+const PATH_STATUS_RE = /^(?:~\/|\/|[A-Za-z]:[\\/])\S.*\s[•·]\s.+\s{2,}[A-Za-z0-9][A-Za-z0-9._:/+-]*$/;
+
+export function omoScreenShowsWork(screen: string): boolean {
+  const lines = screen.split(/\r?\n/).map((line) => line.trim());
+  while (lines.at(-1) === "") lines.pop();
+  const brand = lines.pop();
+  if (brand === undefined) return false;
+  if (WORKING_FOOTER_RE.test(brand) && /\sOMO\s+Native$/i.test(brand)) return true;
+  if (!OMO_BRAND_RE.test(brand)) return false;
+  while (lines.at(-1) === "") lines.pop();
+  if (PATH_STATUS_RE.test(lines.at(-1) ?? "")) lines.pop();
+  let composer = false;
+  for (const line of lines.reverse()) {
+    if (WORKING_FOOTER_RE.test(line)) return true;
+    if (!line || FOOTER_CHROME_RE.test(line)) continue;
+    if (line === "❯" && !composer) {
+      composer = true;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+export function correctedOmoStatus(raw: AgentStatus, screen: string | null): AgentStatus {
+  return raw === "blocked" && screen !== null && omoScreenShowsWork(screen) ? "working" : raw;
+}
+
+// Keep affirmative screen evidence on the exact snapshot pane, outside the wire contract.
+// OmoStatus must not replace that verdict with its still-open transcript question. Weak keys
+// keep this scoped to each read (including its socket), without a client import or live test IO.
+const workingScreens = new WeakSet<HerdrPane>();
+
+export async function correctOmoBlockedPanes(panes: readonly HerdrPane[], readScreen: OmoScreenReader): Promise<HerdrPane[]> {
+  return Promise.all(panes.map(async (pane) => {
+    if (!isOmoStatusCandidate(pane.agent) && pane.agent_session?.agent !== "omo") return pane;
+    const screen = await readScreen(pane.pane_id).catch(() => null);
+    if (screen === null || !omoScreenShowsWork(screen)) return pane;
+    const corrected = { ...pane, agent_status: pane.agent_status === "blocked" ? "working" : pane.agent_status };
+    workingScreens.add(corrected);
+    return corrected;
+  }));
+}
+
+export async function correctOmoBlockedSnapshot(snapshot: SessionSnapshot, readScreen: OmoScreenReader): Promise<SessionSnapshot> {
+  const panes = await correctOmoBlockedPanes(snapshot.panes, readScreen);
+  const working = new Set(panes.filter((pane) => workingScreens.has(pane)).map((pane) => pane.pane_id));
+  if (working.size === 0) return snapshot;
+  return {
+    ...snapshot,
+    panes,
+    agents: snapshot.agents.map((entry) => working.has(entry.pane_id) && entry.agent_status === "blocked"
+      ? { ...entry, agent_status: "working" } : entry),
+  };
+}
 
 /** runtime messages that start a turn nobody typed; one not named here shows as RUN from its first answer on */
 const TURN_STARTS = new Set([
@@ -181,7 +245,7 @@ export interface OmoStatusDeps {
   now?: () => number;
 }
 
-interface Tracked extends OmoPane { cwd: string; offset: number; size: number; id: string; /** found again after a while herdr's status stood for it: a turn still running is told anew */ retell: boolean; turn: OmoTurn; status: OmoPaneStatus; /** at rest after an error, and when that error was written */ failed: boolean; failedAt: number | null; /** what is read now is the file's history, found anew: not written since it was being read */ history: boolean; background: number; /** the file could be opened at the last poll, and all it held was read to a record's end */ available: boolean; complete: boolean; /** a poll has considered this pane: a baseline it then read is nobody's news */ polled: boolean; /** the pane's own status stood for it at the last poll */ authoritative: boolean }
+interface Tracked extends OmoPane { cwd: string; offset: number; size: number; id: string; /** found again after a while herdr's status stood for it: a turn still running is told anew */ retell: boolean; turn: OmoTurn; status: OmoPaneStatus; /** the latest snapshot has affirmative bottom-footer evidence */ screenWorking: boolean; /** at rest after an error, and when that error was written */ failed: boolean; failedAt: number | null; /** what is read now is the file's history, found anew: not written since it was being read */ history: boolean; background: number; /** the file could be opened at the last poll, and all it held was read to a record's end */ available: boolean; complete: boolean; /** a poll has considered this pane: a baseline it then read is nobody's news */ polled: boolean; /** the pane's own status stood for it at the last poll */ authoritative: boolean }
 
 const FILES: OmoFile = {
   stat: (path) => { try { const fd = openSync(path, "r"); try { const stat = fstatSync(fd); return { size: stat.size, id: `${stat.dev}:${stat.ino}` }; } finally { closeSync(fd); } } catch { return null; } },
@@ -279,7 +343,10 @@ export class OmoStatus {
    */
   async refresh(panes: HerdrPane[]): Promise<void> {
     const key = panes.map((pane) => `${pane.pane_id}\0${pane.agent ?? ""}\0${pane.cwd ?? ""}`).join("\n");
-    if (key === this.refreshedFor && this.now() - this.refreshedAt < this.refreshMs) return;
+    if (key === this.refreshedFor && this.now() - this.refreshedAt < this.refreshMs) {
+      if (this.refreshScreens(panes)) this.poll();
+      return;
+    }
     if (this.refreshing) return this.refreshing;
     this.refreshing = (async () => {
       const generation = this.generation;
@@ -307,15 +374,30 @@ export class OmoStatus {
           const startedAt = pane.startedAt ?? before?.startedAt ?? (prior?.path === pane.path ? prior.startedAt : null);
           // an error the pane rested on is the same session's alone: another one's answers finish nothing of it
           const same = prior !== undefined && prior.path === pane.path;
-          this.panes.set(paneId, { ...pane, startedAt, cwd: cwds.get(paneId) ?? "", offset: -1, size: -1, id: "", retell: prior !== undefined, turn: noTurn(), status: prior?.status ?? "idle", failed: same && prior.failed, failedAt: same ? prior.failedAt : null, history: false, background: prior?.background ?? 0, available: false, complete: false, polled: this.deps.ready !== undefined && (before?.polled === true || prior !== undefined), authoritative: false });
+          this.panes.set(paneId, { ...pane, startedAt, cwd: cwds.get(paneId) ?? "", offset: -1, size: -1, id: "", retell: prior !== undefined, turn: noTurn(), status: prior?.status ?? "idle", screenWorking: false, failed: same && prior.failed, failedAt: same ? prior.failedAt : null, history: false, background: prior?.background ?? 0, available: false, complete: false, polled: this.deps.ready !== undefined && (before?.polled === true || prior !== undefined), authoritative: false });
         }
         if (pane.path !== null) this.last.delete(paneId);
       }
       this.refreshedFor = key;
       this.refreshedAt = this.now();
+      this.refreshScreens(panes);
       this.poll();
     })().finally(() => { this.refreshing = null; });
     return this.refreshing;
+  }
+
+  private refreshScreens(panes: readonly HerdrPane[]): boolean {
+    if (this.agent !== "omo") return false;
+    let changed = false;
+    for (const pane of panes) {
+      const tracked = this.panes.get(pane.pane_id);
+      if (tracked) {
+        const working = workingScreens.has(pane);
+        changed ||= tracked.screenWorking !== working;
+        tracked.screenWorking = working;
+      }
+    }
+    return changed;
   }
 
   private remember(paneId: string, tracked: Tracked): void {
@@ -360,7 +442,9 @@ export class OmoStatus {
       if (tracked.turn.status === null && tracked.offset < size) { this.noteAuthority(tracked); continue; }
       const stale = tracked.turn.status === "working" && tracked.turn.at !== null && tracked.startedAt !== null && tracked.turn.at < tracked.startedAt - STALE_TURN_MS;
       if (this.staleIsFailure && stale && tracked.turn.asks.length > 0) tracked.turn = { ...tracked.turn, asks: [] };
-      const status: OmoPaneStatus = tracked.turn.asks.length > 0 ? "blocked" : tracked.turn.status === "working" && !stale ? "working" : "idle";
+      const status: OmoPaneStatus = tracked.turn.asks.length > 0
+        ? tracked.screenWorking ? "working" : "blocked"
+        : tracked.turn.status === "working" && !stale ? "working" : "idle";
       const sessionId = omoSessionId(tracked.path);
       if (!counts.has(tracked.cwd)) counts.set(tracked.cwd, tracked.cwd ? this.background(tracked.cwd) : new Map());
       const background = sessionId ? counts.get(tracked.cwd)!.get(sessionId) ?? 0 : 0;

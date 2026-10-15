@@ -1,5 +1,6 @@
 import type { AgentStatus, HerdrPane } from "../shared/protocol.ts";
-import { HerdrError, sessionSnapshot, subscribeEvents, type EventFrame, type Subscription } from "./herdr/client.ts";
+import { HerdrError, herdrRpc, paneRead, subscribeEvents, type EventFrame, type Subscription } from "./herdr/client.ts";
+import { correctOmoBlockedPanes, correctedOmoStatus, isOmoStatusCandidate, type OmoScreenReader } from "./omo-status.ts";
 
 /**
  * Collects agent status for EVERY pane in the session, not just the attached ones.
@@ -94,6 +95,7 @@ export interface StatusCollectorHandlers {
 export interface StatusCollectorDeps {
   subscribe: typeof subscribeEvents;
   snapshot: () => Promise<{ panes: HerdrPane[] }>;
+  omoScreen: OmoScreenReader;
   reconnectMinMs: number;
   reconnectMaxMs: number;
   backstopMs: number;
@@ -105,7 +107,8 @@ export interface StatusCollectorDeps {
 
 const DEFAULT_DEPS: StatusCollectorDeps = {
   subscribe: subscribeEvents,
-  snapshot: () => sessionSnapshot(),
+  snapshot: async () => (await herdrRpc<{ snapshot: { panes: HerdrPane[] } }>("session.snapshot", {})).snapshot,
+  omoScreen: async (paneId) => (await paneRead({ paneId, source: "visible", format: "text" })).text,
   reconnectMinMs: RECONNECT_MIN_MS,
   reconnectMaxMs: RECONNECT_MAX_MS,
   backstopMs: BACKSTOP_INTERVAL_MS,
@@ -234,7 +237,11 @@ function logSubscriptionError(error: Error): void {
 }
 
 export function startStatusCollector(handlers: StatusCollectorHandlers, overrides: Partial<StatusCollectorDeps> = {}): StatusCollector {
-  const deps: StatusCollectorDeps = { ...DEFAULT_DEPS, ...overrides };
+  const deps: StatusCollectorDeps = {
+    ...DEFAULT_DEPS,
+    ...overrides,
+    omoScreen: overrides.omoScreen ?? (overrides.snapshot ? async () => null : DEFAULT_DEPS.omoScreen),
+  };
   const ready = Promise.withResolvers<void>();
   let stopped = false;
   let statusSubscription: Subscription | null = null;
@@ -255,6 +262,8 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
   /** counts status events; each pane keeps the count of its latest */
   let statusEvents = 0;
   const lastEventOf = new Map<string, number>();
+  const pendingBlockedChecks = new Map<string, number>();
+  const removedPanes = new Set<string>();
   /** each pane's status as last heard, in an event or a snapshot: what the snapshot after a gap is measured against */
   const heard = new Map<string, { status: AgentStatus; agent: string | null }>();
   /** when a pane last ended or closed, counted as events are: a snapshot asked for before that is no news of it */
@@ -292,6 +301,8 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
   ] as const;
 
   function closeStatusSubscription(): void {
+    statusGeneration += 1;
+    pendingBlockedChecks.clear();
     statusStarted = false;
     subscribedPaneIds = new Set();
     statusSubscription?.close();
@@ -311,9 +322,25 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       paneIds.map((paneId) => ({ type: "pane.agent_status_changed", pane_id: paneId })),
       {
         onEvent: (frame) => {
+          if (stopped || generation !== statusGeneration) return;
           const parsed = parseStatusFrame(frame);
-          if (!parsed) return;
-          lastEventOf.set(parsed.paneId, ++statusEvents);
+          if (!parsed || !subscribedPaneIds.has(parsed.paneId) || removedPanes.has(parsed.paneId)) return;
+          const seq = ++statusEvents;
+          lastEventOf.set(parsed.paneId, seq);
+          pendingBlockedChecks.delete(parsed.paneId);
+          if (parsed.status === "blocked" && isOmoStatusCandidate(parsed.agent)) {
+            pendingBlockedChecks.set(parsed.paneId, seq);
+            void deps.omoScreen(parsed.paneId).catch(() => null).then((screen) => {
+              if (stopped || generation !== statusGeneration || removedPanes.has(parsed.paneId) ||
+                !subscribedPaneIds.has(parsed.paneId) || pendingBlockedChecks.get(parsed.paneId) !== seq ||
+                (actedOn.get(parsed.paneId) ?? 0) > seq) return;
+              pendingBlockedChecks.delete(parsed.paneId);
+              const status = correctedOmoStatus(parsed.status, screen);
+              heard.set(parsed.paneId, { status, agent: parsed.agent });
+              handlers.onStatus(parsed.paneId, status, parsed.agent);
+            });
+            return;
+          }
           heard.set(parsed.paneId, { status: parsed.status, agent: parsed.agent });
           handlers.onStatus(parsed.paneId, parsed.status, parsed.agent);
         },
@@ -321,7 +348,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
         // that chose these panes came before: one more closes the gap it leaves.
         onStarted: () => {
           started = true;
-          if (statusSubscription !== subscription) return;
+          if (stopped || generation !== statusGeneration || statusSubscription !== subscription) return;
           statusStarted = true;
           if (recovering) resyncFor = generation;
           else if (gap) replayFor = generation;
@@ -364,10 +391,27 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
     const replay = replayFor;
     replayFor = null;
     const askedAt = statusEvents;
+    const generation = statusGeneration;
     try {
-      const snapshot = await deps.snapshot();
+      const raw = await deps.snapshot();
       if (stopped) return;
-      handlers.onBaseline(snapshot.panes);
+      const normalized = await correctOmoBlockedPanes(raw.panes, deps.omoScreen);
+      if (stopped) return;
+      if (generation !== statusGeneration) {
+        if (statusSubscription === null) openStatusSubscription(raw.panes.filter((pane) => !removedPanes.has(pane.pane_id)).map((pane) => pane.pane_id));
+        reconcilePending = true;
+        return;
+      }
+      const snapshot = { panes: normalized };
+      const corrections = new Set(raw.panes.filter((pane) => pane.agent_status === "blocked" &&
+        (isOmoStatusCandidate(pane.agent) || pane.agent_session?.agent === "omo")).map((pane) => pane.pane_id));
+      const newerThan = (paneId: string, seq: number): boolean => Math.max(lastEventOf.get(paneId) ?? 0, actedOn.get(paneId) ?? 0, focusedAt.get(paneId) ?? 0) > seq;
+      const baseline = snapshot.panes.filter((pane) => !removedPanes.has(pane.pane_id) && Math.max(lastEventOf.get(pane.pane_id) ?? 0, actedOn.get(pane.pane_id) ?? 0) <= askedAt);
+      for (const pane of baseline) pendingBlockedChecks.delete(pane.pane_id);
+      for (const [paneId, seq] of pendingBlockedChecks) {
+        if (seq <= askedAt && !snapshot.panes.some((pane) => pane.pane_id === paneId)) pendingBlockedChecks.delete(paneId);
+      }
+      handlers.onBaseline(baseline);
       // a snapshot asked for a subscription that closed meanwhile may predate what the next
       // one misses: recovery waits for that one's own snapshot
       const resynced = resync !== null && resync === statusGeneration && statusSubscription !== null;
@@ -380,7 +424,10 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
         // clients learn statuses from events, and some were lost: they fetch again
         handlers.onStructureChange();
       }
-      const paneIds = snapshot.panes.map((pane) => pane.pane_id);
+      const paneIds = [...new Set([
+        ...snapshot.panes.filter((pane) => !removedPanes.has(pane.pane_id)).map((pane) => pane.pane_id),
+        ...[...subscribedPaneIds].filter((paneId) => !removedPanes.has(paneId) && (lastEventOf.get(paneId) ?? 0) > askedAt),
+      ])];
       const sameSet =
         paneIds.length === subscribedPaneIds.size && paneIds.every((id) => subscribedPaneIds.has(id));
       // the live subscription is about to be closed for another pane set: what this snapshot
@@ -389,16 +436,16 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       const afterGap = !resynced && !recovering && replay !== null && replay === statusGeneration && statusSubscription !== null;
       const replaying = afterGap || leaving;
       if (resynced || afterGap) gap = false;
-      const newerThan = (paneId: string, seq: number): boolean => Math.max(lastEventOf.get(paneId) ?? 0, actedOn.get(paneId) ?? 0, focusedAt.get(paneId) ?? 0) > seq;
       const replays: HerdrPane[] = [];
       for (const pane of snapshot.panes) {
+        if (removedPanes.has(pane.pane_id)) continue;
         // an event, an exit or a focus since the snapshot was asked for is newer than it
         const focusOnly = resynced && Math.max(lastEventOf.get(pane.pane_id) ?? 0, actedOn.get(pane.pane_id) ?? 0) <= askedAt;
         if (newerThan(pane.pane_id, askedAt) && !focusOnly) continue;
         const before = heard.get(pane.pane_id);
         // a pane first seen, or corrected by the resync: this is what it is told as from now
         if (before === undefined || resynced) heard.set(pane.pane_id, { status: pane.agent_status, agent: pane.agent ?? null });
-        else if (replaying && before.status !== pane.agent_status) replays.push(pane);
+        else if (!recovering && (replaying || corrections.has(pane.pane_id)) && before.status !== pane.agent_status) replays.push(pane);
       }
       // also with nothing to replay, when the live connection is about to close: an event on its way is read first
       if (replays.length > 0 || leaving) {
@@ -413,8 +460,12 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
           if (newerThan(pane.pane_id, askedAt) || before === undefined || before.status === pane.agent_status) continue;
           const agent = pane.agent ?? null;
           heard.set(pane.pane_id, { status: pane.agent_status, agent });
-          handlers.onStatus(pane.pane_id, pane.agent_status, agent, { before: before.status, agent: before.agent });
+          handlers.onStatus(pane.pane_id, pane.agent_status, agent, corrections.has(pane.pane_id) ? undefined : { before: before.status, agent: before.agent });
         }
+      }
+      if (generation !== statusGeneration) {
+        reconcilePending = true;
+        return;
       }
       // a pane heard of since the snapshot was asked for is newer than what it shows of it
       handlers.onReconciled?.(snapshot.panes.filter((pane) => !newerThan(pane.pane_id, askedAt)));
@@ -423,6 +474,10 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       for (const paneId of [...heard.keys()]) if (!paneIds.includes(paneId) && (lastEventOf.get(paneId) ?? 0) <= askedAt) heard.delete(paneId);
       for (const [paneId, seq] of actedOn) if (seq <= askedAt && !paneIds.includes(paneId)) actedOn.delete(paneId);
       for (const [paneId, seq] of focusedAt) if (seq <= askedAt && !paneIds.includes(paneId)) focusedAt.delete(paneId);
+      for (const paneId of pendingBlockedChecks.keys()) if (!paneIds.includes(paneId)) pendingBlockedChecks.delete(paneId);
+      for (const paneId of removedPanes) {
+        if (!raw.panes.some((pane) => pane.pane_id === paneId) && (actedOn.get(paneId) ?? 0) <= askedAt) removedPanes.delete(paneId);
+      }
       if (sameSet) {
         if (statusStarted || paneIds.length === 0) ready.resolve();
         return;
@@ -472,12 +527,15 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
     deps,
     [...STRUCTURE_SUBSCRIPTIONS],
     (frame) => {
+      if (stopped) return;
       const parsed = parseStructureFrame(frame);
       if (!parsed) return;
       if (parsed.kind === "pane-ended") {
         // a snapshot already on its way still holds the pane: it is no news of it
         actedOn.set(parsed.paneId, ++statusEvents);
         heard.delete(parsed.paneId);
+        removedPanes.add(parsed.paneId);
+        pendingBlockedChecks.delete(parsed.paneId);
         handlers.onPaneEnded(parsed.paneId);
       }
       else {
@@ -491,6 +549,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
           // resting baseline; a resting payload must not erase unfinished work.
           const before = heard.get(previousPaneId);
           heard.delete(previousPaneId);
+          pendingBlockedChecks.delete(previousPaneId);
           heard.set(paneId, before === undefined || status === "working" || status === "blocked" ? { status, agent } : before);
           // A snapshot already in flight still holds the old ID. It must neither
           // restore that baseline nor prune the one just carried to the new ID.
@@ -501,6 +560,8 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
         if (parsed.closed !== undefined) {
           actedOn.set(parsed.closed, ++statusEvents);
           heard.delete(parsed.closed);
+          removedPanes.add(parsed.closed);
+          pendingBlockedChecks.delete(parsed.closed);
         }
       }
       scheduleStructureChange();

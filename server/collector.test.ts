@@ -272,6 +272,7 @@ function fakeHerdr(initial: HerdrPane[]) {
     debounceMs: 5,
     snapshotRetryMs: 5,
     replaySettleMs: 5,
+    omoScreen: async () => null,
     subscribe: (subs, handlers) => {
       const record: FakeSubscription = {
         types: subs.map((sub) => sub.type),
@@ -319,6 +320,7 @@ const statusFrame = (pane_id: string, agent_status: string): EventFrame => ({ ev
 function recorder() {
   const log = {
     baselines: 0,
+    baselineStatuses: [] as string[][],
     resyncs: [] as { panes: string[]; newer: string[] }[],
     structure: 0,
     statuses: [] as string[],
@@ -330,7 +332,7 @@ function recorder() {
       log.statuses.push(`${paneId}:${status}${replay ? ` (was ${replay.before})` : ""}`);
       log.order.push(`${paneId}:${status}`);
     },
-    onBaseline: () => { log.baselines += 1; },
+    onBaseline: (panes) => { log.baselines += 1; log.baselineStatuses.push(panes.map((pane) => `${pane.pane_id}:${pane.agent_status}`)); },
     onReconciled: (panes) => log.order.push(`reconciled ${panes.map((p) => `${p.pane_id}:${p.agent_status}`).join(" ")}`),
     onResync: (panes, newer) => log.resyncs.push({ panes: panes.map((p) => p.pane_id), newer: [...newer].sort() }),
     onPaneEnded: () => {},
@@ -816,5 +818,321 @@ describe("startStatusCollector recovery", () => {
     await tick(60);
     expect(herdr.subscriptions.length).toBe(subscriptions);
     expect(log.resyncs).toEqual([]);
+  });
+});
+
+const OMO_PENDING_WORKING = [
+  "● goal pursued, worker watched",
+  "Question pending (1 unanswered), enter or alt+up to answer",
+  "── • Working (1m 33s • esc to interrupt)",
+  "OMO Native",
+].join("\n");
+const OMO_PENDING_IDLE = [
+  "● goal pursued, worker watched",
+  "Question pending (1 unanswered), enter or alt+up to answer",
+  "OMO Native",
+].join("\n");
+const omoFrame = (pane_id: string, agent_status = "blocked", agent = "pi"): EventFrame =>
+  ({ event: "pane.agent_status_changed", data: { pane_id, agent_status, agent } });
+const omoPane = (paneId = "w1:p1"): HerdrPane => ({ ...paneOf(paneId, "blocked"), agent: "pi" });
+const deferred = <T>() => Promise.withResolvers<T>();
+const flushMicrotasks = async () => {
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+};
+
+const untilCollector = async (ready: () => boolean) => {
+  const deadline = Date.now() + 1000;
+  while (!ready()) {
+    if (Date.now() >= deadline) throw new Error("collector did not reach the expected state");
+    await tick();
+  }
+};
+
+describe("startStatusCollector omo false-blocked", () => {
+  it("reports working when a blocked pi event's screen shows OMO's live Working footer", async () => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "blocked")]);
+    const { log, handlers } = recorder();
+    const reads: string[] = [];
+    const collector = startStatusCollector(handlers, {
+      ...herdr.deps,
+      omoScreen: async (paneId) => { reads.push(paneId); return OMO_PENDING_WORKING; },
+    });
+    await tick();
+    herdr.status()?.emit(omoFrame("w1:p1"));
+    await tick();
+    expect(reads).toEqual(["w1:p1"]);
+    expect(log.statuses).toEqual(["w1:p1:working"]);
+    collector.stop();
+  });
+
+  it("keeps blocked when the pending question is real: no live Working footer", async () => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "blocked")]);
+    const { log, handlers } = recorder();
+    const collector = startStatusCollector(handlers, {
+      ...herdr.deps,
+      omoScreen: async () => OMO_PENDING_IDLE,
+    });
+    await tick();
+    herdr.status()?.emit(omoFrame("w1:p1"));
+    await tick();
+    expect(log.statuses).toEqual(["w1:p1:blocked"]);
+    collector.stop();
+  });
+
+  it("never reads a screen for another agent's blocked event", async () => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "blocked")]);
+    const { log, handlers } = recorder();
+    const reads: string[] = [];
+    const collector = startStatusCollector(handlers, {
+      ...herdr.deps,
+      omoScreen: async (paneId) => { reads.push(paneId); return OMO_PENDING_WORKING; },
+    });
+    await tick();
+    herdr.status()?.emit(statusFrame("w1:p1", "blocked"));
+    await tick();
+    expect(reads).toEqual([]);
+    expect(log.statuses).toEqual(["w1:p1:blocked"]);
+    collector.stop();
+  });
+
+  it("keeps blocked when the screen cannot be read", async () => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "blocked")]);
+    const { log, handlers } = recorder();
+    const collector = startStatusCollector(handlers, {
+      ...herdr.deps,
+      omoScreen: () => Promise.reject(new Error("pane gone")),
+    });
+    await tick();
+    herdr.status()?.emit(omoFrame("w1:p1"));
+    await tick();
+    expect(log.statuses).toEqual(["w1:p1:blocked"]);
+    collector.stop();
+  });
+
+  it("does not let a stale screen read speak over a newer status", async () => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "blocked")]);
+    const { log, handlers } = recorder();
+    const pendingReads: ((screen: string | null) => void)[] = [];
+    const collector = startStatusCollector(handlers, {
+      ...herdr.deps,
+      omoScreen: () => new Promise<string | null>((resolve) => pendingReads.push(resolve)),
+    });
+    await tick();
+    herdr.status()?.emit(omoFrame("w1:p1"));
+
+    herdr.status()?.emit(statusFrame("w1:p1", "idle"));
+    pendingReads.pop()?.(OMO_PENDING_WORKING);
+    await tick();
+    expect(log.statuses).toEqual(["w1:p1:idle"]);
+    collector.stop();
+  });
+
+  it("says nothing once stopped, even if the read lands afterwards", async () => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "blocked")]);
+    const { log, handlers } = recorder();
+    const pendingReads: ((screen: string | null) => void)[] = [];
+    const collector = startStatusCollector(handlers, {
+      ...herdr.deps,
+      omoScreen: () => new Promise<string | null>((resolve) => pendingReads.push(resolve)),
+    });
+    await tick();
+    herdr.status()?.emit(omoFrame("w1:p1"));
+    collector.stop();
+    pendingReads.pop()?.(OMO_PENDING_WORKING);
+    await tick();
+    expect(log.statuses).toEqual([]);
+  });
+
+  it("broadcasts blocked -> working -> blocked from screens while every raw snapshot stays blocked", async () => {
+    const herdr = fakeHerdr([omoPane()]);
+    const { log, handlers } = recorder();
+    let screen = OMO_PENDING_IDLE;
+    const collector = startStatusCollector(handlers, { ...herdr.deps, omoScreen: async () => screen });
+    try {
+      await flushMicrotasks();
+      expect(log.statuses).toEqual([]);
+      screen = OMO_PENDING_WORKING;
+      herdr.status()?.start();
+      await flushMicrotasks();
+      await untilCollector(() => log.statuses.length === 1);
+      expect(log.statuses).toEqual(["w1:p1:working"]);
+      herdr.status()?.start();
+      await flushMicrotasks();
+      expect(log.statuses).toEqual(["w1:p1:working"]);
+      screen = OMO_PENDING_IDLE;
+      herdr.status()?.start();
+      await flushMicrotasks();
+      await untilCollector(() => log.statuses.length === 2);
+      expect(log.statuses).toEqual(["w1:p1:working", "w1:p1:blocked"]);
+      expect(log.baselineStatuses.at(-1)).toEqual(["w1:p1:blocked"]);
+    } finally {
+      collector.stop();
+    }
+  });
+
+  it("does not overwrite a newer event with a stale reconcile or use it as the next baseline", async () => {
+    const herdr = fakeHerdr([omoPane()]);
+    const { log, handlers } = recorder();
+    const read = deferred<string | null>();
+    let screen: () => Promise<string | null> = async () => OMO_PENDING_IDLE;
+    const collector = startStatusCollector(handlers, { ...herdr.deps, omoScreen: () => screen() });
+    try {
+      await flushMicrotasks();
+      screen = () => read.promise;
+      herdr.status()?.start();
+      await flushMicrotasks();
+      herdr.status()?.emit(omoFrame("w1:p1", "idle"));
+      read.resolve(OMO_PENDING_WORKING);
+      await flushMicrotasks();
+      expect(log.statuses).toEqual(["w1:p1:idle"]);
+      expect(log.baselineStatuses.at(-1)).toEqual([]);
+      screen = async () => OMO_PENDING_IDLE;
+      herdr.status()?.start();
+      await flushMicrotasks();
+      await untilCollector(() => log.statuses.length === 2);
+      expect(log.statuses).toEqual(["w1:p1:idle", "w1:p1:blocked"]);
+    } finally {
+      collector.stop();
+    }
+  });
+
+  it("ignores a late event screen after a newer normalized reconcile", async () => {
+    const herdr = fakeHerdr([omoPane()]);
+    const { log, handlers } = recorder();
+    const read = deferred<string | null>();
+    let screen: () => Promise<string | null> = async () => OMO_PENDING_IDLE;
+    const collector = startStatusCollector(handlers, { ...herdr.deps, omoScreen: () => screen() });
+    try {
+      await flushMicrotasks();
+      screen = () => read.promise;
+      herdr.status()?.emit(omoFrame("w1:p1"));
+      screen = async () => OMO_PENDING_IDLE;
+      herdr.status()?.start();
+      await flushMicrotasks();
+      read.resolve(OMO_PENDING_WORKING);
+      await flushMicrotasks();
+      expect(log.statuses).toEqual([]);
+    } finally {
+      collector.stop();
+    }
+  });
+
+  it("invalidates blocked reads and queued frames when the subscription generation closes", async () => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "idle")]);
+    const { log, handlers } = recorder();
+    const read = deferred<string | null>();
+    const collector = startStatusCollector(handlers, { ...herdr.deps, omoScreen: () => read.promise });
+    try {
+      await flushMicrotasks();
+      const old = herdr.status();
+      old?.emit(omoFrame("w1:p1"));
+      old?.drop("connect_failed");
+      old?.emit(omoFrame("w1:p1", "idle"));
+      read.resolve(OMO_PENDING_WORKING);
+      await flushMicrotasks();
+      expect(herdr.status()).not.toBe(old);
+      expect(log.statuses).toEqual([]);
+    } finally {
+      collector.stop();
+    }
+  });
+
+  it("discards a normalized snapshot from a closed generation while continuing recovery", async () => {
+    const herdr = fakeHerdr([omoPane()]);
+    const { log, handlers } = recorder();
+    const read = deferred<string | null>();
+    let screen: () => Promise<string | null> = async () => OMO_PENDING_IDLE;
+    const collector = startStatusCollector(handlers, { ...herdr.deps, omoScreen: () => screen() });
+    try {
+      await flushMicrotasks();
+      const old = herdr.status();
+      screen = () => read.promise;
+      old?.start();
+      await flushMicrotasks();
+      old?.drop("connect_failed");
+      screen = async () => OMO_PENDING_IDLE;
+      read.resolve(OMO_PENDING_WORKING);
+      await flushMicrotasks();
+      expect(herdr.status()).not.toBe(old);
+      expect(log.statuses).toEqual([]);
+      expect(log.resyncs).toEqual([]);
+      herdr.status()?.start();
+      await flushMicrotasks();
+      expect(log.resyncs).toEqual([{ panes: ["w1:p1"], newer: [] }]);
+      expect(log.statuses).toEqual([]);
+    } finally {
+      collector.stop();
+    }
+  });
+
+  it.each(["pane_closed", "pane_exited"])("invalidates blocked reads immediately on %s even with a stale pane snapshot", async (type) => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "idle")]);
+    const { log, handlers } = recorder();
+    const read = deferred<string | null>();
+    const snapshot = deferred<{ panes: HerdrPane[] }>();
+    let holdSnapshot = false;
+    const collector = startStatusCollector(handlers, {
+      ...herdr.deps,
+      snapshot: () => holdSnapshot ? snapshot.promise : Promise.resolve({ panes: [paneOf("w1:p1", "idle")] }),
+      omoScreen: () => read.promise,
+    });
+    try {
+      await flushMicrotasks();
+      const old = herdr.status();
+      old?.emit(omoFrame("w1:p1"));
+      holdSnapshot = true;
+      old?.start();
+      herdr.lifecycle().emit({ data: { type, pane_id: "w1:p1" } });
+      old?.emit(omoFrame("w1:p1", "working"));
+      read.resolve(OMO_PENDING_WORKING);
+      snapshot.resolve({ panes: [paneOf("w1:p1", "working")] });
+      await flushMicrotasks();
+      expect(log.statuses).toEqual([]);
+      expect(log.baselineStatuses.at(-1)).toEqual([]);
+      await untilCollector(() => old?.closedByCollector === true);
+      expect(old?.closedByCollector).toBe(true);
+    } finally {
+      collector.stop();
+    }
+  });
+
+  it("drops a pending read when a snapshot removes the pane and does not invent events when it returns", async () => {
+    const herdr = fakeHerdr([paneOf("w1:p1", "idle"), paneOf("w1:p2", "idle")]);
+    const { log, handlers } = recorder();
+    const read = deferred<string | null>();
+    const collector = startStatusCollector(handlers, { ...herdr.deps, omoScreen: () => read.promise });
+    try {
+      await flushMicrotasks();
+      const old = herdr.status();
+      old?.emit(omoFrame("w1:p1"));
+      herdr.setPanes([paneOf("w1:p2", "idle")]);
+      old?.start();
+      await flushMicrotasks();
+      read.resolve(OMO_PENDING_WORKING);
+      await untilCollector(() => old?.closedByCollector === true);
+      expect(log.statuses).toEqual([]);
+      herdr.setPanes([paneOf("w1:p1", "working"), paneOf("w1:p2", "idle")]);
+      herdr.status()?.start();
+      await untilCollector(() => herdr.status()?.paneIds.includes("w1:p1") === true);
+      expect(log.statuses).toEqual([]);
+    } finally {
+      collector.stop();
+    }
+  });
+
+  it("keeps snapshot-only injection isolated from live screen reads", async () => {
+    const herdr = fakeHerdr([omoPane()]);
+    const { omoScreen: _screen, ...snapshotOnly } = herdr.deps;
+    const { log, handlers } = recorder();
+    const collector = startStatusCollector(handlers, snapshotOnly);
+    try {
+      await flushMicrotasks();
+      expect(log.baselineStatuses).toEqual([["w1:p1:blocked"]]);
+      herdr.status()?.emit(omoFrame("w1:p1"));
+      await flushMicrotasks();
+      expect(log.statuses).toEqual(["w1:p1:blocked"]);
+    } finally {
+      collector.stop();
+    }
   });
 });
