@@ -1117,7 +1117,8 @@ export function Composer({
     : hint === "near-limit" ? t("{count} characters left", { count: MAX_COMPOSER_CHARS - text.length })
     : t(hint === "uploading" ? "Uploading file…" : "Reconnecting… message held here, never queued");
   /** the strip under the card: the folder and the branch the caller knows; none, or a phone's screen, no strip */
-  const strip = mobile ? null : composerStrip({ cwd, branch, repo: worktreeRepo });
+  // fork: only when chosen in Settings (folderStrip)
+  const strip = mobile || !settings.folderStrip ? null : composerStrip({ cwd, branch, repo: worktreeRepo });
   const worktree = worktreeRepo !== null;
   // Fit only changes to drawn content. Streaming context usage is a fixed-size ring unless
   // its number is open on desktop; transcript/status refreshes need no measurement layout.

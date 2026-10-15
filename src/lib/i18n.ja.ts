@@ -1031,6 +1031,8 @@ export const JA: Record<string, string> = {
   "Lilac": "ライラック",
   "Forest": "フォレスト",
   "New tab in {workspace}": "{workspace} に新しいタブ",
+  "Folder and branch": "フォルダーとブランチ",
+  "Name the pane's folder and branch under the message box": "メッセージ欄の下にペインのフォルダーとブランチを表示します",
   // fork: the dashboard and the plan panel's placement
   "Beside Settings": "設定の横",
   "Close {title}": "{title} を閉じる",

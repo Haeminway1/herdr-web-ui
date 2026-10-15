@@ -98,6 +98,8 @@ export interface Settings {
   tuiPanes: boolean;
   /** fork: the newest turn's work block starts open, as before upstream #458 folded settled work */
   openLastWork: boolean;
+  /** fork: upstream #991's folder and branch strip under the message box; off keeps the box as before */
+  folderStrip: boolean;
   /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
   agentOrder: AgentOrder;
   /** Agent logos: brand colors, or without color, so a list of one agent is not a stripe of tiles */
@@ -205,7 +207,7 @@ type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
   | "quickReplies" | "usageOrder" | "usageHidden"
   // fork deployment: the fork's own settings stay on this device; upstream's Worker does not know them
-  | "claudeMark" | "codexMark" | "dashboardSidebar" | "openLastWork" | "sidebarLayout" | "sidebarGrouping" | "tuiPanes"
+  | "claudeMark" | "codexMark" | "dashboardSidebar" | "openLastWork" | "folderStrip" | "sidebarLayout" | "sidebarGrouping" | "tuiPanes"
   | "planFlow" | "planButton" | "planInChip" | "usagePlacement">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
@@ -292,7 +294,7 @@ export const SETTING_SCOPE = {
   // Viewer layout follows this screen, as chatWidth does.
   wrapCode: "device", markdownWidth: "device", diffStyle: "device",
   // fork deployment: the fork's own settings stay per device
-  claudeMark: "device", codexMark: "device", dashboardSidebar: "device", openLastWork: "device", sidebarLayout: "device",
+  claudeMark: "device", codexMark: "device", dashboardSidebar: "device", openLastWork: "device", folderStrip: "device", sidebarLayout: "device",
   sidebarGrouping: "device", tuiPanes: "device", planFlow: "device", planButton: "device", planInChip: "device", usagePlacement: "device",
 } as const satisfies Record<keyof Settings, "shared" | "device">;
 
@@ -314,6 +316,8 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarGrouping: "repo",
   tuiPanes: AUTOMATED,
   openLastWork: !AUTOMATED,
+  // fork: automation starts on upstream's strip, which its UI tests check
+  folderStrip: AUTOMATED,
   palette: "report", // fork deployment: the report look by default, as before v0.3.4101
   claudeMark: "logo",
   codexMark: "logo",
@@ -493,6 +497,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     sidebarGrouping: record["sidebarGrouping"] === "repo" || record["sidebarGrouping"] === "directory" || record["sidebarGrouping"] === "workspace" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
     tuiPanes: typeof record["tuiPanes"] === "boolean" ? record["tuiPanes"] : DEFAULT_SETTINGS.tuiPanes,
     openLastWork: typeof record["openLastWork"] === "boolean" ? record["openLastWork"] : DEFAULT_SETTINGS.openLastWork,
+    folderStrip: typeof record["folderStrip"] === "boolean" ? record["folderStrip"] : DEFAULT_SETTINGS.folderStrip,
     claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
     codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,
     agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,

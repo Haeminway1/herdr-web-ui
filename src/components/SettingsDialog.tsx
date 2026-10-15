@@ -358,6 +358,10 @@ function ChatPage() {
         <SettingsRow label={t("Open the latest work")} description={t("The newest answer's tool calls start unfolded")}>
           <Toggle label={t("Open the latest work")} checked={settings.openLastWork} onChange={(openLastWork) => update({ openLastWork })} />
         </SettingsRow>
+        {/* fork: upstream #991's strip, off by default */}
+        <SettingsRow label={t("Folder and branch")} description={t("Name the pane's folder and branch under the message box")}>
+          <Toggle label={t("Folder and branch")} checked={settings.folderStrip} onChange={(folderStrip) => update({ folderStrip })} />
+        </SettingsRow>
         <SettingsRow label={t("Chat width")} description={t("How wide the conversation and the message box run on a large screen")} wide>
           <Segmented label={t("Chat width")} value={settings.chatWidth} onChange={(chatWidth) => update({ chatWidth })} options={CHAT_WIDTHS.map((chatWidth) => ({ value: chatWidth, label: t(chatWidth === "narrow" ? "Narrow" : chatWidth === "wide" ? "Wide" : chatWidth === "full" ? "Full" : "Default") }))} />
         </SettingsRow>

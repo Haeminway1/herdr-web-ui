@@ -1029,6 +1029,8 @@ export const KO: Record<string, string> = {
   "Lilac": "연보라",
   "Forest": "포레스트",
   "New tab in {workspace}": "{workspace}에 새 탭",
+  "Folder and branch": "폴더와 브랜치",
+  "Name the pane's folder and branch under the message box": "메시지 입력창 아래에 패널의 폴더와 브랜치를 표시합니다",
   // fork: the dashboard and the plan panel's placement
   "Beside Settings": "설정 옆",
   "Close {title}": "{title} 닫기",

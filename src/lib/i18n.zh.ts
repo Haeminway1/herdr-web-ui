@@ -1033,6 +1033,8 @@ export const ZH: Record<string, string> = {
   "Lilac": "淡紫",
   "Forest": "森林绿",
   "New tab in {workspace}": "在 {workspace} 中新建标签页",
+  "Folder and branch": "文件夹和分支",
+  "Name the pane's folder and branch under the message box": "在消息框下方显示窗格的文件夹和分支",
   // fork: the dashboard and the plan panel's placement
   "Beside Settings": "设置旁边",
   "Close {title}": "关闭 {title}",
