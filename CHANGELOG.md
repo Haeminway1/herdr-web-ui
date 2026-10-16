@@ -7,6 +7,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.1101] - 2026-10-16
+
+### Changed
+- Fork: upstream 0.4.11 is in (the /effort card, Claude's plan file, readable light-theme terminal
+  text, connection retry back-off, Codex's folder trust card); every screen looks and works as before.
+
 ## [0.4.1002] - 2026-10-16
 
 ### Fixed
@@ -48,6 +54,31 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 - Fork: Gajae Code status follows its native parent turn, including questions, background
   results, errors and restart interruptions, instead of a provider child's stale RUN.
   ([#928](https://github.com/devswha/herdr-web-ui/pull/928))
+
+## [0.4.11] - 2026-10-16
+
+### Fixed
+- `/effort` in a Claude Code chat shows its card again with Claude Code 2.1.301, whose slider
+  describes the level between the level names and the hint.
+  ([#1200](https://github.com/devswha/herdr-web-ui/pull/1200) by @sergiorademacher)
+- Claude's plan card finds the session's plan file again, with **View plan**, when recent Claude Code
+  versions write large request lines to the transcript after the line that names it.
+  ([#1198](https://github.com/devswha/herdr-web-ui/pull/1198) by @sergiorademacher)
+- Codex's folder trust prompt gets its card again when its hint ends with `esc quit` instead of
+  `esc back`, as it does when Codex starts in a folder it has not seen.
+  ([#1195](https://github.com/devswha/herdr-web-ui/pull/1195) by @vibewriter-hand)
+- Terminal text a program colors for the other background stays readable: under a light theme,
+  Claude Code's white question titles and reply bullets no longer vanish into the background. Other
+  colors too faint for the theme are darkened or lightened just enough to read, such as yellow on a
+  light palette.
+  ([#1171](https://github.com/devswha/herdr-web-ui/pull/1171) by @todor-a)
+- A connection that opens and drops again no longer retries every quarter second: retries back off
+  until it has stayed open for 10 seconds. Returning to the page still retries immediately.
+  ([#1183](https://github.com/devswha/herdr-web-ui/pull/1183) by @philipprass-prog)
+
+### Maintenance
+- The remote-PC runtime is now version 30: every saved PC asks for **Update bridge…** once.
+
 ## [0.4.10] - 2026-10-16
 
 ### Changed
@@ -4130,8 +4161,10 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.4.1002...HEAD
+[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.4.1101...HEAD
+[0.4.1101]: https://github.com/devswha/herdr-web-ui/compare/v0.4.1002...v0.4.1101
 [0.4.1002]: https://github.com/devswha/herdr-web-ui/compare/v0.4.1001...v0.4.1002
+[0.4.11]: https://github.com/devswha/herdr-web-ui/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/devswha/herdr-web-ui/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/devswha/herdr-web-ui/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/devswha/herdr-web-ui/compare/v0.4.7...v0.4.8

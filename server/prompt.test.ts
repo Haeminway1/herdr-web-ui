@@ -466,6 +466,32 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     expect(answerKeys(trust!, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
   });
 
+  test("parses Codex's folder trust prompt when its hint ends with esc quit", () => {
+    const trust = parseInteractivePrompt("codex", `
+  Folder access
+  /tmp/prompt-lab-codex
+  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.
+› 1. Trust and continue
+  2. Open restricted
+  enter continue · esc quit
+`);
+    expect(trust).toMatchObject({ kind: "approval", title: "Trust this folder?" });
+    expect(labels(trust)).toEqual(["Trust and continue", "Open restricted"]);
+    expect(answerKeys(trust!, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+  });
+
+  test("does not read Codex's update prompt as an approval under a question-like line", () => {
+    expect(parseInteractivePrompt("codex", `
+• Would you like to continue with the tests next?
+
+  Update available! 0.162.1 -> 0.163.0
+› 1. Update now
+  2. Skip
+  3. Skip until next version
+  enter continue · esc skip
+`)).toBeNull();
+  });
+
   test("ignores unknown agents, stale transcript menus, and ordinary output", () => {
     expect(parseInteractivePrompt("other", "Enter to select · ↑/↓ to navigate · Esc to cancel")).toBeNull();
     expect(parseInteractivePrompt("claude", "No response requested. The task is complete.")).toBeNull();
@@ -3014,6 +3040,46 @@ ${"─".repeat(120)}
     for (const at of [0, 2, 3, 4]) expect(parseInteractivePrompt("claude", claudeEffort(at))!.id).toBe(prompt.id);
     // herdr reports the pane idle while the slider waits: no other agent's reader takes it for its own
     for (const agent of ["codex", "omp", "pi", "omo", ""]) expect(parseInteractivePrompt(agent, captured)).toBeNull();
+  });
+
+  test("reads 2.1.301's slider, which describes the level between the names and the hint", () => {
+    // captures from Claude Code 2.1.301: one line under the names at low, two at max
+    const rule = "▔".repeat(120);
+    const low = `❯ /effort
+${rule}
+   Effort
+
+                             Faster                             Smarter
+                             ─▲────────────────────────────────────────      Ultracode  off
+                             low     medium     high     xhigh      max      Tab to toggle
+
+                                    ~0.7x the estimated cost of medium (the default)
+
+
+   ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel
+`;
+    const max = `❯ /effort
+${rule}
+   Effort
+
+                             Faster                             Smarter
+                             ────────────────────────────────────────▲─      Ultracode  off
+                             low     medium     high     xhigh      max      Tab to toggle
+
+    May use excessive tokens resulting in long response times or overthinking. Use sparingly for the hardest tasks.
+    (~5.2x)
+
+   ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel
+`;
+    const atLow = parseInteractivePrompt("claude", low)!;
+    expect(labels(atLow)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(answerKeys(atLow, { option_index: 2 })).toEqual([{ keys: ["right"] }, { keys: ["right"] }, { text: "s" }]);
+    const atMax = parseInteractivePrompt("claude", max)!;
+    expect(atMax.id).toBe(atLow.id);
+    expect(answerKeys(atMax, { option_index: 3 })).toEqual([{ keys: ["left"] }, { text: "s" }]);
+    // the description a narrow pane wrapped over more lines is still between the names and the hint
+    const wrapped = max.replace("Use sparingly for the hardest tasks.", "\n    Use sparingly\n    for the hardest tasks.");
+    expect(labels(parseInteractivePrompt("claude", wrapped)!)).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   test("moves with ←/→ from the level ▲ is over and picks with s, never with Enter", () => {
