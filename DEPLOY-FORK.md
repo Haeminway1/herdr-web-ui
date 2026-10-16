@@ -59,10 +59,17 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   Working and shows BG, not To read); the opt-in project dashboard sidebar (`dashboardSidebar`).
 - Usage: the plan-meter panel at the top of the sidebar (`usagePlacement: "top"`, the fork default,
   with `showUsage` on and palette `report`), folded to one line on a phone.
-- Alerts: the Dynamic Island on touch screens and toasts with a mouse (`Droplet.tsx`,
-  `AlertToasts`), the connected keyline bloom, the alert-history bell, native push taps routed to
+- Alerts: the Dynamic Island on touch screens and toasts with a mouse (`Droplet.tsx`, without
+  upstream #1129's close button; `AlertToasts`), the connected keyline bloom, the alert-history bell, native push taps routed to
   app windows only.
-- Appearance: Claude and Codex mark choices (`claudeMark`, `codexMark`).
+- Appearance: Claude and Codex mark choices (`claudeMark`, `codexMark`); the report palette by default
+  (`palette`, and `paletteLight`/`paletteDark` in System mode), with report, lilac and forest kept beside
+  upstream's three, which upstream #1078 removed (telemetry reports them as amber). (2026-10-16, v0.4.901)
+- Header: Sign out stays a header button on a desktop (upstream #1128 moved it into Settings only); a
+  phone's More menu leads with Command palette and keeps New tab (upstream #1101 trimmed both).
+- Composer: upstream #991's folder and branch strip under the message box is `folderStrip` in Settings
+  ("Folder and branch"), off by default (automation browsers start on it); Send shows no progress
+  ring over the emptied box after an instant send.
 - Panes: one pane at a time, the tab strip shown only once a workspace has more than one pane, with
   its pane picker and inline close (`ClassicTabStrip.tsx`, `cl-tab-strip` classes), no history
   scrollbar beside the terminal, and the command palette as one Panes list (recent first) with no
@@ -76,10 +83,16 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
 - Terminal: the phone key bar's default order, ^C last (`DEFAULT_KEY_BAR_ITEMS`; upstream #607 put it
   third, reachable through the key bar settings).
 - Desktop shell (`desktop/`), identity overlay above.
-- Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
+- Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts`, `attention-regression.ts`,
+  `alert-bell-regression.ts` (wired into `ui-contexts-checks.ts` since upstream moved the context checks there),
   the top-panel part of `usage-regression.ts` (it reopens the phone drawer: a closed one is hidden
   since #683), `alert-sound-regression.ts` waiting for the toast.
-- Strings: the fork's own UI strings are in every dictionary, `i18n.tr.ts` included (v0.4.701).
+- Strings: the fork's own UI strings are in every dictionary (ko, ja, zh). Upstream #1081 dropped
+  Turkish; the fork follows (v0.4.901).
+- Manager system pin: the verified native manager stands first in both sidebars, locked
+  (`residents.json` `system_pin`, `manager-pin-regression.ts`; v0.4.803).
+- Accepted upstream removals (user's choice, 2026-10-16): Move pane to… (#1101) and the pace marks of
+  the plan meters (#1099, off by default here anyway).
 - Web push: a device showing the app holds its own pushes (`/api/push/presence`), beside upstream
   #759's hold of every device while any window is in use.
 

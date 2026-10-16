@@ -1,4 +1,10 @@
 {
+  "0.4.901": {
+    "en": {"improved": ["Upstream 0.4.9 merged; the sidebar, chat, message box and palettes look as before."]},
+    "ko": {"improved": ["업스트림 0.4.9를 합쳤습니다. 사이드바, 채팅, 입력창과 색상은 그대로입니다."]},
+    "ja": {"improved": ["アップストリーム 0.4.9 を取り込みました。サイドバー、チャット、入力欄、配色は以前のままです。"]},
+    "zh": {"improved": ["已合并上游 0.4.9；侧边栏、聊天、输入框和配色保持不变。"]}
+  },
   "0.4.9": {
     "en": {
       "new": [
