@@ -4130,7 +4130,8 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.4.1001...HEAD
+[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.4.1002...HEAD
+[0.4.1002]: https://github.com/devswha/herdr-web-ui/compare/v0.4.1001...v0.4.1002
 [0.4.10]: https://github.com/devswha/herdr-web-ui/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/devswha/herdr-web-ui/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/devswha/herdr-web-ui/compare/v0.4.7...v0.4.8
