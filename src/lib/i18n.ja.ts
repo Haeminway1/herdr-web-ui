@@ -1031,6 +1031,8 @@ export const JA: Record<string, string> = {
   "It is the last tab of {workspace}: the workspace closes with it, and the agents and shells in it stop.": "{workspace} の最後のタブです。ワークスペースも一緒に閉じ、その中のエージェントとシェルが停止します。",
   "Tabs of {workspace}": "{workspace} のタブ",
   "{n} panes": "{n} 個のペイン",
+  // fork: the phone More menu's New tab (upstream #1101 trimmed it)
+  "New tab in {workspace}": "{workspace} に新しいタブ",
   // fork: the dashboard and the plan panel's placement
   "Meters show": "メーターの表示",
   "Beside Settings": "設定の横",
@@ -1057,7 +1059,7 @@ export const JA: Record<string, string> = {
   "Close tab {name}": "タブ {name} を閉じる",
   "Panes in {tab}": "{tab} のペイン",
   "herdr-style panes": "herdr 風のペイン",
-  "Show every pane of a split tab side by side, keep the tab strip with its right-click menu, add a history scrollbar to the terminal, and group the command palette by workspace with status filters": "分割したタブのペインをすべて並べて表示し、タブ列を右クリックメニュー付きで常に表示し、ターミナルに履歴スクロールバーを加え、コマンドパレットをワークスペースごとにまとめて状態フィルターを表示します",
+  "Show every pane of a split tab side by side, keep the tab strip with its right-click menu, and group the command palette by workspace with status filters": "分割したタブのペインをすべて並べて表示し、タブ列を右クリックメニュー付きで常に表示し、コマンドパレットをワークスペースごとにまとめて状態フィルターを表示します",
   "Panes": "ペイン",
   "Sidebar style": "サイドバーの形式",
   "Folders, a row per session": "フォルダー別、セッションごとに1行",

@@ -85,6 +85,9 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   third, reachable through the key bar settings); Terminal input mode → Automatic keeps a touch screen
   on the input line (upstream #1163 starts phones in direct typing; automation starts on upstream's).
 - Alerts: the Dynamic Island keeps its look without upstream #1129's close button (a flick puts it away).
+- Header: a phone's More menu leads with Command palette and keeps New tab, which upstream #1101
+  trimmed (automation browsers keep upstream's menu). Accepted upstream removal (user's choice,
+  2026-10-16): Move pane to… with its `/api/pane/move` (#1101). (v0.4.1002)
 - Desktop shell (`desktop/`), identity overlay above.
 - Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
   the top-panel part of `usage-regression.ts` (it reopens the phone drawer: a closed one is hidden

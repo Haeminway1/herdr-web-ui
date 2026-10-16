@@ -1029,6 +1029,8 @@ export const KO: Record<string, string> = {
   "It is the last tab of {workspace}: the workspace closes with it, and the agents and shells in it stop.": "{workspace}의 마지막 탭입니다. 워크스페이스도 함께 닫히고, 그 안의 에이전트와 셸이 멈춥니다.",
   "Tabs of {workspace}": "{workspace}의 탭",
   "{n} panes": "패널 {n}개",
+  // fork: the phone More menu's New tab (upstream #1101 trimmed it)
+  "New tab in {workspace}": "{workspace}에 새 탭",
   // fork: the dashboard and the plan panel's placement
   "Meters show": "미터 표시",
   "Beside Settings": "설정 옆",
@@ -1055,7 +1057,7 @@ export const KO: Record<string, string> = {
   "Close tab {name}": "{name} 탭 닫기",
   "Panes in {tab}": "{tab}의 패널",
   "herdr-style panes": "herdr 방식 패널",
-  "Show every pane of a split tab side by side, keep the tab strip with its right-click menu, add a history scrollbar to the terminal, and group the command palette by workspace with status filters": "분할된 탭의 모든 패널을 나란히 보여 주고, 탭 줄을 오른쪽 클릭 메뉴와 함께 항상 표시하며, 터미널에 기록 스크롤바를 더하고, 명령 팔레트를 워크스페이스별로 묶어 상태 필터를 보여 줍니다",
+  "Show every pane of a split tab side by side, keep the tab strip with its right-click menu, and group the command palette by workspace with status filters": "분할된 탭의 모든 패널을 나란히 보여 주고, 탭 줄을 오른쪽 클릭 메뉴와 함께 항상 표시하며, 명령 팔레트를 워크스페이스별로 묶어 상태 필터를 보여 줍니다",
   "Panes": "패널",
   "Sidebar style": "사이드바 형태",
   "Folders, a row per session": "폴더별, 세션마다 한 줄",

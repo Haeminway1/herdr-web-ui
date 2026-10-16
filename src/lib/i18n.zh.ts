@@ -1033,6 +1033,8 @@ export const ZH: Record<string, string> = {
   "It is the last tab of {workspace}: the workspace closes with it, and the agents and shells in it stop.": "这是 {workspace} 的最后一个标签页：工作区会随之关闭，其中的代理和 shell 会停止。",
   "Tabs of {workspace}": "{workspace} 的标签页",
   "{n} panes": "{n} 个窗格",
+  // fork: the phone More menu's New tab (upstream #1101 trimmed it)
+  "New tab in {workspace}": "在 {workspace} 中新建标签页",
   // fork: the dashboard and the plan panel's placement
   "Meters show": "计量显示",
   "Beside Settings": "设置旁边",
@@ -1059,7 +1061,7 @@ export const ZH: Record<string, string> = {
   "Close tab {name}": "关闭标签页 {name}",
   "Panes in {tab}": "{tab} 中的窗格",
   "herdr-style panes": "herdr 风格窗格",
-  "Show every pane of a split tab side by side, keep the tab strip with its right-click menu, add a history scrollbar to the terminal, and group the command palette by workspace with status filters": "并排显示拆分标签页中的所有窗格，始终显示带右键菜单的标签栏，为终端添加历史滚动条，并在命令面板中按工作区分组并显示状态筛选",
+  "Show every pane of a split tab side by side, keep the tab strip with its right-click menu, and group the command palette by workspace with status filters": "并排显示拆分标签页中的所有窗格，始终显示带右键菜单的标签栏，并在命令面板中按工作区分组并显示状态筛选",
   "Panes": "窗格",
   "Sidebar style": "侧边栏样式",
   "Folders, a row per session": "按文件夹，每个会话一行",

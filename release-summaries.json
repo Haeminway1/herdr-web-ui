@@ -1,4 +1,10 @@
 {
+  "0.4.1002": {
+    "en": {"fixed": ["On a phone, More leads with Command palette and keeps New tab again."]},
+    "ko": {"fixed": ["휴대폰의 더보기 메뉴에 명령 팔레트와 새 탭이 다시 나옵니다."]},
+    "ja": {"fixed": ["スマートフォンのその他メニューに、コマンドパレットと新しいタブが再び表示されます。"]},
+    "zh": {"fixed": ["手机的更多菜单重新显示命令面板和新建标签页。"]}
+  },
   "0.4.1001": {
     "en": {
       "improved": [

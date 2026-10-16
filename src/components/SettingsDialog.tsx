@@ -317,7 +317,7 @@ function AppearancePage() {
       </SettingsRow>}
       {settings.sidebarLayout === "classic" && settings.sidebarGrouping === "repo" && <ResidentSettings />}
       {/* fork: upstream #747's pane area, off by default */}
-      <SettingsRow label={t("herdr-style panes")} description={t("Show every pane of a split tab side by side, keep the tab strip with its right-click menu, add a history scrollbar to the terminal, and group the command palette by workspace with status filters")}>
+      <SettingsRow label={t("herdr-style panes")} description={t("Show every pane of a split tab side by side, keep the tab strip with its right-click menu, and group the command palette by workspace with status filters")}>
         <Toggle label={t("herdr-style panes")} checked={settings.tuiPanes} onChange={(tuiPanes) => update({ tuiPanes })} />
       </SettingsRow>
       {/* fork: the opt-in project dashboard sidebar */}

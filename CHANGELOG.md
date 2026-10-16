@@ -7,6 +7,12 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.1002] - 2026-10-16
+
+### Fixed
+- Fork: on a phone, More leads with Command palette and keeps New tab again, as before v0.4.9
+  (upstream #1101 trimmed both). Move pane to… stays removed with upstream.
+
 ## [0.4.1001] - 2026-10-16
 
 ### Changed
