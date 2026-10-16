@@ -513,7 +513,6 @@ export function createPushService(options: PushServiceOptions): PushService {
           const current = store().get(subscription.endpoint);
           return current && current.device_id === subscription.device_id ? [current] : [];
         });
-        // an app on screen shows the alert itself: no push on top of it
         await broadcast({ ...statusMessage(paneId, title, status, at), ...where(key, machineId), tag: paneNotificationTag(paneId, machineId) }, status === "blocked" ? "high" : "normal", live.filter(away));
       });
     },

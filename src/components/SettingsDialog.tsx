@@ -239,7 +239,6 @@ function PaletteSelect({ id, value, onChange }: { id: string; value: PaletteName
   return (
     <select id={id} className="select settings-select" value={value} onChange={(event) => onChange(event.target.value as PaletteName)}>
       <option value="amber">{t("Amber")}</option>
-      {/* fork deployment: report (the default), lilac and forest stay, which upstream #1078 removed */}
       <option value="report">{t("Dark report")}</option>
       <option value="charcoal">{t("Charcoal")}</option>
       <option value="catppuccin">{t("Catppuccin")}</option>
@@ -296,6 +295,9 @@ function AppearancePage() {
       <SettingsRow label={t("Agent logos")} description={t("Draw each agent's logo in its brand colors, or without color")} wide>
         <Segmented label={t("Agent logos")} value={settings.agentMarks} onChange={(agentMarks) => update({ agentMarks })} options={[{ value: "color", label: t("Color") }, { value: "mono", label: t("Mono") }]} />
       </SettingsRow>
+      <SettingsRow label={t("Status indicators")} description={t("Classic marks only the states that ask for a look; Dots and Symbols draw every state as herdr's TUI does")} wide>
+        <Segmented label={t("Status indicators")} value={settings.statusIndicators} onChange={(statusIndicators) => update({ statusIndicators })} options={[{ value: "classic", label: t("Classic") }, { value: "dots", label: t("Dots") }, { value: "symbols", label: t("Symbols") }]} />
+      </SettingsRow>
       {!settings.planInChip && <SettingsRow label={t("Plan count in the header")} description={t("Show how many steps of the open pane's plan are done in the header, where a press opens the plan; off, the header has no plan button")}>
         <Toggle label={t("Plan count in the header")} checked={settings.planButton} onChange={(planButton) => update({ planButton })} />
       </SettingsRow>}
@@ -306,9 +308,6 @@ function AppearancePage() {
       <SettingsRow label={t("Plan in the message box")} description={t("Show the plan's progress on the background-task button by the message box, which lists its steps above the tasks, instead of the header's plan button")}>
         <Toggle label={t("Plan in the message box")} checked={settings.planInChip} onChange={(planInChip) => update({ planInChip })} />
       </SettingsRow>
-      <SettingsRow label={t("Status indicators")} description={t("Classic marks only the states that ask for a look; Dots and Symbols draw every state as herdr's TUI does")} wide>
-        <Segmented label={t("Status indicators")} value={settings.statusIndicators} onChange={(statusIndicators) => update({ statusIndicators })} options={[{ value: "classic", label: t("Classic") }, { value: "dots", label: t("Dots") }, { value: "symbols", label: t("Symbols") }]} />
-      </SettingsRow>
       {/* fork: the classic folder sidebar, or upstream's workspaces + Agents list */}
       <SettingsRow label={t("Sidebar style")} description={t("How the session list is laid out when the dashboard is off")} wide>
         <Segmented label={t("Sidebar style")} value={settings.sidebarLayout} onChange={(sidebarLayout) => update({ sidebarLayout })} options={[{ value: "classic", label: t("Folders, a row per session") }, { value: "agents", label: t("Workspaces and agents") }]} />
@@ -318,7 +317,7 @@ function AppearancePage() {
       </SettingsRow>}
       {settings.sidebarLayout === "classic" && settings.sidebarGrouping === "repo" && <ResidentSettings />}
       {/* fork: upstream #747's pane area, off by default */}
-      <SettingsRow label={t("herdr-style panes")} description={t("Show every pane of a split tab side by side, keep the tab strip with its right-click menu, and group the command palette by workspace with status filters")}>
+      <SettingsRow label={t("herdr-style panes")} description={t("Show every pane of a split tab side by side, keep the tab strip with its right-click menu, add a history scrollbar to the terminal, and group the command palette by workspace with status filters")}>
         <Toggle label={t("herdr-style panes")} checked={settings.tuiPanes} onChange={(tuiPanes) => update({ tuiPanes })} />
       </SettingsRow>
       {/* fork: the opt-in project dashboard sidebar */}
@@ -358,10 +357,6 @@ function ChatPage() {
         <SettingsRow label={t("Open the latest work")} description={t("The newest answer's tool calls start unfolded")}>
           <Toggle label={t("Open the latest work")} checked={settings.openLastWork} onChange={(openLastWork) => update({ openLastWork })} />
         </SettingsRow>
-        {/* fork: upstream #991's strip, off by default */}
-        <SettingsRow label={t("Folder and branch")} description={t("Name the pane's folder and branch under the message box")}>
-          <Toggle label={t("Folder and branch")} checked={settings.folderStrip} onChange={(folderStrip) => update({ folderStrip })} />
-        </SettingsRow>
         <SettingsRow label={t("Chat width")} description={t("How wide the conversation and the message box run on a large screen")} wide>
           <Segmented label={t("Chat width")} value={settings.chatWidth} onChange={(chatWidth) => update({ chatWidth })} options={CHAT_WIDTHS.map((chatWidth) => ({ value: chatWidth, label: t(chatWidth === "narrow" ? "Narrow" : chatWidth === "wide" ? "Wide" : chatWidth === "full" ? "Full" : "Default") }))} />
         </SettingsRow>
@@ -380,6 +375,17 @@ function ChatPage() {
         <SettingsRow label={t("Send queued messages automatically")} description={t("A message sent while the agent works goes by itself when the turn ends. When off, it waits until you press Send now.")}>
           <Toggle label={t("Send queued messages automatically")} checked={settings.autoSendQueued} onChange={(autoSendQueued) => update({ autoSendQueued })} />
         </SettingsRow>
+        {touch && (
+          <SettingsRow label={t("Suggestion chip")} description={t("A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.")}>
+            <Toggle label={t("Suggestion chip")} checked={settings.suggestionChip} onChange={(suggestionChip) => update({ suggestionChip })} />
+          </SettingsRow>
+        )}
+        {/* fork: upstream #951's folder and branch strip, off by default; a phone never draws it */}
+        {!touch && (
+          <SettingsRow label={t("Folder and branch")} description={t("Name the pane's folder and its branch under the message box.")}>
+            <Toggle label={t("Folder and branch")} checked={settings.composerStrip} onChange={(composerStrip) => update({ composerStrip })} />
+          </SettingsRow>
+        )}
       </SettingsGroup>
 
       <SettingsGroup title={t("Quick replies")} section="quick-replies">
@@ -444,9 +450,9 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
         <Stepper label={t("Wheel scroll speed")} value={settings.terminalWheelSpeed} text={`${settings.terminalWheelSpeed}×`} min={TERMINAL_WHEEL_SPEED_MIN} max={TERMINAL_WHEEL_SPEED_MAX} decreaseLabel={t("Slower wheel scrolling")} increaseLabel={t("Faster wheel scrolling")} onChange={(terminalWheelSpeed) => update({ terminalWheelSpeed })} />
       </SettingsRow>
       <SettingsRow label={t("Terminal input mode")} htmlFor="terminal-input-mode">
-        {/* "auto", the stored default, types straight into the grid on every device: it reads as Direct typing */}
-        <select id="terminal-input-mode" className="select settings-select" value={settings.terminalInputMode === "line" ? "line" : "direct"} onChange={(event) => update({ terminalInputMode: event.target.value as "line" | "direct" })}>
-          <option value="direct">{t("Direct typing")}</option><option value="line">{t("Input line")}</option>
+        {/* fork: Automatic keeps a touch screen on the input line and a keyboard on direct typing, as before upstream #1163 */}
+        <select id="terminal-input-mode" className="select settings-select" value={settings.terminalInputMode} onChange={(event) => update({ terminalInputMode: event.target.value as "auto" | "line" | "direct" })}>
+          <option value="auto">{t("Automatic")}</option><option value="line">{t("Input line")}</option><option value="direct">{t("Direct typing")}</option>
         </select>
       </SettingsRow>
       <SettingsRow label={t("Key bar")} description={t("Keys, order and custom combinations for the terminal.")}>

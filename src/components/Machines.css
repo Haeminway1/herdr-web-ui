@@ -412,8 +412,9 @@
 /* an update in progress is news, not an error */
 .machine-action.is-updating .machine-action-text strong { color: var(--status-working); }
 
+.machine-action.is-setup { border-color: var(--border); }
+.machine-action.is-setup .machine-action-text strong { color: var(--text); }
+
 /* fork: the classic sidebar inside a PC group scrolls with the PC list, not on its own
    (ClassicSidebar's cl- list; its overscroll containment would swallow the wheel) */
 .machine-workspaces .cl-sidebar-list { overflow: visible; overscroll-behavior: auto; }
-.machine-action.is-setup { border-color: var(--border); }
-.machine-action.is-setup .machine-action-text strong { color: var(--text); }

@@ -27,8 +27,9 @@ async function waitForProcess(paneId: string, marker: string) {
     const info = await herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: paneId });
     const processes = info.process_info?.foreground_processes ?? [];
     // the stand-in itself, by its path: the shell's own startup processes come and go before it
-    const process = processes.find((process) => process.argv?.includes(marker));
-    if (process) return { process, processes };
+    const process = processes.find((entry) => entry.argv?.includes(marker) && entry.argv[0] === globalThis.process.execPath);
+    // fork: a holder record needs the process start time, so wait until the OS reports it
+    if (process && processStartedAt(process.pid) !== null) return { process, processes };
     if (Date.now() >= deadline) {
       throw new Error(`test process ${marker} did not appear in pane ${paneId}; last process info: ${JSON.stringify(info)}`);
     }
@@ -125,9 +126,6 @@ it("starts omo through the pane's shell and waits until omo is its foreground pr
 const hold = async (paneId: string, id: string, store = dir, marker = script) => {
   // A later process-info snapshot can omit the launcher even after launch() observed it.
   const { process: { pid } } = await waitForProcess(paneId, marker);
-  // fork: the holder's executable identity is readable before its record is written
-  for (let attempt = 0; attempt < 100 && processStartedAt(pid) === null; attempt++) await Bun.sleep(50);
-  if (processStartedAt(pid) === null) throw new Error(`test holder process did not become ready: ${marker}`);
   const holders = join(store, "session-holders", encodeURIComponent(id));
   mkdirSync(holders, { recursive: true });
   writeFileSync(join(holders, `${pid}.json`), JSON.stringify({ pid, bootAtMs: 0, processStartedAtMs: Math.floor(processStartedAt(pid)! / 1000) * 1000, cwd: root }));

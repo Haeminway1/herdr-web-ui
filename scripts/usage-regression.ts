@@ -182,7 +182,7 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
   // at the top of the list on a phone: one poller, each account told apart, the PCs still in reach
   const top = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" });
   try {
-    const asked = await staged(top);
+    const { asked } = await staged(top);
     await top.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ showUsage: true, usagePlacement: "top" })));
     const page = await top.newPage();
     const errors: string[] = [];

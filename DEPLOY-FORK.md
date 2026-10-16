@@ -25,6 +25,7 @@ This branch runs beside the canonical `devswha.herdr-web-ui` plugin as a second 
   Working footer confirms work. Missing screen evidence or a later dialog keeps INPUT.
 - Attach startup capability probes stay out of replay, so a browser reconnect cannot
   answer an old host probe into the pane's shell. Later application output is unchanged.
+  (Since v0.4.1001 upstream #1165's `AttachStartupProbes` does this; the fork's own class is gone.)
 - Browser release checks use a fresh owned herdr session per run; old failed fixtures
   cannot pollute palette searches or keyboard navigation checks.
 - Retire: once the PRs are merged upstream, uninstall this plugin and use the canonical app.
@@ -45,7 +46,11 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   pending follow-ups; a send refused over a draft in Claude Code's terminal box comes back to the
   message box with upstream #760's "clear it and send" offer); the work-progress line in the composer status row (elapsed time and current
   tool); a prompt answer refused only because the card's id moved is retried on the same card;
-  OmO's lead line as a `.chat-intent` chip and runtime notices as chrome.
+  OmO's lead line as a `.chat-intent` chip and runtime notices as chrome; the suggestion chip on by
+  default on touch screens (`suggestionChip`, upstream #1185 made it off; an old `showSuggestionChip:
+  false` is honoured); upstream #951's folder and branch strip under the message box is
+  `composerStrip` (Settings → Chat → Folder and branch), off by default; a phone's transcript keeps
+  its 12px side room inside upstream's virtual list (`ChatTimeline.css`). (2026-10-16, v0.4.1001)
 - Sidebar: the classic sidebar by default (`ClassicSidebar.tsx`, `cl-` classes): New session / Add PC
   bar; by default a row per session, its repository folder on top and the session under it, no
   group headers (`sidebarGrouping: "repo"`), or grouped by folder (`directoryGroups.ts`) or workspace;
@@ -53,23 +58,19 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   `/api/residents`, shared/residents.ts): `top` folders above all, then a Resident / Work toggle,
   a dim row that starts a missing resident with the chosen agent/model/effort, 📌 on hover; rename and close on hover, the version line; upstream's
   workspaces + Agents list only as `sidebarLayout: "agents"` (automation browsers default to it
-  so upstream's UI tests stay valid). The attention inbox above the PCs (Needs you / To read / Working; read state on the
+  so upstream's UI tests stay valid; its pins come from upstream #1120's row menu, and the verified
+  manager's row leads it with a lock and no menu). The attention inbox above the PCs (Needs you / To read / Working; read state on the
   server, `attention.json`, `pane/seen` proxied for remote PCs; `NeedsInput.tsx`, which upstream
   deleted in #521; a Claude turn held on its background work, upstream's `background_wait` from #534, is
   Working and shows BG, not To read); the opt-in project dashboard sidebar (`dashboardSidebar`).
 - Usage: the plan-meter panel at the top of the sidebar (`usagePlacement: "top"`, the fork default,
   with `showUsage` on and palette `report`), folded to one line on a phone.
-- Alerts: the Dynamic Island on touch screens and toasts with a mouse (`Droplet.tsx`, without
-  upstream #1129's close button; `AlertToasts`), the connected keyline bloom, the alert-history bell, native push taps routed to
+- Alerts: the Dynamic Island on touch screens and toasts with a mouse (`Droplet.tsx`,
+  `AlertToasts`), the connected keyline bloom, the alert-history bell, native push taps routed to
   app windows only.
-- Appearance: Claude and Codex mark choices (`claudeMark`, `codexMark`); the report palette by default
-  (`palette`, and `paletteLight`/`paletteDark` in System mode), with report, lilac and forest kept beside
-  upstream's three, which upstream #1078 removed (telemetry reports them as amber). (2026-10-16, v0.4.901)
-- Header: Sign out stays a header button on a desktop (upstream #1128 moved it into Settings only); a
-  phone's More menu leads with Command palette and keeps New tab (upstream #1101 trimmed both).
-- Composer: upstream #991's folder and branch strip under the message box is `folderStrip` in Settings
-  ("Folder and branch"), off by default (automation browsers start on it); Send shows no progress
-  ring over the emptied box after an instant send.
+- Appearance: Claude and Codex mark choices (`claudeMark`, `codexMark`); the six palettes, `report`
+  (the fork default) with `lilac` and `forest`, which upstream #1078 cut to three (telemetry reports a
+  fork palette as `amber`, the only names its Worker takes).
 - Panes: one pane at a time, the tab strip shown only once a workspace has more than one pane, with
   its pane picker and inline close (`ClassicTabStrip.tsx`, `cl-tab-strip` classes), no history
   scrollbar beside the terminal, and the command palette as one Panes list (recent first) with no
@@ -81,18 +82,15 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   deleted. Its plan inside the composer's background-task chip is `planInChip` in Settings
   ("Plan in the message box"), off by default (automation browsers start on it). (2026-10-12, v0.4.801)
 - Terminal: the phone key bar's default order, ^C last (`DEFAULT_KEY_BAR_ITEMS`; upstream #607 put it
-  third, reachable through the key bar settings).
+  third, reachable through the key bar settings); Terminal input mode → Automatic keeps a touch screen
+  on the input line (upstream #1163 starts phones in direct typing; automation starts on upstream's).
+- Alerts: the Dynamic Island keeps its look without upstream #1129's close button (a flick puts it away).
 - Desktop shell (`desktop/`), identity overlay above.
-- Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts`, `attention-regression.ts`,
-  `alert-bell-regression.ts` (wired into `ui-contexts-checks.ts` since upstream moved the context checks there),
+- Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
   the top-panel part of `usage-regression.ts` (it reopens the phone drawer: a closed one is hidden
   since #683), `alert-sound-regression.ts` waiting for the toast.
-- Strings: the fork's own UI strings are in every dictionary (ko, ja, zh). Upstream #1081 dropped
-  Turkish; the fork follows (v0.4.901).
-- Manager system pin: the verified native manager stands first in both sidebars, locked
-  (`residents.json` `system_pin`, `manager-pin-regression.ts`; v0.4.803).
-- Accepted upstream removals (user's choice, 2026-10-16): Move pane to… (#1101) and the pace marks of
-  the plan meters (#1099, off by default here anyway).
+- Strings: the fork's own UI strings are in every dictionary (ko, ja, zh). Turkish went with upstream
+  #1081 in v0.4.1001.
 - Web push: a device showing the app holds its own pushes (`/api/push/presence`), beside upstream
   #759's hold of every device while any window is in use.
 

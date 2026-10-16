@@ -1397,9 +1397,10 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   }, []);
   const renderTurn = useCallback((row: { key: string; turn: ConversationTurn }, index: number) => {
     const { turn } = row;
-    const live = isLiveWorkTurn(turn, index === shownTurns.length - 1, workStatus, finishedBeforeSend);
+    const last = index === shownTurns.length - 1;
+    const live = isLiveWorkTurn(turn, last, workStatus, finishedBeforeSend);
     return <RenderBoundary resetKey={turnRevision(turn, true)} fallback={() => <p className="chat-inline-state chat-inline-error">{t("This message can't be shown here. The terminal has it.")}</p>}>
-      <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} last={index === shownTurns.length - 1 && settings.openLastWork} showThinking={settings.showThinking} skills={skillMatcher} />
+      <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} last={last && settings.openLastWork} showThinking={settings.showThinking} skills={skillMatcher} />
     </RenderBoundary>;
   }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agentStatus, settings.showThinking, settings.openLastWork, skillMatcher]);
   const header = <>
@@ -1426,7 +1427,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       {state.source === "conversation" && olderCursor === null && older.length > 0 && <p className="chat-endcap">{t("beginning of conversation")}</p>}
   </>;
   const footer = <>
-      {/* fork: instant send - a sent message shows at once, as sending, until its own turn is in the transcript */}
+      {/* fork: a message sent from the box shows at once, as sending, until the transcript has it */}
       {pendingOut.map((item) => <article key={`out:${item.id}`} className="chat-turn chat-turn-user is-outgoing" data-sent={item.sent ? "" : undefined}>
         <div className="chat-bubble"><Markdown>{item.text}</Markdown></div>
         <div className="chat-turn-meta">{t(item.sent ? "Sent" : "Sending…")}</div>

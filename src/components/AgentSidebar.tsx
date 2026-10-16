@@ -95,14 +95,14 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     const agents = sidebarAgents(machine.snapshot);
     return (byActivity ? activityOrder(agents, (entry) => entry.pane, activity.seqs(machine.id)) : agents).map((entry): AgentRow => ({ machine, entry }));
   }), [machines, byActivity, activity]);
-  // fork: the server's verified manager pin is this PC's own (useResidents) and leads the pinned rows
-  // and the rest: it is matched by workspace, pane and terminal ids — never a user pin
+  // fork: the server's verified manager pin is this PC's own (useResidents) and leads whatever the
+  // pins or order say: it is matched by workspace, pane and terminal ids — never a user pin
   const { residents } = useResidents();
   const systemPin = residents.system_pin ?? null;
   const systemRow = useMemo(() => systemPin === null ? undefined : rows.find(({ machine, entry }) => machine.id === LOCAL_MACHINE && isSystemResidentPane(systemPin, entry.pane)), [rows, systemPin]);
   const listedRows = useMemo(() => systemRow === undefined ? rows : rows.filter((row) => row !== systemRow), [rows, systemRow]);
   // the pinned rows stand first, in the order they were pinned
-  const split = useMemo(() => splitPinnedRows(listedRows, pinned, ({ machine, entry }) => sidebarPinKey(machine.id, entry.pane.pane_id)), [listedRows, pinned]);
+  const split = useMemo(() => splitPinnedRows(listedRows, pinned, ({ machine, entry }) => sidebarPinKey(machine.id, entry.pane.pane_id)), [rows, pinned]);
   const togglePin = (key: string): void => {
     // pins of panes gone from this server leave with a change of the user's, never by themselves: the
     // list is shared, and a pane this page has not seen yet (a PC still loading) is not gone
@@ -164,13 +164,13 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
         <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} status={online ? activity.status(machine.id, pane) : undefined} pinned={pinned.includes(pinKey)} />
       </button>
       {system
-        // fork: the manager's pin is the server's: the lock is a state, never a toggle, and no pin menu
+        // the manager's pin is the server's: the lock is a state, never a toggle, and no menu
         ? <span className="agent-pin-lock" role="img" title={t("System pinned")} aria-label={t("System pinned")}><Lock size={15} aria-hidden="true" /></span>
         : <div className="agent-actions">
-        <button type="button" className="sidebar-row-action row-menu-toggle" aria-label={t("More for {title}", { title })} aria-haspopup="menu" aria-expanded={menuOpen} onClick={(event) => toggleMenu(event.currentTarget)}>
-          <Ellipsis aria-hidden="true" />
-        </button>
-      </div>}
+          <button type="button" className="sidebar-row-action row-menu-toggle" aria-label={t("More for {title}", { title })} aria-haspopup="menu" aria-expanded={menuOpen} onClick={(event) => toggleMenu(event.currentTarget)}>
+            <Ellipsis aria-hidden="true" />
+          </button>
+        </div>}
     </li>;
   };
 

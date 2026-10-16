@@ -234,7 +234,7 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
 
 ### Settings
 - `theme`: `dark`, `light`, or `system`; default `dark`.
-- `palette`: `amber`, `report`, `charcoal`, `catppuccin`, `lilac` or `forest`; default `amber` upstream (#1078 keeps three; the fork keeps all six).
+- `palette`: `amber`, `report`, `charcoal`, `catppuccin`, `lilac` or `forest`; default `amber` upstream; the fork keeps all six (upstream #1078 kept three).
 - `claudeMark` (`logo` or `mascot`) and `codexMark` (`logo` or `app`): the provider logo by default (fork).
 - Fork defaults: `palette` `report`; `showUsage` on with `usagePlacement` `top` (the panel at the top of the sidebar; `footer` puts the chips beside Settings); `dashboardSidebar` off.
 - `density`: `comfortable` or `compact`; default `comfortable`.
@@ -1403,7 +1403,8 @@ Upstream #846's layout. On, the header has no plan button and no plan dialog ope
   replaces the one entry. A reload steps out of the entries it finds; Forward reopens the page.
 - Pages, in order: **Appearance** (theme, colors, density, language, sidebar rows), **Chat**
   (panes open in, show thinking, chat width, chat font size and family; then
-  **Composer**: Enter sends; then **Quick replies**; then **File viewer**: wrap long
+  **Composer**: Enter sends, send queued messages automatically, and on a touch screen the suggestion
+  chip (off by default); then **Quick replies**; then **File viewer**: wrap long
   lines, Markdown width, Diff layout), **Terminal** (font size, font family, wheel
   speed, input mode, Key bar), **Alerts**, **Voice input**, **Subscription usage**,
   **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (the phone address,

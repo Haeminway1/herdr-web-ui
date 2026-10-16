@@ -126,7 +126,8 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
         await settled(page);
         await report(probe, "idle");
       };
-      const card = page.locator(".droplet-card");
+      // fork: with a mouse the in-app alert is a toast in the corner (AlertToasts.tsx), on touch the island
+      const card = page.locator(".droplet-card, .alert-toast");
 
       await splitRight(page, otherPane);
       await half(page, "left").locator(".terminal-host").click({ position: { x: 40, y: 40 } });

@@ -238,3 +238,12 @@
   .agent-row:enabled:active { opacity: 1; }
   .agent-item:has(> .agent-row:enabled:active) { background: var(--side-hover); }
 }
+
+/* fork: the verified manager's system pin (shared/residents.ts) - a state beside the row, not a control */
+.agent-pin-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}

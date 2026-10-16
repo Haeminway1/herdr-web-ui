@@ -208,6 +208,9 @@ the child's environment before `exec` (`OMO_CODING_AGENT_DIR=… my-launcher`): 
 variable the process sets only in-process later may never appear in
 `/proc/<pid>/environ`, which reports the environment the kernel recorded at `exec`.
 
+The isolated `scripts/omo-chat-browser-qa.ts` fixture exercises OmO the same way, with synthetic
+records and owned panes, without invoking providers or touching existing sessions.
+
 ## Conversation refresh
 
 The chat reads `/api/pane/conversation` after a `conversation-changed` WebSocket frame.

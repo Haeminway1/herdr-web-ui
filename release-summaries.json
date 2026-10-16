@@ -1,9 +1,47 @@
 {
-  "0.4.901": {
-    "en": {"improved": ["Upstream 0.4.9 merged; the sidebar, chat, message box and palettes look as before."]},
-    "ko": {"improved": ["업스트림 0.4.9를 합쳤습니다. 사이드바, 채팅, 입력창과 색상은 그대로입니다."]},
-    "ja": {"improved": ["アップストリーム 0.4.9 を取り込みました。サイドバー、チャット、入力欄、配色は以前のままです。"]},
-    "zh": {"improved": ["已合并上游 0.4.9；侧边栏、聊天、输入框和配色保持不变。"]}
+  "0.4.1001": {
+    "en": {
+      "improved": [
+        "Upstream 0.4.9 and 0.4.10 are in; your screens look and work as before."
+      ]
+    },
+    "ko": {
+      "improved": [
+        "업스트림 0.4.9·0.4.10을 반영했고, 화면과 동작은 그대로입니다."
+      ]
+    },
+    "ja": {
+      "improved": [
+        "アップストリーム 0.4.9・0.4.10 を取り込み、画面と動作はそのままです。"
+      ]
+    },
+    "zh": {
+      "improved": [
+        "已合入上游 0.4.9 和 0.4.10，界面与操作保持不变。"
+      ]
+    }
+  },
+  "0.4.10": {
+    "en": {
+      "improved": [
+        "Phones and tablets hide the suggestion chip by default; Settings → Chat turns it on."
+      ]
+    },
+    "ko": {
+      "improved": [
+        "휴대폰과 태블릿에서 입력창 위 제안 칩은 기본으로 꺼집니다. 설정 → 채팅에서 켤 수 있습니다."
+      ]
+    },
+    "ja": {
+      "improved": [
+        "スマートフォンとタブレットでは入力欄の上の提案チップが既定でオフです。設定 → チャットでオンにできます。"
+      ]
+    },
+    "zh": {
+      "improved": [
+        "手机和平板上输入框上方的建议标签默认关闭，可在设置 → 聊天中打开。"
+      ]
+    }
   },
   "0.4.9": {
     "en": {
@@ -128,10 +166,26 @@
     }
   },
   "0.4.803": {
-    "en": {"fixed": ["The manager stays system-pinned first; UI and server requests cannot unpin it."]},
-    "ko": {"fixed": ["관리자를 최상단 시스템 고정으로 보호해 데스크톱·휴대폰·서버 요청으로 해제할 수 없게 했습니다."]},
-    "ja": {"fixed": ["管理エージェントを最上部にシステム固定し、デスクトップ・スマートフォン・サーバー要求による解除を防ぎます。"]},
-    "zh": {"fixed": ["管理代理始终作为系统固定项置顶，桌面、手机和服务器请求均无法取消固定。"]}
+    "en": {
+      "fixed": [
+        "The manager stays system-pinned first; UI and server requests cannot unpin it."
+      ]
+    },
+    "ko": {
+      "fixed": [
+        "관리자를 최상단 시스템 고정으로 보호해 데스크톱·휴대폰·서버 요청으로 해제할 수 없게 했습니다."
+      ]
+    },
+    "ja": {
+      "fixed": [
+        "管理エージェントを最上部にシステム固定し、デスクトップ・スマートフォン・サーバー要求による解除を防ぎます。"
+      ]
+    },
+    "zh": {
+      "fixed": [
+        "管理代理始终作为系统固定项置顶，桌面、手机和服务器请求均无法取消固定。"
+      ]
+    }
   },
   "0.4.8": {
     "en": {

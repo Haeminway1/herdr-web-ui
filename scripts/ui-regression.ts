@@ -12,12 +12,16 @@ import type { PluginActionsResponse, SessionSnapshot, WorkspaceCreated, Worktree
 import type { Machine } from "../shared/machines.ts";
 import { MAX_ATTACHMENT_BYTES } from "../shared/attachments.ts";
 import { alertsOffMarked, alertsState, runMoreItem } from "./header-more.ts";
+import { checkNeedsInput } from "./needs-input-regression.ts";
+import { checkClassicSidebar } from "./classic-sidebar-regression.ts";
 import { routeDrained } from "./drained-route.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
 import { checkTerminalInput } from "./terminal-input-regression.ts";
 import { checkSafariIme } from "./terminal-safari-ime-regression.ts";
 import { checkIpadIme } from "./terminal-ipad-ime-regression.ts";
 import { checkHeldDraftPaneSwitch } from "./terminal-draft-regression.ts";
+import { checkAlertBell, checkPushedAlertWhileClosed } from "./alert-bell-regression.ts";
+import { checkAttentionInbox } from "./attention-regression.ts";
 import { checkCommandBackspace } from "./terminal-command-backspace-regression.ts";
 import { checkCtrlEnter } from "./terminal-ctrl-enter-regression.ts";
 import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
@@ -925,6 +929,15 @@ try {
   if (blockedEvidence) await blockedEvidence.finish();
   await blocked.close();
   console.log("PASS a device that blocks notifications keeps the Alerts item as the switch for in-app alerts");
+
+  // fork-only checks (DEPLOY-FORK.md); upstream's shared ones run in ui-contexts-checks.ts
+  await checkNeedsInput(browser, origin, paneA);
+  await checkClassicSidebar(browser, origin, paneA);
+  await checkAlertBell(browser, origin);
+  await checkPushedAlertWhileClosed(browser, origin);
+  await checkAttentionInbox(browser, origin);
+  // An attention toast can briefly cover the composer; let it expire before testing queue clicks.
+  await page.waitForFunction(() => !document.querySelector(".alert-toast[data-shown]"), null, { timeout: 12_000 });
 
   // The pending protocol has a real foreground agent and an owned byte recorder: merely
   // reporting an idle shell as working would not prove that server-side queueing happened.
@@ -2242,7 +2255,7 @@ try {
   assert.equal(await mobilePage.evaluate(() => (window as unknown as { escapes: number }).escapes), 0, "Escape that closes the drawer does not reach the page");
   console.log("PASS Escape closes a phone's drawer and goes no further");
 
-  // Claude's suggestion on a phone is the placeholder and a chip that fills the box, until Settings turns the chip off
+  // Claude's suggestion on a phone is the placeholder; the chip that fills the box waits until Settings turns it on
   const promptRoute = `**/api/pane/prompt?pane_id=${encodeURIComponent(paneB)}`;
   const suggest = { json: { prompt: null, suggestion: "run the tests" } };
   const mobileComposer = mobilePage.getByRole("textbox", { name: "Message", exact: true });
@@ -2250,13 +2263,18 @@ try {
   await mobileComposer.fill("");
   await until(async () => await mobileComposer.getAttribute("placeholder") === "run the tests", "a phone shows the suggestion as the placeholder");
   assert.equal(await mobilePage.locator(".voice-mic").count(), 0, "a phone's chat has no mic until Settings asks for it");
+  assert.equal(await mobilePage.getByTitle("Use the suggestion", { exact: true }).count(), 0, "a phone shows no suggestion chip by default");
+  await mobilePage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}&settings=chat&section=composer`);
+  await mobilePage.getByRole("switch", { name: "Suggestion chip", exact: true }).setChecked(true);
+  await mobilePage.getByRole("button", { name: "Close settings", exact: true }).click();
+  await mobileComposer.fill("");
   await mobilePage.getByTitle("Use the suggestion", { exact: true }).click();
   assert.equal(await mobileComposer.inputValue(), "run the tests", "the chip puts the suggestion in the box");
   await mobilePage.unroute(promptRoute);
   try { await mobileEvidence?.finish(); } finally { await mobile.close(); }
   assert.equal(errors.length, 0, errors.join("\n"));
   assertCspClean(csp, "the suggestion chip loads with no CSP violation");
-  console.log("PASS a phone offers Claude's suggestion as a chip");
+  console.log("PASS a phone offers Claude's suggestion as a chip once Settings turns it on");
 
   await checkTerminalInput(browser, origin, paneA, paneB);
   await checkSafariIme(browser, origin, paneA, paneB);

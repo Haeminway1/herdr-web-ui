@@ -7,6 +7,52 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.1001] - 2026-10-16
+
+### Changed
+- Fork: after v0.4.9 and v0.4.10, every screen looks and works as before. The Dark report, Lilac
+  and Forest colors stay (upstream kept three), the suggestion chip stays on and a phone's
+  terminal still starts on the input line (Settings → Terminal input mode → Automatic), the
+  in-app alert stays the Dynamic Island, and the classic sidebar, the header's plan button, the
+  alert bell and the one-pane view are unchanged. Upstream's split view, shared settings, pins
+  from a row's menu, Jump to bottom and its other additions are in.
+
+## [0.4.803] - 2026-10-14
+
+### Fixed
+- Fork: the verified native manager stays system-pinned first, with locked desktop and mobile controls and server-side unpin protection. Other resident pins retain their settings and order.
+
+### Changed
+- Fork: after v0.4.6, the pane area, tab strip and command palette look and work as before.
+  Upstream's herdr-style panes (every pane of a split tab side by side, the tab strip's
+  right-click menu, the terminal's history scrollbar, the palette grouped by workspace with
+  status filters) are under **Settings → herdr-style panes**, off by default.
+- Fork: after v0.4.7, a chat message still leaves the box at once; one refused over a draft in
+  Claude Code's terminal box comes back to the box with upstream's offer to clear that draft and send.
+  Web push is held for a device showing the app and, as upstream now does, for every device while
+  any window of the app is in use. The fork's own screens have Turkish strings.
+- Fork: after v0.4.8, the header's plan button and the plan's dialog (flow and steps) stay, with
+  **Plan flow** and **Plan count in the header**. Upstream's plan inside the background-task button by
+  the message box is **Settings → Appearance → Plan in the message box**, off by default.
+
+### Fixed
+- Fork: custom OmO launchers bind chat to the live native holder in their own store,
+  including the process's actual cwd; provider-child labels cannot take that ownership.
+  ([#923](https://github.com/devswha/herdr-web-ui/pull/923))
+- Fork: Gajae Code status follows its native parent turn, including questions, background
+  results, errors and restart interruptions, instead of a provider child's stale RUN.
+  ([#928](https://github.com/devswha/herdr-web-ui/pull/928))
+## [0.4.10] - 2026-10-16
+
+### Changed
+- On a phone or tablet, the chip above the message box that holds the prompt Claude Code suggests
+  next is off by default. **Settings → Chat → Composer → Suggestion chip** turns it back on; the
+  suggestion still shows grey in the empty message box. With a keyboard, Tab takes it as before.
+  ([#1185](https://github.com/devswha/herdr-web-ui/pull/1185))
+
+### Maintenance
+- The remote-PC runtime is now version 29: every saved PC asks for **Update bridge…** once.
+
 ## [0.4.9] - 2026-10-16
 
 ### Added
@@ -910,31 +956,6 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   `XDG_CONFIG_HOME` first, then `%APPDATA%`, as herdr does.
   ([#884](https://github.com/devswha/herdr-web-ui/pull/884) by @willowite,
   [#1032](https://github.com/devswha/herdr-web-ui/pull/1032))
-## [0.4.803] - 2026-10-14
-
-### Fixed
-- Fork: the verified native manager stays system-pinned first, with locked desktop and mobile controls and server-side unpin protection. Other resident pins retain their settings and order.
-
-### Changed
-- Fork: after v0.4.6, the pane area, tab strip and command palette look and work as before.
-  Upstream's herdr-style panes (every pane of a split tab side by side, the tab strip's
-  right-click menu, the terminal's history scrollbar, the palette grouped by workspace with
-  status filters) are under **Settings → herdr-style panes**, off by default.
-- Fork: after v0.4.7, a chat message still leaves the box at once; one refused over a draft in
-  Claude Code's terminal box comes back to the box with upstream's offer to clear that draft and send.
-  Web push is held for a device showing the app and, as upstream now does, for every device while
-  any window of the app is in use. The fork's own screens have Turkish strings.
-- Fork: after v0.4.8, the header's plan button and the plan's dialog (flow and steps) stay, with
-  **Plan flow** and **Plan count in the header**. Upstream's plan inside the background-task button by
-  the message box is **Settings → Appearance → Plan in the message box**, off by default.
-
-### Fixed
-- Fork: custom OmO launchers bind chat to the live native holder in their own store,
-  including the process's actual cwd; provider-child labels cannot take that ownership.
-  ([#923](https://github.com/devswha/herdr-web-ui/pull/923))
-- Fork: Gajae Code status follows its native parent turn, including questions, background
-  results, errors and restart interruptions, instead of a provider child's stale RUN.
-  ([#928](https://github.com/devswha/herdr-web-ui/pull/928))
 
 ## [0.4.8] - 2026-10-12
 
@@ -4103,7 +4124,8 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.4.9...HEAD
+[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.4.1001...HEAD
+[0.4.10]: https://github.com/devswha/herdr-web-ui/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/devswha/herdr-web-ui/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/devswha/herdr-web-ui/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/devswha/herdr-web-ui/compare/v0.4.6...v0.4.7

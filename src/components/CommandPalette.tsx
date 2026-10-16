@@ -360,6 +360,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
       if (listing && names.length > 0) list.push({ id: "folder-list", heading: t("Folders"), machineName, branch: null, placeNamesWorkspace: false, rows: names.map((name) => ({ kind: "folder", id: `dir:${name}`, label: name, path: childPath(listing.path, name), detail: null, icon: Folder })) });
       return list;
     }
+    // fork (tuiPanes off): one Panes list, recent first, with no status chips, sections or footer
     if (!actionsOnly && classic) {
       const panes = rankMachinePanes(text, machines, "all", branches, t);
       const recent = text === "" ? recentTargets(panes, recentPaneIds, null, panes.length) : [];

@@ -30,6 +30,8 @@ export type SidebarGrouping = "repo" | "directory" | "workspace";
  * navigator.webdriver) starts on upstream's, which upstream's UI regressions are written against.
  */
 const AUTOMATED = typeof navigator !== "undefined" && navigator.webdriver === true;
+/** fork: an automation browser starts on upstream's defaults (see AUTOMATED) */
+export const automatedBrowser = AUTOMATED;
 const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = AUTOMATED ? "agents" : "classic";
 /** the Agents list's order: herdr's workspace order, or a waiting agent first and then the latest change */
 export type AgentOrder = "workspace" | "activity";
@@ -39,9 +41,9 @@ export type AgentMarks = "color" | "mono";
 export type UsageCount = "used" | "left";
 /** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
 export type UsageGlance = "week" | "session";
-/** amber: the herdr look; charcoal: neutral Ghostty-style dark; catppuccin: Catppuccin Mocha in dark,
- *  Latte in light. Fork deployment: report (the fork's default look), lilac and forest stay, which
- *  upstream #1078 removed. */
+/** amber: the herdr look (the default); report: the dark technical report look; charcoal: neutral Ghostty-style dark;
+ *  catppuccin: Catppuccin Mocha in dark, Latte in light; lilac: lavender surfaces and indigo accents;
+ *  forest: low-saturation green surfaces for long sessions */
 export type Palette = "amber" | "report" | "charcoal" | "catppuccin" | "lilac" | "forest";
 /** the chat lane's widest: the transcript, the composer column and the held list share it (--chat-w in src/styles.css).
  *  narrow: 820px; default: follows the pane, up to 60rem (chatLaneWidth); wide: 72rem; full: the pane, less the gutters */
@@ -98,29 +100,29 @@ export interface Settings {
   tuiPanes: boolean;
   /** fork: the newest turn's work block starts open, as before upstream #458 folded settled work */
   openLastWork: boolean;
-  /** fork: upstream #991's folder and branch strip under the message box; off keeps the box as before */
-  folderStrip: boolean;
   /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
   agentOrder: AgentOrder;
-  /** Agent logos: brand colors, or without color, so a list of one agent is not a stripe of tiles */
-  agentMarks: AgentMarks;
-  /** the sidebar's state marks: this app's own, or herdr's dots or symbols, as its `[ui] status_indicators` (lib/status.ts) */
-  statusIndicators: StatusIndicators;
   /** A plan opens as a flow of boxes with a switch to its list; off, as the list alone. */
   planFlow: boolean;
   /** The header carries the selected pane's plan count, which opens the plan. */
   planButton: boolean;
   /** fork: upstream #846's plan inside the composer's background-task chip instead of the header button and its dialog */
   planInChip: boolean;
+  /** fork: upstream #951's strip under the message box naming the pane's folder and branch, off as before it */
+  composerStrip: boolean;
+  /** Claude panes: the Anthropic logo, or the Claude Code mascot */
+  claudeMark: ClaudeMarkStyle;
+  /** Codex panes: the OpenAI logo, or the blue Codex app icon */
+  codexMark: CodexMarkStyle;
+  /** Agent logos: brand colors, or without color, so a list of one agent is not a stripe of tiles */
+  agentMarks: AgentMarks;
+  /** the sidebar's state marks: this app's own, or herdr's dots or symbols, as its `[ui] status_indicators` (lib/status.ts) */
+  statusIndicators: StatusIndicators;
   /** the chrome color family, keyed as data-palette in src/styles.css */
   palette: Palette;
   /** System theme only: the palette drawn while the OS is light, and while it is dark (see paletteFor) */
   paletteLight: Palette;
   paletteDark: Palette;
-  /** Claude panes: the Anthropic logo, or the Claude Code mascot */
-  claudeMark: ClaudeMarkStyle;
-  /** Codex panes: the OpenAI logo, or the blue Codex app icon */
-  codexMark: CodexMarkStyle;
   /** xterm font size in px */
   terminalFontSize: number;
   /** mouse reports sent to herdr per wheel event in the terminal: 1 is what xterm sends by itself */
@@ -149,6 +151,9 @@ export interface Settings {
   enterSends: boolean;
   /** true: a message sent while the agent works goes by itself when the turn ends; false: it waits for Send now */
   autoSendQueued: boolean;
+  /** on a touch screen, a chip above the message box offers the prompt the agent suggests next.
+   * Not `showSuggestionChip`: that key was on by default until 0.4.9 and is still stored on phones */
+  suggestionChip: boolean;
   /** show the agent's folded reasoning blocks in the chat view */
   showThinking: boolean;
   /** request a screen wake lock while a pane is open in this visible tab */
@@ -206,17 +211,17 @@ export type DiffStyle = (typeof DIFF_STYLES)[number];
 type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
   | "quickReplies" | "usageOrder" | "usageHidden"
-  // fork deployment: the fork's own settings stay on this device; upstream's Worker does not know them
-  | "claudeMark" | "codexMark" | "dashboardSidebar" | "openLastWork" | "folderStrip" | "sidebarLayout" | "sidebarGrouping" | "tuiPanes"
-  | "planFlow" | "planButton" | "planInChip" | "usagePlacement">;
+  // fork settings: the telemetry Worker refuses a snapshot with a key it does not know
+  | "dashboardSidebar" | "sidebarLayout" | "sidebarGrouping" | "tuiPanes" | "openLastWork" | "planFlow" | "planButton"
+  | "planInChip" | "composerStrip" | "claudeMark" | "codexMark" | "usagePlacement">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
   return JSON.stringify(value) !== JSON.stringify(defaultValue);
 }
 
-/** fork deployment: the Worker knows upstream's three palettes; the fork's own report, lilac and forest go as amber */
-function telemetryPalette(palette: Palette): TelemetrySettings["palette"] {
+/** fork: the telemetry Worker knows upstream's three palettes only; a fork palette counts as the default it stands in for */
+function upstreamPalette(palette: Palette): "amber" | "charcoal" | "catppuccin" {
   return palette === "charcoal" || palette === "catppuccin" ? palette : "amber";
 }
 
@@ -230,9 +235,9 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
     agentOrder: settings.agentOrder,
     agentMarks: settings.agentMarks,
     statusIndicators: settings.statusIndicators,
-    palette: telemetryPalette(settings.palette),
-    paletteLight: telemetryPalette(settings.paletteLight),
-    paletteDark: telemetryPalette(settings.paletteDark),
+    palette: upstreamPalette(settings.palette),
+    paletteLight: upstreamPalette(settings.paletteLight),
+    paletteDark: upstreamPalette(settings.paletteDark),
     terminalFontSize: settings.terminalFontSize,
     terminalWheelSpeed: settings.terminalWheelSpeed,
     paneClipboard: settings.paneClipboard,
@@ -242,6 +247,7 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
     chatWidth: settings.chatWidth,
     enterSends: settings.enterSends,
     autoSendQueued: settings.autoSendQueued,
+    suggestionChip: settings.suggestionChip,
     showThinking: settings.showThinking,
     keepScreenOn: settings.keepScreenOn,
     language: settings.language,
@@ -283,7 +289,7 @@ export const SETTING_SCOPE = {
   theme: "shared", palette: "shared", language: "shared", sidebarRows: "shared", agentOrder: "shared",
   agentMarks: "shared", autoSendQueued: "shared", showThinking: "shared", quickReplies: "shared",
   showQuickReplies: "shared", showUsage: "shared", usageCount: "shared",
-  usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device",
+  usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device", suggestionChip: "device",
   terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", shortcutOverrides: "device", density: "device",
   terminalFontSize: "device",
   terminalWheelSpeed: "device", terminalFontFamily: "device", paneClipboard: "device", releasePaneAway: "device",
@@ -293,9 +299,9 @@ export const SETTING_SCOPE = {
   voiceInput: "device", voiceLanguage: "device", voicePolishChat: "device", voicePolishTerminal: "device",
   // Viewer layout follows this screen, as chatWidth does.
   wrapCode: "device", markdownWidth: "device", diffStyle: "device",
-  // fork deployment: the fork's own settings stay per device
-  claudeMark: "device", codexMark: "device", dashboardSidebar: "device", openLastWork: "device", folderStrip: "device", sidebarLayout: "device",
-  sidebarGrouping: "device", tuiPanes: "device", planFlow: "device", planButton: "device", planInChip: "device", usagePlacement: "device",
+  // fork settings (DEPLOY-FORK.md) stay each device's, as they were before settings were shared
+  dashboardSidebar: "device", sidebarLayout: "device", sidebarGrouping: "device", tuiPanes: "device", openLastWork: "device",
+  planFlow: "device", planButton: "device", planInChip: "device", composerStrip: "device", claudeMark: "device", codexMark: "device", usagePlacement: "device",
 } as const satisfies Record<keyof Settings, "shared" | "device">;
 
 /** The shared part of `settings`, by the names shared/preferences.ts lists. */
@@ -316,19 +322,17 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarGrouping: "repo",
   tuiPanes: AUTOMATED,
   openLastWork: !AUTOMATED,
-  // fork: automation starts on upstream's strip, which its UI tests check
-  folderStrip: AUTOMATED,
   palette: "report", // fork deployment: the report look by default, as before v0.3.4101
   claudeMark: "logo",
   codexMark: "logo",
   agentOrder: "workspace",
-  agentMarks: "color",
-  statusIndicators: "classic",
   planFlow: true,
   planButton: true,
   // fork: the header's plan button stays the default; automation starts on upstream's chip, which its UI tests check
   planInChip: AUTOMATED,
-  // fork deployment: System mode draws the report look too, as before upstream's light/dark pair
+  composerStrip: AUTOMATED,
+  agentMarks: "color",
+  statusIndicators: "classic",
   paletteLight: "report",
   paletteDark: "report",
   terminalFontSize: 13,
@@ -342,6 +346,8 @@ export const DEFAULT_SETTINGS: Settings = {
   chatWidth: "default",
   enterSends: true,
   autoSendQueued: true,
+  // fork: the chip stays on as before upstream #1185 (automation starts on upstream's off)
+  suggestionChip: !AUTOMATED,
   showThinking: false,
   keepScreenOn: false,
   language: "system",
@@ -355,9 +361,9 @@ export const DEFAULT_SETTINGS: Settings = {
   // fork deployment: the plan meters on by default, at the top of the sidebar
   showUsage: true,
   usageCount: "used",
-  usageGlance: "week",
   usagePlacement: "top",
   defaultView: "auto",
+  usageGlance: "week",
   usageOrder: [],
   usageHidden: [],
   voiceInput: "auto",
@@ -497,15 +503,15 @@ export function sanitizeSettings(raw: unknown): Settings {
     sidebarGrouping: record["sidebarGrouping"] === "repo" || record["sidebarGrouping"] === "directory" || record["sidebarGrouping"] === "workspace" ? record["sidebarGrouping"] : DEFAULT_SETTINGS.sidebarGrouping,
     tuiPanes: typeof record["tuiPanes"] === "boolean" ? record["tuiPanes"] : DEFAULT_SETTINGS.tuiPanes,
     openLastWork: typeof record["openLastWork"] === "boolean" ? record["openLastWork"] : DEFAULT_SETTINGS.openLastWork,
-    folderStrip: typeof record["folderStrip"] === "boolean" ? record["folderStrip"] : DEFAULT_SETTINGS.folderStrip,
     claudeMark: record["claudeMark"] === "mascot" ? "mascot" : DEFAULT_SETTINGS.claudeMark,
     codexMark: record["codexMark"] === "app" ? "app" : DEFAULT_SETTINGS.codexMark,
     agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
-    agentMarks: record["agentMarks"] === "color" || record["agentMarks"] === "mono" ? record["agentMarks"] : DEFAULT_SETTINGS.agentMarks,
-    statusIndicators: record["statusIndicators"] === "classic" || record["statusIndicators"] === "dots" || record["statusIndicators"] === "symbols" ? record["statusIndicators"] : DEFAULT_SETTINGS.statusIndicators,
     planFlow: record["planFlow"] !== false,
     planButton: record["planButton"] !== false,
     planInChip: typeof record["planInChip"] === "boolean" ? record["planInChip"] : DEFAULT_SETTINGS.planInChip,
+    composerStrip: typeof record["composerStrip"] === "boolean" ? record["composerStrip"] : DEFAULT_SETTINGS.composerStrip,
+    agentMarks: record["agentMarks"] === "color" || record["agentMarks"] === "mono" ? record["agentMarks"] : DEFAULT_SETTINGS.agentMarks,
+    statusIndicators: record["statusIndicators"] === "classic" || record["statusIndicators"] === "dots" || record["statusIndicators"] === "symbols" ? record["statusIndicators"] : DEFAULT_SETTINGS.statusIndicators,
     palette,
     // a record from before the pair starts both from its one palette, so System mode looks as it did
     paletteLight: PALETTES.find((name) => name === record["paletteLight"]) ?? palette,
@@ -525,6 +531,8 @@ export function sanitizeSettings(raw: unknown): Settings {
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     autoSendQueued: typeof record["autoSendQueued"] === "boolean" ? record["autoSendQueued"] : DEFAULT_SETTINGS.autoSendQueued,
+    // fork: a phone that turned the chip off under its old key keeps it off
+    suggestionChip: typeof record["suggestionChip"] === "boolean" ? record["suggestionChip"] : typeof record["showSuggestionChip"] === "boolean" ? record["showSuggestionChip"] : DEFAULT_SETTINGS.suggestionChip,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
     language: LANGUAGE_SETTINGS.includes(record["language"] as LanguageSetting) ? record["language"] as LanguageSetting : DEFAULT_SETTINGS.language,

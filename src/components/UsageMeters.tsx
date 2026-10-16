@@ -121,13 +121,14 @@ export function UsageMeters() {
   };
 
   const count = settings.usageCount;
+  const glance = settings.usageGlance;
   // an account hidden in Settings is left out of the strip and the popover alike
   const shown = report ? orderProviders(report.providers, settings.usageOrder).filter((usage) => !settings.usageHidden.includes(usage.key)) : [];
   if (!footer || shown.length === 0) return null;
   const folded = shown.length > MAX_CHIPS ? shown.length - (MAX_CHIPS - 1) : 0;
   const chips = folded > 0 ? shown.slice(0, MAX_CHIPS - 1) : shown;
   const summary = shown.map((usage) => {
-    const window = glanceWindow(usage, settings.usageGlance);
+    const window = glanceWindow(usage, glance);
     return `${usageName(usage)} ${window ? meterText(window, count) : "—"}`;
   }).join(", ");
 
@@ -142,7 +143,7 @@ export function UsageMeters() {
         title={summary}
         onClick={() => setOpen(!open)}
       >
-        {chips.map((usage) => <Chip key={usage.key} usage={usage} count={count} glance={settings.usageGlance} />)}
+        {chips.map((usage) => <Chip key={usage.key} usage={usage} count={count} glance={glance} />)}
         {folded > 0 && <span className="usage-more">+{folded}</span>}
       </button>
       {open && (

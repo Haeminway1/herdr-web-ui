@@ -71,7 +71,7 @@ function client(focus = async () => {}, focused = false, url = APP) {
 
 describe("notification clicks", () => {
   it("does not deliver an app notification to a focused unrelated same-origin page", async () => {
-    const unrelated = client(undefined, true, `${APP}api/health`);
+    const unrelated = client(undefined, true, "https://herdr.test/api/health");
     const app = client();
     const worker = notifications([unrelated, app]);
     await worker.click("pane-b", "remote");
@@ -81,7 +81,7 @@ describe("notification clicks", () => {
   });
 
   it("opens the exact app target when only unrelated windows exist", async () => {
-    const unrelated = client(undefined, true, `${APP}api/health`);
+    const unrelated = client(undefined, true, "https://herdr.test/api/health");
     const foreign = client(undefined, false, "https://other.example/");
     const worker = notifications([unrelated, foreign]);
     await worker.click("pane-b", "remote&pc");

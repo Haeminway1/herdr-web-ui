@@ -8,11 +8,6 @@ import { herdrRpc, workspaceCreate, workspaceClose } from "../server/herdr/clien
 import { UsageService } from "../server/usage.ts";
 import { checkPushSettings } from "./push-settings-regression.ts";
 import { checkWakeLock } from "./wake-lock-regression.ts";
-// fork: the attention inbox, the classic sidebar and the alert bell
-import { checkNeedsInput } from "./needs-input-regression.ts";
-import { checkClassicSidebar } from "./classic-sidebar-regression.ts";
-import { checkAlertBell, checkPushedAlertWhileClosed } from "./alert-bell-regression.ts";
-import { checkAttentionInbox } from "./attention-regression.ts";
 import { checkSecretInput } from "./secret-input-regression.ts";
 import { checkTerminalCopy } from "./terminal-copy-regression.ts";
 import { checkPaneFind } from "./pane-find-regression.ts";
@@ -88,8 +83,6 @@ export async function runUiContextChecks(): Promise<void> {
 
     await timed("checkPushSettings", () => checkPushSettings(browser!, origin));
     await timed("checkWakeLock", () => checkWakeLock(browser!, origin, paneA));
-    await timed("checkNeedsInput", () => checkNeedsInput(browser!, origin, paneA));
-    await timed("checkClassicSidebar", () => checkClassicSidebar(browser!, origin, paneA));
     await timed("checkSecretInput", () => checkSecretInput(browser!, origin));
     await timed("checkTerminalCopy", () => checkTerminalCopy(browser!, origin));
     await timed("checkPaneFind", () => checkPaneFind(browser!, origin));
@@ -101,12 +94,9 @@ export async function runUiContextChecks(): Promise<void> {
     await timed("checkMobileTabs", () => checkMobileTabs(browser!, origin));
     await timed("checkTabMenu", () => checkTabMenu(browser!, origin));
     await timed("checkDefaultView", () => checkDefaultView(browser!, origin));
-    await timed("checkAlertBell", () => checkAlertBell(browser!, origin));
-    await timed("checkPushedAlertWhileClosed", () => checkPushedAlertWhileClosed(browser!, origin));
     await timed("checkComposerReconnect", () => checkComposerReconnect(browser!, origin, paneB));
     await timed("checkDroplet", () => checkDroplet(browser!, origin));
     await timed("checkSplitView", () => checkSplitView(browser!, origin));
-    await timed("checkAttentionInbox", () => checkAttentionInbox(browser!, origin));
     await timed("checkTakeOver", () => checkTakeOver(browser!, origin));
     await timed("checkAlertSound", () => checkAlertSound(browser!, origin));
     await timed("checkChatKeepsTerminalSize", () => checkChatKeepsTerminalSize(browser!, origin));

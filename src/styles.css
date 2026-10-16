@@ -7,7 +7,7 @@
  * the attribute); `[data-density="compact"]` overrides the type scale and row
  * heights. The base blocks are the amber palette, the default and the look before
  * settings load; `[data-palette]` blocks override them for the opt-in
- * charcoal and catppuccin palettes, and the fork's report, lilac and forest. xterm cannot read CSS custom
+ * charcoal and catppuccin palettes. xterm cannot read CSS custom
  * properties, so the --term-* group is mirrored in settings.ts `terminalTheme()`.
  * Component-scoped rules live beside their component (Sidebar.css,
  * PaneTerminal.css, ...); this file owns the app shell, the header and the
@@ -27,7 +27,7 @@
   --border: #2d2924;
   --border-strong: #3e3830;
   /* the chat's user bubble: no edge where --bg-elevated alone parts it from --bg (the dark
-     amber and charcoal palettes), --border where the two surfaces sit close */
+     amber, report and charcoal palettes), --border where the two surfaces sit close */
   --bubble-border: transparent;
 
   /* text */
@@ -278,7 +278,7 @@
   --syntax-meta: #5d4791;
 }
 
-/* Dark report palette (fork deployment's default; upstream #1078 removed it) (Settings → Appearance → Colors): a near-black blue-grey canvas
+/* Dark report palette (Settings → Appearance → Colors): a near-black blue-grey canvas
    with 1px hairlines and near-square panels. The user's own action (Send, primary
    buttons) is white on the canvas; electric blue is kept for small marks only - the
    selected row's rail, focus, links, the cursor. Agent states carry the report's
@@ -333,8 +333,9 @@
   --syntax-meta: #b392f0;
 }
 
-/* Report in light: plain paper with the report's blue (fork deployment; upstream #1078 removed it) */
-[data-theme="light"][data-palette="report"] {
+/* Report and charcoal share plain paper in light; charcoal's own light block below
+   swaps the blue for ink */
+[data-theme="light"]:is([data-palette="report"], [data-palette="charcoal"]) {
   --notice: #8a5300;
   --bg: #f2f2f0;
   --bg-panel: #fafaf9;
@@ -368,44 +369,9 @@
   --syntax-meta: #6f42c1;
 }
 
-/* Charcoal in light: plain paper with ink for the accent and the cursor */
-[data-theme="light"][data-palette="charcoal"] {
-  --notice: #8a5300;
-  --bg: #f2f2f0;
-  --bg-panel: #fafaf9;
-  --bg-elevated: #efefed;
-  --bg-hover: #e6e6e3;
-  --bg-input: #ffffff;
-  --border: #dcdcd8;
-  --border-strong: #c4c4bf;
-  --text: #242424;
-  --text-dim: #5f5b56;
-  --text-strong: #111111;
-  --accent: #242424;
-  --accent-tint: rgba(36, 36, 36, 0.08);
-  --primary: #242424;
-  --primary-hover: #3a3a3a;
-  --primary-text: #fafaf9;
-  --primary-tint: rgba(36, 36, 36, 0.1);
-  --scrim: rgba(20, 20, 20, 0.35);
-  --shadow-drawer: 0 0 40px rgba(20, 20, 20, 0.2);
-  --shadow-pop: 0 16px 48px rgba(20, 20, 20, 0.14), 0 0 0 1px var(--border);
-  --shadow-card: 0 4px 16px rgba(20, 20, 20, 0.06);
-  --term-bg: #fafaf9;
-  --term-fg: #242424;
-  --term-cursor: #242424;
-  --term-selection: #dedad3;
-  --syntax-keyword: #b3261e;
-  --syntax-string: #22743a;
-  --syntax-number: #8a5300;
-  --syntax-type: #0b6e8a;
-  --syntax-variable: #3b3b3b;
-  --syntax-meta: #6f42c1;
-}
-
 /* Charcoal: neutral charcoal, a Ghostty-style terminal (the panel is its #171717), no
    chrome hue - selection, focus, cursor and the user's action are near-white; agent
-   states are muted as in the terminal palette. Light is the paper block above. */
+   states are muted as in the terminal palette. Light keeps the base paper with ink. */
 [data-theme="dark"][data-palette="charcoal"] {
   --notice: #d9b26a;
   --bg: #0f0f0f;
@@ -445,6 +411,13 @@
   --syntax-type: #9fb4c2;
   --syntax-variable: #dcd8d0;
   --syntax-meta: #b8a5c9;
+}
+
+[data-theme="light"][data-palette="charcoal"] {
+  --accent: #242424;
+  --accent-tint: rgba(36, 36, 36, 0.08);
+  --term-cursor: #242424;
+  --term-selection: #dedad3;
 }
 
 /* Catppuccin (catppuccin.com/palette): Mocha in dark, Latte in light, mapped by the
@@ -1826,10 +1799,8 @@ button {
     display: inline-flex;
   }
 
-  /* drawer mode: the collapse toggle has nothing to collapse, and sign out is in Settings
-     (fork: the header keeps its Sign out button on a desktop, which upstream #1128 moved to Settings) */
-  .sidebar-toggle,
-  .lock-button {
+  /* drawer mode: the collapse toggle has nothing to collapse */
+  .sidebar-toggle {
     display: none;
   }
 

@@ -19,8 +19,6 @@ interface Props {
   pageScroll?: { current: ((direction: -1 | 1) => void) | null };
   onApplicationPage?: (direction: -1 | 1) => void;
   enabled: boolean;
-  /** fork: draw the history scrollbar (settings.tuiPanes); find highlights show either way */
-  scrollbar?: boolean;
   interactive: boolean;
   search: TerminalSearchState | null;
   onError(message: string): void;

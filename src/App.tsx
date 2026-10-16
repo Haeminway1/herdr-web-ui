@@ -1,5 +1,5 @@
 import { type CSSProperties, type DragEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Bell, Ellipsis, FolderOpen, Link, Lock, Menu, MessageSquare, PanelLeft, Plus, Search, SquareTerminal, X } from "lucide-react";
+import { Bell, Ellipsis, FolderOpen, Link, Lock, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane, PaneAttention } from "../shared/protocol.ts";
 import { ApiError, authenticate, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, markPaneSeen, pairDevice, routeMissing, sendTestPush, signOut, splitPane, zoomPane, type HealthInfo } from "./lib/api.ts";
@@ -37,7 +37,7 @@ import { applyPaneStatus } from "./lib/snapshot.ts";
 import { applyPaneAttention, isUnread } from "./lib/attention.ts";
 import { rosterPanes } from "./lib/dagPane.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
-import { alertPrefs, useSettings } from "./lib/settings.ts";
+import { alertPrefs, automatedBrowser, useSettings } from "./lib/settings.ts";
 import { useShortcuts } from "./lib/shortcuts.ts";
 import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import { PaneLenses } from "./lib/paneLens.ts";
@@ -376,7 +376,7 @@ export function App() {
   const paneControls = useRef<PaneControls | null>(null);
   const [findRequest, setFindRequest] = useState<{ paneId: string | null; serial: number }>({ paneId: null, serial: 0 });
   // the header's More menu: its button
-  const [more, setMore] = useState<{ anchor: HTMLElement; phone: boolean } | null>(null);
+  const [more, setMore] = useState<{ anchor: HTMLElement } | null>(null);
   const closeMore = useCallback(() => setMore(null), []);
   // the pane canvas's actions, for the phone's tab menu (TabStrip)
   const paneActionsRef = useRef<((target: HerdrPane) => RowMenuItem[]) | null>(null);
@@ -1413,13 +1413,8 @@ export function App() {
   }, []);
   const closeNewSession = useCallback(() => { setNewSessionOpen(false); setNewPrefill(null); setNewFields(null); }, []);
 
-  // fork: a phone's More leads with the palette, and keeps New tab, which upstream #1101 trimmed
-  const paletteItem: RowMenuItem = { id: "palette", label: t("Command palette"), icon: Search, run: () => openPalette() };
   const moreItems: RowMenuItem[] = [
     ...(selectedPane && !selectedPane.restore_error ? [{ id: "find", label: t("Find in terminal"), icon: Search, run: actions.openFind }] : []),
-    ...(selectedPane && selectedWorkspace
-      ? [{ id: "new-tab", label: t("New tab"), title: t("New tab in {workspace}", { workspace: selectedWorkspace.label }), icon: Plus, run: () => actions.openNewTab() }]
-      : []),
     ...(selectedPane ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: () => setFilesOpen(true) }] : []),
     // the address says where the app is (lib/deepLink.ts); a phone has no address bar to copy it from
     { id: "copy-link", label: t("Copy link"), icon: Link, run: () => void copyText(window.location.href).then((ok) => { if (ok) setHeaderNote("copied"); }) },
@@ -1558,12 +1553,15 @@ export function App() {
           {/* the alerts this device heard, with their switch (components/AlertBell.tsx); the More
               menu keeps its Alerts item too */}
           <AlertBell bell={{ label: bell.state, title: bell.title, on: bell.on, run: bell.run }} canToggle={bellVisible} onOpen={openAlertPane} />
-          {canSignOut && (
-            <button type="button" className="icon-button lock-button header-desktop-only" aria-label={t("Sign out")} title={t("Sign out")} onClick={() => void lock().catch((error: unknown) => setLayoutNotice(error instanceof Error ? error.message : String(error)))}>
+          {/* fork: the header keeps its Sign out (upstream #1128 moved it into Settings, which has it too);
+              automation starts on upstream's header */}
+          {canSignOut && !automatedBrowser && (
+            <button type="button" className="icon-button lock-button header-desktop-only" aria-label={t("Sign out")} title={t("Sign out")} onClick={() => void lock().catch(() => undefined)}>
               <Lock />
             </button>
           )}
-          <span className="header-more">
+          {/* with nothing of its own to offer it is still the phone's way to the palette */}
+          <span className={`header-more${moreItems.length === 0 ? " is-phone-only" : ""}`}>
             <button
               type="button"
               className="icon-button header-more-button"
@@ -1573,7 +1571,7 @@ export function App() {
               aria-expanded={more !== null}
               onClick={(event) => {
                 const anchor = event.currentTarget;
-                setMore((open) => (open ? null : { anchor, phone: window.matchMedia("(max-width: 480px)").matches }));
+                setMore((open) => (open ? null : { anchor }));
               }}
             >
               <Ellipsis />
@@ -1591,7 +1589,7 @@ export function App() {
                 {crumb.path !== null && <span className="header-more-path">{crumb.path}</span>}
               </div>
             ) : undefined}
-            items={more.phone ? [paletteItem, ...moreItems] : moreItems}
+            items={moreItems}
             onClose={closeMore}
           />
         )}
@@ -1685,8 +1683,11 @@ export function App() {
                     another pane tries again */}
                 <RenderBoundary resetKey={`${machineId}:${paneId ?? ""}`} fallback={(retry) => <RegionCrash message={t("This pane can't be shown.")} retry={retry} onShown={active ? paneLost : undefined} />}>
                 <CrashProbe region="pane" />
-                {slotSnapshot && pane && workspace && (settings.tuiPanes ? (
-                  <TabStrip snapshot={slotSnapshot} workspace={workspace} selectedPane={pane} panelId={slotPanelId} splitDrag={wideScreen} onSelectPane={onSelect}
+                {slotSnapshot && pane && workspace && (!settings.tuiPanes
+                  // fork: the strip and pane picker from before #747 while the herdr-style pane area is off
+                  ? <ClassicTabStrip snapshot={slotSnapshot} workspace={workspace} selectedPane={pane} onSelectPane={onSelect}
+                    onNewTab={() => actions.openNewTab(active ? undefined : { machineId, workspaceId: workspace.workspace_id })} />
+                  : <TabStrip snapshot={slotSnapshot} workspace={workspace} selectedPane={pane} panelId={slotPanelId} splitDrag={wideScreen} onSelectPane={onSelect}
                     onNewTab={() => actions.openNewTab(active ? undefined : { machineId, workspaceId: workspace.workspace_id })}
                     paneActions={active ? (paneId) => {
                       const target = snapshot?.panes.find((item) => item.pane_id === paneId);
@@ -1695,11 +1696,7 @@ export function App() {
                       // an action runs against the canvas's latest one, where a snapshot change has landed
                       return paneActionsRef.current(target).map((item) => ({ ...item, run: () => (paneActionsRef.current?.(target).find((fresh) => fresh.id === item.id) ?? item).run() }));
                     } : undefined} />
-                ) : (
-                  // fork: the strip and pane picker from before #747 while the herdr-style pane area is off
-                  <ClassicTabStrip snapshot={slotSnapshot} workspace={workspace} selectedPane={pane} onSelectPane={onSelect}
-                    onNewTab={() => actions.openNewTab(active ? undefined : { machineId, workspaceId: workspace.workspace_id })} />
-                ))}
+                )}
                 {/* the tab strip's panel: its id is what each tab's aria-controls points at, one per half.
                     No tabIndex - the terminal (PaneTerminal) and the composer are the focusable things inside it. */}
                 <main className="terminal-host">
@@ -1719,6 +1716,7 @@ export function App() {
                         agentStatus={item?.agent_status}
                         backgroundTasks={item?.background_tasks ?? 0}
                         // an offline PC's cached plan cannot be read
+                        // fork: the plan rides the composer's chip only with Plan in the message box; else the header's button holds it
                         plan={settings.planInChip && machine?.state === "connected" ? (item as HerdrPane | undefined)?.plan ?? null : null}
                         backgroundWait={item?.background_wait === true}
                         cwd={item?.cwd ?? null}

@@ -133,8 +133,6 @@ describe("demo transport", () => {
     "/api/pane/conversation/image": "an image in a chat turn: the demo's transcripts carry none (listed when this guard was added)",
     "/api/pane/conversation/tool-output": "a tool call's full output: not part of the demo (listed when this guard was added)",
     "/api/pane/image": "pasting an image: the demo stores no files (listed when this guard was added)",
-    "/api/pane/seen": "fork deployment: the attention inbox's read state; a 404 leaves the demo's rows unread (DEPLOY-FORK.md)",
-    "/api/residents": "fork deployment: resident agents; a 404 shows the demo none, as on an upstream server (DEPLOY-FORK.md)",
     "/api/pane/read": "the scrollback read behind a chat with no transcript: the demo answers /api/pane/conversation instead (listed when this guard was added)",
     "/api/pane/selection": "copying a selection across screens: not part of the demo (listed when this guard was added)",
     "/api/preferences": "a 404 turns shared-settings sync off, as on an older server (fetchPreferences, src/lib/api.ts)",

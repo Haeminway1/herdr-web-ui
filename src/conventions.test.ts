@@ -172,16 +172,14 @@ describe("icon cache", () => {
   });
 });
 
-const FORK_NEW_SESSION = ["src/components/ClassicSidebar.tsx", "src/components/DashboardSidebar.tsx", "src/components/MachineSidebar.tsx"];
-
 describe("UI wording", () => {
   // "Session" means the herdr server session or an agent's history; the dialog that makes a
   // workspace says "New workspace" (AGENTS.md).
+  // fork: the classic sidebar's and the dashboard's New session bar (DEPLOY-FORK.md) keeps its words
+  const FORK_NEW_SESSION = new Set(["src/components/ClassicSidebar.tsx", "src/components/DashboardSidebar.tsx", "src/components/MachineSidebar.tsx"]);
   it("says New workspace, never New session", () => {
     const offenders = [...scan("src/**/*.{ts,tsx}"), ...scan("site/**/*.{ts,tsx,html}"), "index.html"]
-      .filter((file) => !file.endsWith(".test.ts"))
-      // fork deployment: the classic and dashboard sidebars keep their New session button (DEPLOY-FORK.md)
-      .filter((file) => !FORK_NEW_SESSION.includes(file))
+      .filter((file) => !file.endsWith(".test.ts") && !FORK_NEW_SESSION.has(file))
       .flatMap((file) => read(file).split("\n").flatMap((line, index) =>
         /^\s*(?:\/\/|\/?\*)/.test(line) || !/\bNew [Ss]ession\b/.test(line) || /^\s*"New session(?: on \{name\})?":/.test(line) ? [] : [`${file}:${index + 1}: ${line.trim()}`]));
     fail(offenders, "UI text says \"New workspace\", not \"New session\" (AGENTS.md, UI wording). Change the string and its i18n entries in src/lib/i18n.*.ts.");

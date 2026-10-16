@@ -45,7 +45,7 @@ import { PendingMessages } from "./PendingMessages.tsx";
 import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, PlanSummary, ServerMessage } from "../../shared/protocol.ts";
 import type { PaneControls, PaneView } from "../lib/actions.ts";
 import { usePaneLane } from "../lib/chatLane.ts";
-import { useSettings, terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
+import { automatedBrowser, useSettings, terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
 import { desktopFileNames, shellFileName } from "../lib/desktop.ts";
 import type { Outgoing } from "../lib/outbox.ts";
 import { loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "../lib/fontFamily.ts";
@@ -126,8 +126,6 @@ export interface PaneTerminalProps {
   theme: ResolvedTheme;
   /** the chrome palette (settings.ts): the terminal cursor and selection follow it */
   palette: Palette;
-  /** fork: the history scrollbar beside the grid (settings.tuiPanes); off, the grid keeps the full width */
-  historyBar?: boolean;
   /** The connection's desired role; changes are sent to the server, acks come back via onRoleAck. */
   role?: ClientRole;
   /** Fires with the server-confirmed role (the header toggle shows it). */
@@ -138,6 +136,13 @@ export interface PaneTerminalProps {
   onServerMessage?: (message: ServerMessage) => void;
 }
 
+
+/** fork: a device that chose direct typing before Settings named it (lib/settings.ts terminalInputMode) */
+const DIRECT_TYPING_KEY = "herdr-web-ui:direct-typing";
+
+function storedDirectTyping(): boolean {
+  try { return window.localStorage.getItem(DIRECT_TYPING_KEY) === "1"; } catch { return false; }
+}
 
 /** The last refused Send now note per pane, kept across that pane's mounts (see queueError). */
 const heldRowNotes = new Map<string, { owner: string; id: string; text: string }>();
@@ -168,7 +173,6 @@ export function PaneTerminal({
   terminalFontFamily,
   theme,
   palette,
-  historyBar = true,
   role = "interact",
   onRoleAck,
   onConnectionChange,
@@ -361,7 +365,9 @@ export function PaneTerminal({
   // Settings → Chat width, Default: the lane follows this pane, on the stack its columns share
   usePaneLane(stackRef);
   // every device starts typing straight into the grid; the input line is a choice (key bar or Settings)
-  const directTyping = settings.terminalInputMode !== "line";
+  // fork: "auto" keeps a touch screen on the input line, as before upstream #1163 (which starts every
+  // device in direct typing); the key bar's keyboard key or Settings switches. Automation starts on upstream's
+  const directTyping = settings.terminalInputMode === "direct" || (settings.terminalInputMode === "auto" && (!coarse || automatedBrowser || storedDirectTyping()));
   const inputLine = !directTyping && !chatView;
   const inputLineRef = useRef(inputLine);
   inputLineRef.current = inputLine;

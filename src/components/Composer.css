@@ -559,7 +559,7 @@
   min-width: 0;
   min-height: calc(1lh + var(--space-5));
   max-height: 10lh;
-  padding: var(--space-4) var(--space-4) var(--space-1);
+  padding: var(--space-4) var(--space-5) var(--space-1);
   resize: none;
   overflow-x: hidden;
   overflow-y: auto;

@@ -891,7 +891,7 @@ export function Composer({
     };
     const settle = (result: boolean | string | DraftRefusal): void => {
       if (result === true) {
-        for (const attachment of sentAttachments) URL.revokeObjectURL(attachment.previewUrl);
+        for (const attachment of sentAttachments) { URL.revokeObjectURL(attachment.previewUrl); placedMentions.current.delete(attachment.id); }
         if (mounted.current) setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
         return;
       }
@@ -1042,19 +1042,18 @@ export function Composer({
     [agentStatus, choices, connected, menuDismissed, menuOpen, offered, onAbort, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, trigger],
   );
 
-  // a desktop shell names files from this computer by their path instead (lib/desktop.ts)
+  // a desktop shell names files from this computer by their path instead (lib/desktop.ts), at the caret
   const nameDesktopFiles = useCallback(
     (files: readonly File[]): boolean => {
       const names = desktopFileNames(files.slice(0, ATTACH_LIMIT));
       if (!names) return false;
-      // the paths go in at the caret, as typed text
       const mention = names.map(composerFileName).join(" ") + " ";
       const element = textareaRef.current;
-      const current = textRef.current;
-      const selectionIsCurrent = element?.value === current;
+      const currentText = textRef.current;
+      const selectionIsCurrent = element?.value === currentText;
       const start = selectionIsCurrent ? (element.selectionStart ?? caretRef.current) : caretRef.current;
       const end = selectionIsCurrent ? (element.selectionEnd ?? start) : start;
-      setTextAndCaret(current.slice(0, start) + mention + current.slice(end), start + mention.length);
+      setTextAndCaret(currentText.slice(0, start) + mention + currentText.slice(end), start + mention.length);
       return true;
     },
     [setTextAndCaret],
@@ -1101,8 +1100,7 @@ export function Composer({
   // what the status line says; what may be sent, queued or stopped goes by the agent's own status
   const shownStatus = paneStatus({ agent_status: agentStatus, ...(backgroundWait ? { background_wait: true as const } : {}) });
   const statusCompact = composerStatusCompact(cardWidth);
-  // fork: a send leaves the box at once (instant send), so an in-flight one does not hold the Send button up
-  const sendShown = composerSendShown({ working: isWorking, text });
+  const sendShown = sending || composerSendShown({ working: isWorking, text });
   const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined });
   const model = metadata?.model ? modelLabel(metadata.model) : null;
   const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort);
@@ -1117,8 +1115,8 @@ export function Composer({
     : hint === "near-limit" ? t("{count} characters left", { count: MAX_COMPOSER_CHARS - text.length })
     : t(hint === "uploading" ? "Uploading file…" : "Reconnecting… message held here, never queued");
   /** the strip under the card: the folder and the branch the caller knows; none, or a phone's screen, no strip */
-  // fork: only when chosen in Settings (folderStrip)
-  const strip = mobile || !settings.folderStrip ? null : composerStrip({ cwd, branch, repo: worktreeRepo });
+  // fork: only with Settings → Chat → Folder and branch (off by default, as before upstream #951)
+  const strip = mobile || !settings.composerStrip ? null : composerStrip({ cwd, branch, repo: worktreeRepo });
   const worktree = worktreeRepo !== null;
   // Fit only changes to drawn content. Streaming context usage is a fixed-size ring unless
   // its number is open on desktop; transcript/status refreshes need no measurement layout.
@@ -1136,8 +1134,8 @@ export function Composer({
     <div className={`composer${notices ? " has-notices" : ""}`} role="group" aria-label={t("Message composer")} data-dictating={dictation.voice.state !== "idle" ? "" : undefined}>
       {greeting}
       {notices}
-      {/* no Tab key on a phone: the suggestion is a chip there that fills the box */}
-      {offered !== null && text === "" && (
+      {/* no Tab key on a phone: the suggestion can be a chip there that fills the box, when Settings asks for it */}
+      {settings.suggestionChip && offered !== null && text === "" && (
         <div className="composer-quick composer-suggestion-row">
           <button type="button" className="composer-quick-reply composer-suggestion" title={t("Use the suggestion")} onClick={() => setTextAndCaret(offered, offered.length)}>
             <span aria-hidden="true">↹ </span>{offered}

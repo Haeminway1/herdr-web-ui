@@ -29,6 +29,15 @@ it("keeps the screen wake lock off until this device explicitly enables it", () 
   expect(sanitizeSettings({ terminalWheelSpeed: "3" }).terminalWheelSpeed).toBe(1);
 });
 
+// fork: the chip stays on as before upstream #1185, and a phone that turned it off under the old key keeps it off
+it("keeps the suggestion chip on unless this device turned it off, under either key", () => {
+  expect(sanitizeSettings({}).suggestionChip).toBe(true);
+  expect(sanitizeSettings({ showSuggestionChip: false }).suggestionChip).toBe(false);
+  expect(sanitizeSettings({ showSuggestionChip: true }).suggestionChip).toBe(true);
+  expect(sanitizeSettings({ suggestionChip: false, showSuggestionChip: true }).suggestionChip).toBe(false);
+  expect(sanitizeSettings({ suggestionChip: "false" }).suggestionChip).toBe(true);
+});
+
 it("keeps sidebar rows on two lines unless one line was chosen", () => {
   expect(sanitizeSettings({}).sidebarRows).toBe("two");
   expect(sanitizeSettings({ sidebarRows: "one" }).sidebarRows).toBe("one");
@@ -46,15 +55,6 @@ it("never enables the dashboard for new, legacy, or malformed preferences", () =
 });
 
 // fork: upstream #556 dropped the folder grouping; the fork keeps it, with the classic sidebar, by default
-it("keeps the classic sidebar and its folder grouping by default, and a stored choice", () => {
-  expect(DEFAULT_SETTINGS.sidebarLayout).toBe("classic");
-  expect(DEFAULT_SETTINGS.sidebarGrouping).toBe("repo");
-  expect(sanitizeSettings({ sidebarGrouping: "directory" }).sidebarGrouping).toBe("directory");
-  expect(sanitizeSettings({ sidebarGrouping: "workspace" }).sidebarGrouping).toBe("workspace");
-  expect(sanitizeSettings({ sidebarLayout: "agents" }).sidebarLayout).toBe("agents");
-  expect(sanitizeSettings({ sidebarLayout: "elsewhere", sidebarGrouping: 1 })).toMatchObject({ sidebarLayout: "classic", sidebarGrouping: "repo" });
-});
-
 it("keeps the plan's flow and its header count unless they were turned off", () => {
   expect([DEFAULT_SETTINGS.planFlow, DEFAULT_SETTINGS.planButton]).toEqual([true, true]);
   expect(sanitizeSettings({})).toMatchObject({ planFlow: true, planButton: true });
@@ -69,6 +69,15 @@ it("keeps the fork's header plan unless upstream's plan in the chip was chosen",
   expect(sanitizeSettings({}).planInChip).toBe(false);
   expect(sanitizeSettings({ planInChip: true }).planInChip).toBe(true);
   expect(sanitizeSettings({ planInChip: "true" }).planInChip).toBe(false);
+});
+
+it("keeps the classic sidebar and its folder grouping by default, and a stored choice", () => {
+  expect(DEFAULT_SETTINGS.sidebarLayout).toBe("classic");
+  expect(DEFAULT_SETTINGS.sidebarGrouping).toBe("repo");
+  expect(sanitizeSettings({ sidebarGrouping: "directory" }).sidebarGrouping).toBe("directory");
+  expect(sanitizeSettings({ sidebarGrouping: "workspace" }).sidebarGrouping).toBe("workspace");
+  expect(sanitizeSettings({ sidebarLayout: "agents" }).sidebarLayout).toBe("agents");
+  expect(sanitizeSettings({ sidebarLayout: "elsewhere", sidebarGrouping: 1 })).toMatchObject({ sidebarLayout: "classic", sidebarGrouping: "repo" });
 });
 
 it("draws agent logos in their brand colors unless Mono was chosen", () => {
@@ -564,7 +573,7 @@ describe("language", () => {
 });
 
 describe("palette", () => {
-  it("defaults to the fork's report look, and keeps only a known palette", () => {
+  it("defaults to amber, the look before this setting, and keeps only a known palette", () => {
     expect(DEFAULT_SETTINGS.palette).toBe("report"); // fork deployment default;
     // settings stored before palettes existed carry no palette key
     expect(sanitizeSettings({ theme: "light" }).palette).toBe("report");
@@ -574,11 +583,6 @@ describe("palette", () => {
     expect(sanitizeSettings({ palette: "lilac" }).palette).toBe("lilac");
     expect(sanitizeSettings({ palette: "forest" }).palette).toBe("forest");
     expect(sanitizeSettings({ palette: "pink" }).palette).toBe("report");
-  });
-
-  // fork deployment: upstream #1078 removed report, lilac and forest; the fork keeps them
-  it("keeps the fork's report, lilac and forest palettes", () => {
-    for (const kept of ["report", "lilac", "forest"] as const) expect(sanitizeSettings({ palette: kept }).palette).toBe(kept);
   });
 
   it("preserves Catppuccin through a saved settings round-trip and unrelated edits", () => {
@@ -595,15 +599,17 @@ describe("palette", () => {
     return css.slice(start, css.indexOf("}", start));
   };
   // each case lists its blocks from the most specific to the base; the first one naming a token wins
+  // fork: the light report and charcoal palettes share a block, as before upstream #1078
+  const paper = '[data-theme="light"]:is([data-palette="report"], [data-palette="charcoal"])';
   const cases = [
     { theme: "dark", palette: "amber", layers: [":root"] },
     { theme: "light", palette: "amber", layers: ['[data-theme="light"]', ":root"] },
+    { theme: "dark", palette: "report", layers: ['[data-theme="dark"][data-palette="report"]', ":root"] },
+    { theme: "light", palette: "report", layers: [paper, '[data-theme="light"]', ":root"] },
     { theme: "dark", palette: "charcoal", layers: ['[data-theme="dark"][data-palette="charcoal"]', ":root"] },
-    { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', '[data-theme="light"]', ":root"] },
+    { theme: "light", palette: "charcoal", layers: ['[data-theme="light"][data-palette="charcoal"]', paper, '[data-theme="light"]', ":root"] },
     { theme: "dark", palette: "catppuccin", layers: ['[data-theme="dark"][data-palette="catppuccin"]', ":root"] },
     { theme: "light", palette: "catppuccin", layers: ['[data-theme="light"][data-palette="catppuccin"]', '[data-theme="light"]', ":root"] },
-    { theme: "dark", palette: "report", layers: ['[data-theme="dark"][data-palette="report"]', ":root"] },
-    { theme: "light", palette: "report", layers: ['[data-theme="light"][data-palette="report"]', '[data-theme="light"]', ":root"] },
     { theme: "dark", palette: "lilac", layers: ['[data-theme="dark"][data-palette="lilac"]', ":root"] },
     { theme: "light", palette: "lilac", layers: ['[data-theme="light"][data-palette="lilac"]', '[data-theme="light"]', ":root"] },
     { theme: "dark", palette: "forest", layers: ['[data-theme="dark"][data-palette="forest"]', ":root"] },

@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type Browser, type Page } from "playwright-core";
+import { chromium, type Browser, type Locator, type Page } from "playwright-core";
 
 import machinesFixture from "../site/demo/fixtures/machines.json";
 import panes from "../site/demo/fixtures/panes.json";
@@ -502,15 +502,32 @@ try {
         });
       }
 
-      await scenario(`agents layout, flat list without pins (${view.name}): system row first with lock, impostor ordinary`, async () => {
-        await withPage(browser!, { settings: { sidebarLayout: "agents", agentPins: false }, mobile: view.mobile }, async (page) => {
+      // upstream #1120: an agent is pinned from its row's menu (a right-click, or ⋯ on a touch screen), not a star
+      const pinFromMenu = async (page: Page, row: Locator): Promise<void> => {
+        // a touch screen opens it as a sheet (RowMenu), a mouse as a menu at the pointer
+        if (view.mobile) {
+          await row.locator(".row-menu-toggle").tap();
+          const sheet = page.locator(".row-sheet");
+          await sheet.waitFor();
+          await sheet.locator(".row-sheet-item", { hasText: "Pin agent" }).tap();
+          return;
+        }
+        await row.locator(".agent-row").click({ button: "right" });
+        const menu = page.getByRole("menu");
+        await menu.waitFor();
+        await menu.getByRole("menuitem", { name: "Pin agent" }).click();
+      };
+
+      await scenario(`agents layout, no pins (${view.name}): system row first with lock and no menu, impostor ordinary`, async () => {
+        await withPage(browser!, { settings: { sidebarLayout: "agents" }, mobile: view.mobile }, async (page) => {
           const row = page.locator(".agents-sidebar .agent-item.is-system");
           await row.waitFor({ timeout: 10_000 });
           eq(await row.count(), 1, "the manager is one row");
           eq(await page.locator(".agents-sidebar .agent-list > li").first().evaluate((el) => el.classList.contains("is-system")), true, "the system row leads the Agents list");
-          eq(await row.locator(`.agent-pin-lock[aria-label="System pinned"]`).count(), 1, "the lock stands in for a star");
-          eq(await row.locator(".agent-pin-toggle").count(), 0, "the system row is never pinnable");
-          eq(await page.locator(".agents-sidebar .agent-pin-toggle").count(), 0, "no stars anywhere with Pin agents off");
+          eq(await row.locator(`.agent-pin-lock[aria-label="System pinned"]`).count(), 1, "the lock stands in for the row menu");
+          eq(await row.locator(".row-menu-toggle").count(), 0, "the system row is never pinnable");
+          await row.locator(".agent-row").click({ button: "right" });
+          eq(await page.getByRole("menu").count(), 0, "a right-click on the system row opens no pin menu");
           const impostor = impostorAgentRow(page);
           await impostor.waitFor();
           eq(await impostor.locator(".agent-pin-lock").count(), 0, "the impostor shows no lock");
@@ -519,61 +536,35 @@ try {
         });
       });
 
-      await scenario(`agents layout, flat list with pins (${view.name}): the lock is the server's, the impostor's star stays the user's`, async () => {
-        await withPage(browser!, { settings: { sidebarLayout: "agents", agentPins: true, agentOrder: "workspace" }, mobile: view.mobile }, async (page) => {
+      await scenario(`agents layout, user pins (${view.name}): the lock is the server's, the impostor's pin stays the user's across a reload`, async () => {
+        await withPage(browser!, { settings: { sidebarLayout: "agents", agentOrder: "workspace" }, mobile: view.mobile }, async (page) => {
           const row = page.locator(".agents-sidebar .agent-item.is-system");
           await row.waitFor({ timeout: 10_000 });
-          eq(await page.locator(".agents-sidebar .agent-list > li").first().evaluate((el) => el.classList.contains("is-system")), true, "the system row leads the Agents list");
-          eq(await row.locator(`.agent-pin-lock[aria-label="System pinned"]`).count(), 1, "the lock on the system row");
-          eq(await row.locator(".agent-pin-toggle").count(), 0, "no star on the system row");
           const impostor = impostorAgentRow(page);
           await impostor.waitFor();
           eq(await impostor.locator(".agent-pin-lock").count(), 0, "the impostor has no lock");
-          const star = impostor.locator(".agent-pin-toggle");
-          await star.waitFor();
-          eq(await star.getAttribute("aria-pressed"), "false", "the impostor's own star starts unpinned");
-          await screenshot(page, `${view.shot}-agents-flat-pins`);
-        });
-      });
-
-      await scenario(`agents layout, cards + pins (${view.name}): impostor keeps its star across a reload`, async () => {
-        await withPage(browser!, { settings: { sidebarLayout: "agents", agentCards: true, agentPins: true, sidebarGrouping: "repo", agentOrder: "workspace" }, mobile: view.mobile }, async (page) => {
-          const row = page.locator(".agents-sidebar .agent-item.is-system");
-          await row.waitFor({ timeout: 10_000 });
-          eq(await row.locator(`.agent-pin-lock[aria-label="System pinned"]`).count(), 1, "the lock on the system row");
-          eq(await row.locator(".agent-pin-toggle").count(), 0, "no star on the system row");
-          const impostor = impostorAgentRow(page);
-          await impostor.waitFor();
-          eq(await impostor.locator(".agent-pin-lock").count(), 0, "the impostor has no lock");
-          const star = impostor.locator(".agent-pin-toggle");
-          await star.waitFor();
-          eq(await star.getAttribute("aria-pressed"), "false", "the impostor's star starts unpinned");
-          // the impostor sits inside a workspace card; pinning moves the card, not the system row —
-          // a card-membership locator must name the row alone, never its .agents-sidebar ancestor
-          eq(await page.locator(".agents-sidebar .agent-group").filter({ has: page.locator(`.agent-item[data-pane="${IMPOSTOR.pane}"]`) }).count(), 1, "the impostor lives in a workspace card");
-          await star.click();
+          await pinFromMenu(page, impostor);
           await page.waitForFunction((key) => JSON.parse(localStorage.getItem("herdr-web-ui:sidebar-agent-pins") ?? "[]").includes(key), `local:${IMPOSTOR.pane}`, { timeout: 10_000 });
-          eq(await impostor.locator(".agent-pin-toggle").getAttribute("aria-pressed"), "true", "the ordinary pin toggles");
+          await page.locator(`.agents-sidebar .agent-list-pinned .agent-item[data-pane="${IMPOSTOR.pane}"]`).waitFor();
+          eq(await page.locator(".agents-sidebar .agent-list > li").first().evaluate((el) => el.classList.contains("is-system")), true, "a user pin never outranks the system pin");
           await page.reload();
           await page.locator(".conn-live").waitFor({ state: "attached" });
           await openDrawer(page);
           await expandAgents(page);
           await page.locator(".agents-sidebar .agent-item.is-system").waitFor();
           eq(await page.locator(".agents-sidebar .agent-list > li").first().evaluate((el) => el.classList.contains("is-system")), true, "the manager still leads after reload");
-          await page.waitForFunction((key) => JSON.parse(localStorage.getItem("herdr-web-ui:sidebar-agent-pins") ?? "[]").includes(key), `local:${IMPOSTOR.pane}`, { timeout: 10_000 });
-          eq(await impostorAgentRow(page).locator(".agent-pin-toggle").getAttribute("aria-pressed"), "true", "the user's own pin survives reload beside the system pin");
-          await screenshot(page, `${view.shot}-agents-cards`);
+          await page.locator(`.agents-sidebar .agent-list-pinned .agent-item[data-pane="${IMPOSTOR.pane}"]`).waitFor();
+          eq(await page.locator(".agents-sidebar .agent-list-pinned .agent-item.is-system").count(), 0, "the system row is never in the user's pinned list");
+          await screenshot(page, `${view.shot}-agents-pins`);
         });
       });
 
-      await scenario(`agents layout, activity order + pins (${view.name}): the system row still leads`, async () => {
-        await withPage(browser!, { settings: { sidebarLayout: "agents", agentOrder: "activity", agentPins: true }, mobile: view.mobile }, async (page) => {
+      await scenario(`agents layout, activity order (${view.name}): the system row still leads`, async () => {
+        await withPage(browser!, { settings: { sidebarLayout: "agents", agentOrder: "activity" }, mobile: view.mobile }, async (page) => {
           const row = page.locator(".agents-sidebar .agent-item.is-system");
           await row.waitFor({ timeout: 10_000 });
           eq(await page.locator(".agents-sidebar .agent-list > li").first().evaluate((el) => el.classList.contains("is-system")), true, "activity order never outranks the system pin");
           eq(await row.locator(`.agent-pin-lock[aria-label="System pinned"]`).count(), 1);
-          const star = impostorAgentRow(page).locator(".agent-pin-toggle");
-          await star.waitFor();
           eq(await impostorAgentRow(page).locator(".agent-pin-lock").count(), 0, "the impostor stays unprotected");
           await screenshot(page, `${view.shot}-agents-activity`);
         });

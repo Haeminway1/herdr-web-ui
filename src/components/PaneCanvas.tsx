@@ -212,6 +212,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     flush(current);
   };
   const cells = layout && !onlySelected ? layoutCells(layout) : pane ? [{ paneId: pane.pane_id, left: 0, top: 0, width: 100, height: 100, focused: true }] : [];
+  // the one-pane view (fork, tuiPanes off) shows the selected pane alone already
   const alone = onlySelected ? null : soloPane(layout, cells.map((cell) => cell.paneId), selectedPaneId, narrow);
   const stacked = alone !== null && !layout?.zoomed;
   for (const cell of cells) lastCells.current.set(cell.paneId, alone === cell.paneId || stacked
@@ -233,7 +234,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   for (const id of lastCells.current.keys()) if (!mountedIds.has(id)) lastCells.current.delete(id);
   // herdr's zoomed pane, whatever the web selected: the selection follows it (App). A phone has
   // no room for a split, so it shows the selected pane alone the same way and leaves herdr's
-  // layout as it is; the tab's menu lists the other panes (TabStrip). The one-pane view (fork, tuiPanes off) shows the selected pane alone already.
+  // layout as it is; the tab's menu lists the other panes (TabStrip).
   // a phone's hidden siblings take the whole canvas too, so each keeps the grid it is shown with
   return <PaneSubmitContext.Provider value={submits}><div className={`pane-canvas${!pane && presented ? " is-pending" : ""}`} ref={canvas} aria-busy={!pane && presented ? true : undefined}>
     {cells.length === 0 && renderPane(pane, true, false)}

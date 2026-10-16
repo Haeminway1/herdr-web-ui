@@ -275,13 +275,11 @@ self.addEventListener("push", (event) => {
  * responses), nor any shipped file (an icon, /social-preview.png, a notice): a path whose last
  * part has an extension is a file, except the shell's own index.html.
  */
-function sameOrigin(url) {
-  try { return new URL(url).origin === self.location.origin; } catch { return false; }
-}
-
 function isAppWindow(url) {
   let parsed;
   try { parsed = new URL(url); } catch { return false; }
+  // fork: only this app's own origin (DEPLOY-FORK.md, native push taps routed to app windows only)
+  if (self.location?.origin && parsed.origin !== self.location.origin) return false;
   const path = parsed.pathname;
   if (path.startsWith("/api/") || path === "/ws") return false;
   const last = path.slice(path.lastIndexOf("/") + 1);
@@ -308,8 +306,7 @@ self.addEventListener("notificationclick", (event) => {
     (async () => {
       // only an app window handles the selection: focusing a reader tab would swallow the tap
       const windows = (await self.clients.matchAll({ type: "window", includeUncontrolled: true }))
-        // fork: and only this origin's (includeUncontrolled lists every page the worker may see)
-        .filter((client) => isAppWindow(client.url) && sameOrigin(client.url));
+        .filter((client) => isAppWindow(client.url));
       if (click !== latestNotificationClick) return;
       const url = paneId ? `/?machine=${encodeURIComponent(machineId)}${workspaceId ? `&ws=${encodeURIComponent(workspaceId)}` : ""}&pane=${encodeURIComponent(paneId)}&view=chat` : "/";
       const selectLatest = (client) => { if (client && latestNotificationSelection) client.postMessage(latestNotificationSelection); };
