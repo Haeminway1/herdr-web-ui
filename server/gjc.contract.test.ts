@@ -176,6 +176,29 @@ async function expectConversation(id: string, answer: string): Promise<void> {
   expect(conversation.turns[0]!.parts[0]).toMatchObject({ kind: "text", text: answer });
 }
 
+// Bound polling by the SDK cache TTL and its full lookup deadline.
+const SESSION_LIST_CACHE_TTL_MS = 2_000;
+const SDK_LOOKUP_EXECUTION_MARGIN_MS = 8_000;
+
+async function expectTranscriptEventually(id: string, expectedPath: string, answer: string): Promise<void> {
+  const deadline = Date.now() + SESSION_LIST_CACHE_TTL_MS + SDK_LOOKUP_EXECUTION_MARGIN_MS;
+  let actualPath: string | undefined;
+  while (Date.now() < deadline) {
+    try {
+      actualPath = await gjcTranscriptPath(id, home, home);
+      if (actualPath === expectedPath) {
+        await expectConversation(id, answer);
+        return;
+      }
+    } catch (error) {
+      if (!(error instanceof ConversationUnavailable) || error.message !== "no_session_path") throw error;
+    }
+    if (Date.now() < deadline) await Bun.sleep(50);
+  }
+  expect(actualPath).toBe(expectedPath);
+  throw new Error(`GJC pane conversation did not converge to ${expectedPath}`);
+}
+
 it("SDK identity ignores a copied neighboring answer on the pane screen", async () => withSdkFixture(async () => {
   const a = join(dir, "sdk-answer-a.jsonl"), b = join(dir, "sdk-answer-b.jsonl");
   const otherAnswer = "This long neighboring response is deliberately unique so visible screen matching would choose this wrong transcript instead of the short SDK-owned answer.";
@@ -210,10 +233,8 @@ it("SDK maps same-cwd panes by exact GJC PID despite identical answers, titles, 
     sdkRow(secondProcess.pid, home, "same-answer-b"),
   ], { "same-answer-a": a, "same-answer-b": b });
 
-  expect(await gjcTranscriptPath(first, home, home)).toBe(a);
-  expect(await gjcTranscriptPath(second, home, home)).toBe(b);
-  await expectConversation(first, "same");
-  await expectConversation(second, "same");
+  await expectTranscriptEventually(first, a, "same");
+  await expectTranscriptEventually(second, b, "same");
 }));
 
 it("SDK follows /new or resume when the same GJC PID changes from A to B without changing its one-word screen", async () => withSdkFixture(async () => {
@@ -225,13 +246,12 @@ it("SDK follows /new or resume when the same GJC PID changes from A to B without
   const { pid } = await gjcProcess(id);
   await setAgent(id, "gjc");
   writeRegistry([sdkRow(pid, home, "resume-a")], { "resume-a": a, "resume-b": b });
-  expect(await gjcTranscriptPath(id, home, home)).toBe(a);
+  await expectTranscriptEventually(id, a, "A");
 
   // The fixture SDK registry now reflects /new or resume; neither the PID nor the pane screen changes.
   writeRegistry([sdkRow(pid, home, "resume-b")], { "resume-a": a, "resume-b": b });
   expect((await paneRead({ paneId: id })).text).toContain("A");
-  expect(await gjcTranscriptPath(id, home, home)).toBe(b);
-  await expectConversation(id, "B");
+  await expectTranscriptEventually(id, b, "B");
 }));
 
 it("SDK scopes discovery so unrelated retired history cannot exhaust the pane's page budget", async () => withSdkFixture(async () => {
@@ -244,7 +264,7 @@ it("SDK scopes discovery so unrelated retired history cannot exhaust the pane's 
   const retired = Array.from({ length: 801 }, (_, index) =>
     sdkRow(900_000 + index, otherCwd, `old-${index}`, { live: false }));
   writeRegistry([...retired, sdkRow(pid, home, "scoped-a")], { "scoped-a": a });
-  expect(await gjcTranscriptPath(id, home, home)).toBe(a);
+  await expectTranscriptEventually(id, a, "scoped answer");
 }));
 
 it("SDK GJC identity overrides stale Codex session metadata", async () => withSdkFixture(async () => {
@@ -264,7 +284,7 @@ it("SDK GJC identity overrides stale Codex session metadata", async () => withSd
   expect(metadata.agent_session?.agent).toBe("codex");
   writeRegistry([sdkRow(pid, home, "stale-codex-a")], { "stale-codex-a": a });
 
-  await expectConversation(id, "SDK GJC answer");
+  await expectTranscriptEventually(id, a, "SDK GJC answer");
 }));
 
 async function expectSdkFailure(scenario: string): Promise<void> {
