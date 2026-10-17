@@ -2,8 +2,9 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import {
-  gjcSdkCurrentSessionWithRunner,
+  gjcSdkCurrentSessionWithRunner as sdkCurrentSessionWithRunner,
   gjcSdkTranscriptWithRunner as sdkTranscriptWithRunner,
   type GjcSdkCommandOptions,
   type GjcSdkCommandRunner,
@@ -25,8 +26,20 @@ function gjcSdkTranscriptWithRunner(
   directory: string,
   runner: GjcSdkCommandRunner,
   rootResolver: GjcSdkWorktreeRootResolver = testWorktreeRootResolver,
+  cacheClock?: () => number,
 ) {
-  return sdkTranscriptWithRunner(pids, workingDirectory, directory, runner, rootResolver);
+  return sdkTranscriptWithRunner(pids, workingDirectory, directory, runner, rootResolver, cacheClock);
+}
+
+function gjcSdkCurrentSessionWithRunner(
+  pids: readonly number[],
+  workingDirectory: string,
+  directory: string,
+  runner: GjcSdkCommandRunner,
+  rootResolver: GjcSdkWorktreeRootResolver = testWorktreeRootResolver,
+  cacheClock?: () => number,
+) {
+  return sdkCurrentSessionWithRunner(pids, workingDirectory, directory, runner, rootResolver, cacheClock);
 }
 
 function session(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -282,11 +295,18 @@ describe("GJC SDK transcript identity binding", () => {
 
   it("distinguishes two same-cwd panes by each pane's supplied GJC pid", async () => {
     const rows = [session(), session({ sessionId: "session-2", pid: 322 })];
-    const { runner } = fakeRunner((args, call) => {
-      if (call % 2 === 0) return page(rows);
-      const input = JSON.parse(args[args.indexOf("--json-input") + 1]!);
-      const row = rows.find((candidate) => candidate.sessionId === input.resolveSessionId)!;
-      return saved(row, row.sessionId as string, join(cwd, `${row.sessionId}.jsonl`));
+    const { runner } = fakeRunner((args) => {
+      const inputIndex = args.indexOf("--json-input");
+      const rawInput = args[inputIndex + 1];
+      if (rawInput === undefined) throw new Error("Missing SDK query input");
+      const input: unknown = JSON.parse(rawInput);
+      if (typeof input !== "object" || input === null || Array.isArray(input)) throw new Error("Invalid SDK query input");
+      if (!("resolveSessionId" in input)) return page(rows);
+      const sessionId = input.resolveSessionId;
+      if (typeof sessionId !== "string") throw new Error("Invalid exact session id");
+      const row = rows.find((candidate) => candidate.sessionId === sessionId);
+      if (row === undefined) throw new Error("Unknown exact session id");
+      return saved(row, sessionId, join(cwd, `${sessionId}.jsonl`));
     });
 
     const first = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner);
@@ -309,15 +329,18 @@ describe("GJC SDK transcript identity binding", () => {
     expect(conflictingCwd.calls).toHaveLength(1);
   });
 
-  it("observes a /new session on the next call without retaining a resolved path", async () => {
+  it("observes a /new session after the raw listing cache expires", async () => {
+    let now = 0;
+    const cacheClock = () => now;
     const { calls, runner } = fakeRunner((_args, call) => {
       const turn = Math.floor(call / 2);
       const row = session({ sessionId: `session-${turn + 1}` });
       return call % 2 === 0 ? page([row]) : saved(row, `session-${turn + 1}`, join(cwd, `session-${turn + 1}.jsonl`));
     });
 
-    const first = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner);
-    const second = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner);
+    const first = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock);
+    now = 2_000;
+    const second = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock);
     expect(first?.sessionId).toBe("session-1");
     expect(second).toEqual({
       sessionId: "session-2",
@@ -438,5 +461,177 @@ describe("GJC SDK transcript identity binding", () => {
     expect(captured?.options.timeout).toBeGreaterThan(0);
     expect(captured?.options.timeout).toBeLessThanOrEqual(2_000);
     expect(captured?.options.killSignal).toBe("SIGKILL");
+  });
+});
+
+describe("GJC SDK session.list cache", () => {
+  it("coalesces concurrent callers for the same raw query", async () => {
+    let resolveFirstStarted: () => void = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      resolveFirstStarted = resolve;
+    });
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let resolveSecondRoot: () => void = () => {};
+    const secondRootStarted = new Promise<void>((resolve) => {
+      resolveSecondRoot = resolve;
+    });
+    let rootLookups = 0;
+    const rootResolver: GjcSdkWorktreeRootResolver = async () => {
+      rootLookups += 1;
+      if (rootLookups === 2) resolveSecondRoot();
+      return cwd;
+    };
+    const calls: Call[] = [];
+    const runner: GjcSdkCommandRunner = async (command, args, options) => {
+      const call = calls.length;
+      calls.push({ command, args: [...args], options });
+      if (call === 0) {
+        resolveFirstStarted();
+        await firstGate;
+      }
+      return call % 2 === 0 ? page([session()]) : saved();
+    };
+
+    const first = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, rootResolver);
+    await firstStarted;
+    const second = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, rootResolver);
+    await secondRootStarted;
+    await nextTurn();
+    releaseFirst();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { sessionId: "session-1", pid: 321, path: savedPath, hostIncarnation: "linux:12345", endpointGeneration: 4 },
+      { sessionId: "session-1", pid: 321, path: savedPath, hostIncarnation: "linux:12345", endpointGeneration: 4 },
+    ]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("hits the TTL cache and starts new listings at expiry", async () => {
+    let now = 0;
+    const cacheClock = () => now;
+    const { calls, runner } = fakeRunner((_args, call) => call % 2 === 0 ? page([session()]) : saved());
+
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock))
+      .resolves.toMatchObject({ sessionId: "session-1" });
+    now = 1_999;
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock))
+      .resolves.toMatchObject({ sessionId: "session-1" });
+    expect(calls).toHaveLength(2);
+
+    now = 2_000;
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock))
+      .resolves.toMatchObject({ sessionId: "session-1" });
+    expect(calls).toHaveLength(4);
+  });
+
+  it("retries failed and malformed listings without caching them", async () => {
+    for (const firstResult of ["malformed", "failed"] as const) {
+      const fixture = fakeRunner((_args, call) => {
+        if (call === 0 && firstResult === "malformed") return "not json";
+        if (call === 0) throw new Error("fixture transport failure");
+        return page([session()]);
+      });
+
+      await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toBeNull();
+      await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toEqual({
+        sessionId: "session-1",
+        pid: 321,
+        hostIncarnation: "linux:12345",
+        endpointGeneration: 4,
+      });
+      expect(fixture.calls).toHaveLength(3);
+    }
+  });
+
+  it("keeps identity rejection when raw discovery and exact rows are cached", async () => {
+    const changedIdentity = session({ endpointGeneration: 5 });
+    const fixture = fakeRunner([page([session()]), saved(changedIdentity)]);
+
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toBeNull();
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toBeNull();
+    expect(fixture.calls).toHaveLength(2);
+  });
+
+  it("separates listings by agentDir", async () => {
+    const secondAgentDir = join(cwd, "second-agent");
+    const fixture = fakeRunner((_args, _call) => page([session()]));
+
+    await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toMatchObject({ sessionId: "session-1" });
+    await expect(gjcSdkCurrentSessionWithRunner([321], cwd, secondAgentDir, fixture.runner)).resolves.toMatchObject({ sessionId: "session-1" });
+    expect(fixture.calls).toHaveLength(4);
+    expect(fixture.calls[0]?.args).toContain(agentDir);
+    expect(fixture.calls[2]?.args).toContain(secondAgentDir);
+  });
+
+  it("isolates fixture caches by command runner", async () => {
+    const firstRunner = fakeRunner((_args, _call) => page([session()]));
+    const secondRunner = fakeRunner((_args, _call) => page([session({ sessionId: "session-2" })]));
+
+    await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, firstRunner.runner)).resolves.toMatchObject({ sessionId: "session-1" });
+    await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, secondRunner.runner)).resolves.toMatchObject({ sessionId: "session-2" });
+    expect(firstRunner.calls).toHaveLength(2);
+    expect(secondRunner.calls).toHaveLength(2);
+  });
+
+  it("serializes different raw queries within one agentDir", async () => {
+    const nestedCwd = join(cwd, "nested-query");
+    mkdirSync(nestedCwd, { recursive: true });
+    const nestedSession = session({
+      sessionId: "session-2",
+      pid: 322,
+      locator: { ...locator(), cwd: nestedCwd },
+    });
+    let resolveFirstStarted: () => void = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      resolveFirstStarted = resolve;
+    });
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let resolveSecondRoot: () => void = () => {};
+    const secondRootStarted = new Promise<void>((resolve) => {
+      resolveSecondRoot = resolve;
+    });
+    let rootLookups = 0;
+    const rootResolver: GjcSdkWorktreeRootResolver = async () => {
+      rootLookups += 1;
+      if (rootLookups === 2) resolveSecondRoot();
+      return cwd;
+    };
+    const calls: Call[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const runner: GjcSdkCommandRunner = async (command, args, options) => {
+      const call = calls.length;
+      calls.push({ command, args: [...args], options });
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (call === 0) {
+        resolveFirstStarted();
+        await firstGate;
+      }
+      active -= 1;
+      return page([session(), nestedSession]);
+    };
+
+    const first = gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, runner, rootResolver);
+    await firstStarted;
+    const second = gjcSdkCurrentSessionWithRunner([322], nestedCwd, agentDir, runner, rootResolver);
+    await secondRootStarted;
+    await nextTurn();
+    const callsWhileFirstIsActive = calls.length;
+    releaseFirst();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { sessionId: "session-1", pid: 321, hostIncarnation: "linux:12345", endpointGeneration: 4 },
+      { sessionId: "session-2", pid: 322, hostIncarnation: "linux:12345", endpointGeneration: 4 },
+    ]);
+    expect(callsWhileFirstIsActive).toBe(1);
+    expect(calls).toHaveLength(4);
+    expect(maxActive).toBe(1);
   });
 });
