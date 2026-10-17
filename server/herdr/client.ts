@@ -204,7 +204,7 @@ export async function ping(socketPath?: string): Promise<HerdrIdentity> {
 export async function sessionSnapshot(socketPath?: string, timeoutMs?: number): Promise<SessionSnapshot> {
   const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
   const result = await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {}, socketPath, timeoutMs);
-  return correctOmoBlockedSnapshot(labelManagedPanes(result.snapshot), async (paneId) => {
+  return correctOmoBlockedSnapshot(await labelManagedPanes(result.snapshot), async (paneId) => {
     const remaining = deadline === undefined ? undefined : deadline - Date.now();
     if (remaining !== undefined && remaining <= 0) return null;
     return (await paneRead({ paneId, source: "visible", format: "text", timeoutMs: remaining }, socketPath)).text;

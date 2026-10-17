@@ -89,11 +89,14 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   trimmed (automation browsers keep upstream's menu). Accepted upstream removal (user's choice,
   2026-10-16): Move pane to… with its `/api/pane/move` (#1101). (v0.4.1002)
 - Desktop shell (`desktop/`), identity overlay above.
-- Managed sessions (v0.4.1102): optional Herdr Manager schema-2 records take precedence
+- Managed sessions (v0.4.1103): optional Herdr Manager exact records take precedence
   over provider-child/process guesses for chat and the GJC/OMO status trackers. Both
   sidebars and the composer distinguish identified, pending and blocked identity;
-  a verified identity alone never means the engine is ready. Legacy schema-1 records
-  are reported as `blocked_record_schema`, not migrated or silently resumed.
+  a verified identity alone never means the engine is ready. GJC chat requires the
+  record's exact private file plus the live SDK session ID and matching process birth,
+  boot and cwd. The recovery schema and normal saved-store index are not chat gates.
+  Records are not migrated, recovery readiness is not promoted, and native sessions
+  are not restarted to connect an already running conversation.
 - Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
   the top-panel part of `usage-regression.ts` (it reopens the phone drawer: a closed one is hidden
   since #683), `alert-sound-regression.ts` waiting for the toast.

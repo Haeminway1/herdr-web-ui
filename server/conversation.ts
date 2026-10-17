@@ -38,7 +38,7 @@ import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync } f
 import nodePath, { type PlatformPath } from "node:path";
 
 import type { ConversationMetadata, ConversationPart, ConversationTurn, HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
-import { resolveManagedSession } from "./managed-sessions.ts";
+import { resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
 import { herdrRpc, paneRead, sessionSnapshot } from "./herdr/client.ts";
 import { codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, codexTranscriptImage } from "./codex-images.ts";
@@ -1263,8 +1263,8 @@ export type NativeTranscript =
  * label: omo's own store is read only when omo is really running
  * in that pane, never on a matching cwd alone.
  */
-export async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: string, panes?: HerdrPane[], opencodeDb?: string, hermesHome?: string, grokHome?: string): Promise<ResolvedTranscript> {
-  const managed = resolveManagedSession(pane);
+export async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: string, panes?: HerdrPane[], opencodeDb?: string, hermesHome?: string, grokHome?: string, managedDeps?: ManagedSessionDeps): Promise<ResolvedTranscript> {
+  const managed = await resolveManagedSession(pane, undefined, managedDeps);
   if (managed) {
     const identity = managed.identity;
     if (identity.state !== "ready" || !managed.sessionFile || !identity.harness) throw new ConversationUnavailable(identity.reason ?? "identity_pending", identity);
@@ -1533,8 +1533,8 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
 }
 
 /** Managed generations scope cursors and caches, without changing native agent readers. */
-export async function conversationForPane(pane: HerdrPane, codexHome?: string, page: ConversationPage = {}): Promise<RecognizedConversation> {
-  const resolution = resolveManagedSession(pane);
+export async function conversationForPane(pane: HerdrPane, codexHome?: string, page: ConversationPage = {}, managedDeps?: ManagedSessionDeps): Promise<RecognizedConversation> {
+  const resolution = await resolveManagedSession(pane, undefined, managedDeps);
   if (!resolution) throw new ConversationUnavailable("no_recognized_transcript");
   const managed = resolution.identity;
   const path = resolution.sessionFile;
@@ -1554,7 +1554,7 @@ export async function conversationForPane(pane: HerdrPane, codexHome?: string, p
     if (error instanceof ConversationUnavailable) throw new ConversationUnavailable("blocked_transcript_unavailable", { ...managed, state: "blocked", reason: "blocked_transcript_unavailable" });
     throw error;
   }
-  const current = resolveManagedSession(pane);
+  const current = await resolveManagedSession(pane, undefined, managedDeps);
   if (!current || current.sessionFile !== path || JSON.stringify(current.identity) !== JSON.stringify(managed)) throw new ConversationUnavailable("blocked_managed_identity_changed", { ...managed, state: "blocked", reason: "blocked_managed_identity_changed" });
   return { ...result, managed_session: managed, cursor: result.cursor === null ? null : prefix + result.cursor, history_id: prefix + result.history_id, version: answerVersion(prefix, result.version) };
 }

@@ -1,6 +1,6 @@
 /** Actual HTTP + Chromium, synthetic transcripts only. --live observes the pane list read-only. */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright-core";
@@ -22,15 +22,33 @@ writeFileSync(file, [
   { type: "message", message: { role: "user", content: [{ type: "text", text: "Synthetic identity regression" }] } },
   { type: "message", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Exact managed GJC fixture connected." }] } },
 ].map(row => JSON.stringify(row)).join("\n") + "\n", { mode: 0o600 });
-const info = statSync(file);
+const oldPath = process.env.PATH;
+const engine = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { cwd: root, env: { HOME: root }, stdout: "ignore", stderr: "ignore" });
+const engineStat = readFileSync(`/proc/${engine.pid}/stat`, "utf8");
+const child = { pid: engine.pid, starttime: engineStat.slice(engineStat.lastIndexOf(") ") + 2).trim().split(/\s+/)[19]!, boot: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), cwd: root };
 const pane: HerdrPane = { pane_id: "wManagedFixture:p1", tab_id: "wManagedFixture:t1", workspace_id: "wManagedFixture", terminal_id: "term_managed_fixture", cwd: root, agent: "codex", agent_status: "unknown", focused: true, revision: 1, label: "Managed GJC fixture", tokens: { hm_managed_session: nonce, hm_managed_generation: "1", hm_execution: "gjc fixture" } };
-const record = { schema: 2, nonce, harness: "gjc", launcher_harness: "gjc", generation: 1, cwd: root, pane_id: pane.pane_id, workspace_id: pane.workspace_id, terminal_id: pane.terminal_id, desired_state: "running", state: "ready", error: "", session_id: sessionId, session_file: file, session_dir: directory, file_identity: { dev: info.dev, ino: info.ino } };
+const record = { schema: 1, nonce, harness: "gjc", launcher_harness: "gjc", generation: 1, cwd: root, pane_id: pane.pane_id, workspace_id: pane.workspace_id, terminal_id: pane.terminal_id, desired_state: "running", state: "ready", error: "", session_id: sessionId, session_file: file, session_dir: directory, child };
 const save = () => writeFileSync(join(namespace, `${nonce}.json`), JSON.stringify(record), { mode: 0o600 });
 save();
+// Same owned SDK command convention as gjc-status-browser-regression.ts. No saved-store index.
+const sdkBin = join(root, "bin"); mkdirSync(sdkBin);
+const sdkCommand = join(sdkBin, "gjc");
+writeFileSync(sdkCommand, `#!${process.execPath}
+console.log(JSON.stringify({ type: "broker_response", ok: true, result: {
+  indexSeq: 1, continuationCursor: null, savedSession: null, sessions: [{
+    sessionId: ${JSON.stringify(sessionId)}, pid: ${child.pid}, hostIncarnation: ${JSON.stringify(`linux:${child.starttime}`)},
+    endpointGeneration: 1, identityProvenance: "composite", live: true, terminal: false, terminalUncertain: false, ambiguous: false,
+    locator: { cwd: ${JSON.stringify(root)}, worktreeRoot: null, stateRoot: ${JSON.stringify(root)} }
+  }]
+} }));
+`);
+chmodSync(sdkCommand, 0o700);
+process.env.PATH = `${sdkBin}:${oldPath ?? ""}`;
 function snapshotFor(p: HerdrPane): SessionSnapshot {
   return { protocol: 22, version: "fixture", panes: [p], agents: [{ ...p, name: "provider-child" }], workspaces: [{ workspace_id: p.workspace_id, active_tab_id: p.tab_id, label: "Managed session verification", number: 1, pane_count: 1, tab_count: 1, agent_status: "unknown", focused: true }], tabs: [{ tab_id: p.tab_id, workspace_id: p.workspace_id, number: 1, label: "Managed session verification", pane_count: 1, focused: true, agent_status: "unknown" }], layouts: [], focused_pane_id: p.pane_id };
 }
 let rawSnapshot = snapshotFor(pane);
+let liveView: SessionSnapshot | null = null;
 const oldSocket = process.env.HERDR_SOCKET;
 const oldNamespace = process.env.HERDR_MANAGED_NAMESPACE;
 const liveNamespace = managedNamespace();
@@ -75,8 +93,8 @@ try {
   const forbidden: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   // No attach, resize, input, or provider call can reach even the fixture backend.
-  await page.routeWebSocket(/\/ws(?:\?|$)/, socket => {
-    socket.send(JSON.stringify({ type: "snapshot", snapshot: labelManagedPanes(rawSnapshot), features: [] }));
+  await page.routeWebSocket(/\/ws(?:\?|$)/, async socket => {
+    socket.send(JSON.stringify({ type: "snapshot", snapshot: liveView ?? await labelManagedPanes(rawSnapshot), features: [] }));
     socket.onMessage(raw => {
       const message = JSON.parse(String(raw));
       if (message.type === "role") socket.send(JSON.stringify({ type: "role-ack", mode: message.mode }));
@@ -86,6 +104,12 @@ try {
   });
   await page.route("**/api/**", async route => {
     if (route.request().method() !== "GET") { forbidden.push(route.request().method()); await route.abort(); return; }
+    if (liveView && new URL(route.request().url()).pathname === "/api/session") { await route.fulfill({ json: { snapshot: liveView } }); return; }
+    if (liveView && new URL(route.request().url()).pathname === "/api/machines") {
+      const response = await route.fetch(); const result = await response.json();
+      for (const machine of result.machines) if (machine.id === "local") machine.snapshot = liveView;
+      await route.fulfill({ json: result }); return;
+    }
     if (route.request().url().includes("/pane/prompt?")) { await route.fulfill({ json: { prompt: null } }); return; }
     if (/\/pane\/(read|transcript)\?/.test(route.request().url())) forbidden.push("scrollback fallback");
     await route.continue();
@@ -103,7 +127,7 @@ try {
   const ready = await (await fetch(`${origin}/api/pane/conversation?pane_id=${pane.pane_id}`)).json();
   assert.equal(ready.source, "gjc-transcript"); assert.equal(ready.managed_session.session_id, sessionId);
   if (evidence) await page.screenshot({ path: join(evidence, "managed-gjc-ready.png") });
-  console.log("PASS schema-2 managed GJC: exact HTTP transcript and Chromium badge, despite raw Codex label");
+  console.log("PASS production-shaped managed GJC: live SDK identity + exact private HTTP transcript; no saved-store index or recovery-record migration");
 
   record.state = "identity_pending"; save();
   await page.locator(".chat-transcript [data-managed-state='identity_pending']").waitFor();
@@ -140,12 +164,13 @@ try {
     const target = live.panes.find(p => p.cwd === project && typeof p.tokens?.hm_managed_session === "string");
     assert(target, "live pane list has no managed pane for this project");
     const safePane: HerdrPane = { ...target, label: "Managed GJC — read-only observation", terminal_title: null, terminal_title_stripped: null, title: null, tokens: { hm_managed_session: target.tokens!.hm_managed_session, hm_managed_generation: target.tokens!.hm_managed_generation } };
-    rawSnapshot = snapshotFor(safePane);
-    process.env.HERDR_MANAGED_NAMESPACE = liveNamespace;
-    const projected = labelManagedPanes(rawSnapshot, liveNamespace).panes[0]!;
+    if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+    liveView = await labelManagedPanes(snapshotFor(safePane), liveNamespace);
+    process.env.PATH = `${sdkBin}:${oldPath ?? ""}`;
+    const projected = liveView.panes[0]!;
     assert.equal(projected.agent, "gjc");
     assert(projected.managed_session);
-    // Do not read live messages even when a future schema-2 pane is ready.
+    // The fixture backend retains its synthetic pane. Only verified metadata reaches the browser.
     await page.route("**/api/pane/conversation?**", route => route.fulfill({ json: {
       source: projected.managed_session!.state === "ready" ? "gjc-transcript" : "scrollback",
       turns: [], managed_session: projected.managed_session,
@@ -162,6 +187,8 @@ try {
 } finally {
   await browser?.close();
   server.stop(); listener.stop(true);
+  engine.kill(); await engine.exited;
+  if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
   if (oldSocket === undefined) delete process.env.HERDR_SOCKET; else process.env.HERDR_SOCKET = oldSocket;
   if (oldNamespace === undefined) delete process.env.HERDR_MANAGED_NAMESPACE; else process.env.HERDR_MANAGED_NAMESPACE = oldNamespace;
   rmSync(root, { recursive: true, force: true });

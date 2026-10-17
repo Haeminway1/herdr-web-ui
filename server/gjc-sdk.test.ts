@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  gjcSdkCurrentSessionWithRunner,
   gjcSdkTranscriptWithRunner as sdkTranscriptWithRunner,
   type GjcSdkCommandOptions,
   type GjcSdkCommandRunner,
@@ -88,6 +89,23 @@ const commandArgs = [
   "--agent-dir", agentDir,
   "--attach-only", "--json",
 ];
+
+describe("GJC live identity independent of saved-store indexing", () => {
+  it("proves the current private session even when the saved-store index has no path", async () => {
+    const fixture = fakeRunner([page([session()]), page([session()], { savedSession: null })]);
+    expect(await gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver))
+      .toEqual({ sessionId: "session-1", pid: 321, hostIncarnation: "linux:12345", endpointGeneration: 4 });
+    const transcript = fakeRunner([page([session()]), page([session()], { savedSession: null })]);
+    expect(await gjcSdkTranscriptWithRunner([321], cwd, agentDir, transcript.runner)).toBeNull();
+  });
+
+  it("does not relax ambiguous, uncertain or changed live authority for private sessions", async () => {
+    for (const invalid of [{ ambiguous: true }, { terminalUncertain: true }, { live: false }, { endpointGeneration: 5 }, { hostIncarnation: "linux:other" }]) {
+      const fixture = fakeRunner([page([session()]), page([session(invalid)], { savedSession: null })]);
+      expect(await gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver)).toBeNull();
+    }
+  });
+});
 
 describe("GJC SDK transcript identity binding", () => {
   it("ignores only the proven generation-zero direct-session GC fence after /new", async () => {

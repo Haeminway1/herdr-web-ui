@@ -325,18 +325,28 @@ in the historical table above.
 ## Managed session identity
 
 Panes carrying `hm_managed_session` and `hm_managed_generation` use Herdr Manager's
-schema-2 record before any foreground-process or terminal breadcrumb heuristic.
+exact record before any foreground-process or terminal breadcrumb heuristic.
 The namespace is `HERDR_MANAGED_NAMESPACE`, defaulting to
 `~/dev/agents/herdr_manager/state/managed-sessions`. The bridge reads this namespace
 on the machine that owns the pane; it never scans another machine's records.
 
 The resolver checks nonce, generation, launcher harness, canonical project directory,
 workspace, pane and terminal, then validates the exact recorded session file's native
-ID, cwd, owner and pinned device/inode. GJC/OMO files must stay inside that launch's
+ID, cwd, owner and any recorded device/inode pin. GJC/OMO files must stay inside that launch's
 private session directory. Native Codex/Claude files must stay inside their recorded
 native store. No newest-file selection, screen matching, child-provider substitution,
 record migration or recovery is attempted for a managed pane. Invalid records fail
 closed rather than falling through to the direct-session resolvers.
+
+GJC additionally requires the record's child PID, Linux process birth, boot ID and
+current cwd to match the running process. The public SDK must independently confirm
+that process's exact current session ID and incarnation before and after a transcript
+read. Private managed files are not necessarily in the SDK's normal saved-store index;
+the live SDK identity and the exact recorded private file are checked separately.
+An unavailable SDK means pending; a changed native session is blocked, never guessed.
+Heartbeat-only record writes do not invalidate identity, but binding/state changes do.
+The record's schema version governs Manager recovery, not permission to read a
+verified live GJC conversation. Chat never upgrades a record or declares recovery ready.
 
 The browser receives the harness, generation, exact session ID and identity state,
 not the record's environment, command line or private transcript filename. `ready`
@@ -357,17 +367,17 @@ UI_EVIDENCE_DIR=docs/screenshots/managed-sessions bun scripts/managed-session-re
 ```
 
 The browser check uses a temporary Unix-socket fixture and real Web UI HTTP handlers
-for schema-2 chat. Chromium verifies a managed GJC despite a raw Codex child label,
+for the production record shape, with an owned SDK fixture and no saved-store index.
+Chromium verifies a managed GJC despite a raw Codex child label,
 then ready → pending → blocked → ready transitions without stale chat or scrollback
 fallback. All messages in the fixture screenshots are synthetic. WebSockets are
 intercepted to prevent terminal attachment or input. The optional live check projects
 the current pane-list metadata and masks titles; it is not a live model round trip.
 
-On 2026-10-17, the read-only observation found `w4Y:p1` with raw agent null and an
-existing schema-1 record. The changed resolver displays GJC with
-`blocked_record_schema`, not Codex, unknown, or a guessed conversation. This old
-record was not upgraded or restarted. A real schema-2 engine round trip remains
-unverified; the schema-2 exact-file path is covered by disposable fixtures.
+The initial S7/v0.4.1102 observation found `w4Y:p1` with raw agent null and an
+existing schema-1 record. That implementation showed GJC but rejected chat with
+`blocked_record_schema`: it conflated future recovery requirements with live chat.
+This was an incomplete fix, not a successful conversation connection.
 Screenshots are under `docs/screenshots/managed-sessions/`.
 Verification on that implementation: 593 unit tests passed across 72 files, including
 the managed resolver and existing native GJC cases. Application and browser-script
@@ -391,8 +401,19 @@ run hit Portal's process-start argv race; a complete rerun passed without code c
 The full UI gate is **not green**: split-view navigation, connection or drag waits
 timed out on candidate runs and on a clean, unchanged `3e301e5` production baseline.
 No test was disabled and no timeout was increased. This inherited full-suite failure
-is distinct from the passing scoped managed-session browser check. A real schema-2
-live model round trip remains unverified; legacy live records stay blocked.
+is distinct from the passing scoped managed-session browser check.
+
+v0.4.1103 corrects the live-chat rejection. The production GJC's SDK confirmed the
+same child PID, birth incarnation and exact recorded session ID even though its
+private file was absent from the normal saved-store index. The read-only live
+projection now reports `ready`, and the actual GJC transcript reader returned the
+matching conversation with turns present. No messages were printed or sent, no
+terminal was attached, and no native session or recovery record was changed.
+Verification: 4,051 unit tests passed (8 existing skips), 509 integration tests
+passed (15 existing skips), strict application/tool type checks, production build,
+and Chromium production-shaped private chat, state transitions and classic sidebar.
+The managed browser script is explicitly included in `tsconfig.tools.json`.
+These are existing-transcript checks, not a newly submitted model round trip.
 
 ## README media
 

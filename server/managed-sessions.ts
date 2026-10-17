@@ -1,8 +1,25 @@
-/** Read-only projection of Herdr Manager's schema-2 ownership records. No discovery or writes. */
-import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+/** Read-only chat identity. Recovery eligibility is owned by Manager, not the transcript reader. */
+import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import type { HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
+import { gjcSdkCurrentSession } from "./gjc-sdk.ts";
+
+interface ProcessIdentity { pid: number; starttime: string; boot: string; cwd: string }
+export interface ManagedSessionDeps {
+  gjcSession?: typeof gjcSdkCurrentSession;
+  processIdentity?: (pid: number) => ProcessIdentity | null;
+}
+
+function processIdentity(pid: number): ProcessIdentity | null {
+  try {
+    if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid <= 0 || !owned(statSync(`/proc/${pid}`))) return null;
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(") ") + 2).trim().split(/\s+/);
+    if (fields[0] === "Z" || !/^[0-9]+$/.test(fields[19] ?? "")) return null;
+    return { pid, starttime: fields[19]!, boot: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), cwd: realpathSync(readlinkSync(`/proc/${pid}/cwd`)) };
+  } catch { return null; }
+}
 
 type Harness = NonNullable<ManagedSessionIdentity["harness"]>;
 export interface ManagedSessionResolution {
@@ -31,6 +48,21 @@ function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+function recordAt(path: string): { record: Record<string, unknown> | null; unsafe: boolean } {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = fstatSync(fd);
+    if (!info.isFile() || !owned(info) || info.size > 65536) return { record: null, unsafe: true };
+    const buffer = Buffer.alloc(65537);
+    const count = readSync(fd, buffer, 0, buffer.length, 0);
+    return count > 65536 ? { record: null, unsafe: true } : { record: object(JSON.parse(buffer.subarray(0, count).toString("utf8"))), unsafe: false };
+  } finally { closeSync(fd); }
+}
+
+function bindingKey(record: Record<string, unknown> | null): string {
+  return JSON.stringify(["nonce", "generation", "harness", "launcher_harness", "cwd", "pane_id", "workspace_id", "terminal_id", "desired_state", "state", "error", "session_id", "session_file", "session_dir", "child", "file_identity"].map(key => record?.[key]));
+}
+
 /** Read at most 16 KiB per identity row, never transcript messages beyond Claude's header prefix. */
 function header(path: string, harness: Harness): { id: unknown; cwd: unknown } | null {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -57,7 +89,7 @@ function header(path: string, harness: Harness): { id: unknown; cwd: unknown } |
 }
 
 /** A declared managed pane is never allowed to fall through to process/cwd/recency guesses. */
-export function resolveManagedSession(pane: HerdrPane, namespace = managedNamespace()): ManagedSessionResolution | null {
+export async function resolveManagedSession(pane: HerdrPane, namespace = managedNamespace(), deps: ManagedSessionDeps = {}): Promise<ManagedSessionResolution | null> {
   const tokens = pane.tokens ?? {};
   if (!("hm_managed_session" in tokens) && !("hm_managed_generation" in tokens)) return null;
   const identity: ManagedSessionIdentity = { id: null, harness: null, generation: null, state: "blocked", reason: null, session_id: null };
@@ -73,23 +105,14 @@ export function resolveManagedSession(pane: HerdrPane, namespace = managedNamesp
     const rootInfo = lstatSync(namespace);
     if (!rootInfo.isDirectory() || !owned(rootInfo) || realpathSync(namespace) !== namespace) return blocked("blocked_record_root");
     const path = join(namespace, `${nonce}.json`);
-    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    let record: Record<string, unknown> | null;
-    try {
-      const info = fstatSync(fd);
-      if (!info.isFile() || !owned(info) || info.size > 65536) return blocked("blocked_record_owner");
-      const buffer = Buffer.alloc(65537);
-      const count = readSync(fd, buffer, 0, buffer.length, 0);
-      if (count > 65536) return blocked("blocked_record_owner");
-      record = object(JSON.parse(buffer.subarray(0, count).toString("utf8")));
-    } finally { closeSync(fd); }
+    const { record, unsafe } = recordAt(path);
+    if (unsafe) return blocked("blocked_record_owner");
     if (!record || record.nonce !== nonce) return blocked("blocked_record_identity");
     if (record.generation !== identity.generation) return blocked("blocked_managed_generation");
     if (typeof record.harness !== "string" || !HARNESSES.has(record.harness) || record.launcher_harness !== record.harness) return blocked("blocked_record_harness");
     if (!pane.cwd || record.cwd !== realpathSync(pane.cwd) || record.pane_id !== pane.pane_id || record.workspace_id !== pane.workspace_id || !pane.terminal_id || record.terminal_id !== pane.terminal_id) return blocked("blocked_pane_identity");
-    // A bound but obsolete record can explain the badge, never authorize a transcript.
+    // Schema is Manager's recovery protocol, not authority to read a live GJC session.
     identity.harness = record.harness as Harness;
-    if (record.schema !== 2) return blocked("blocked_record_schema");
     if (record.desired_state !== "running") return blocked("blocked_session_stopped");
     if (record.state === "blocked") return blocked(typeof record.error === "string" && REASON.test(record.error) ? record.error : "blocked_record_state");
     if (["intent", "registered", "starting", "identity_pending"].includes(String(record.state))) {
@@ -112,12 +135,27 @@ export function resolveManagedSession(pane: HerdrPane, namespace = managedNamesp
     if (!storeInfo.isDirectory() || !owned(storeInfo) || realpathSync(store) !== store || realpathSync(sessionFile) !== sessionFile || !inside(store, sessionFile) || !sessionFile.endsWith(".jsonl")) return blocked("blocked_session_root");
     const info = lstatSync(sessionFile);
     const pinned = object(record.file_identity);
-    if (!info.isFile() || !owned(info) || !pinned || pinned.dev !== info.dev || pinned.ino !== info.ino) return blocked("blocked_session_replaced");
+    if (!info.isFile() || !owned(info) || (pinned ? pinned.dev !== info.dev || pinned.ino !== info.ino : identity.harness !== "gjc")) return blocked("blocked_session_replaced");
     const meta = header(sessionFile, identity.harness);
     if (!meta || meta.id !== record.session_id || typeof meta.cwd !== "string" || !isAbsolute(meta.cwd) || realpathSync(meta.cwd) !== record.cwd) return blocked("blocked_session_header");
+    if (identity.harness === "gjc") {
+      const child = object(record.child);
+      const readIdentity = deps.processIdentity ?? processIdentity;
+      const before = child && typeof child.pid === "number" ? readIdentity(child.pid) : null;
+      if (!before || before.starttime !== child!.starttime || before.boot !== child!.boot || before.cwd !== record.cwd) return blocked("blocked_runtime_identity");
+      const live = await (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], record.cwd as string, join(homedir(), ".gjc", "agent"));
+      const after = readIdentity(before.pid);
+      if (!after || after.pid !== before.pid || after.starttime !== before.starttime || after.boot !== before.boot || after.cwd !== before.cwd) return blocked("blocked_runtime_identity");
+      const recordAfter = recordAt(path);
+      if (recordAfter.unsafe || bindingKey(recordAfter.record) !== bindingKey(record)) return pending("identity_pending");
+      if (!live) return pending("identity_pending");
+      if (live.pid !== before.pid || live.hostIncarnation !== `linux:${before.starttime}` || live.sessionId !== record.session_id) return blocked("blocked_gjc_session_mismatch");
+    }
     // Detect replacement during header validation as well as between polls.
-    const after = statSync(sessionFile);
-    if (after.dev !== info.dev || after.ino !== info.ino) return blocked("blocked_session_replaced");
+    const after = lstatSync(sessionFile);
+    if (!after.isFile() || !owned(after) || realpathSync(sessionFile) !== sessionFile || after.dev !== info.dev || after.ino !== info.ino) return blocked("blocked_session_replaced");
+    const currentMeta = header(sessionFile, identity.harness);
+    if (!currentMeta || currentMeta.id !== record.session_id || typeof currentMeta.cwd !== "string" || !isAbsolute(currentMeta.cwd) || realpathSync(currentMeta.cwd) !== record.cwd) return blocked("blocked_session_header");
     identity.state = "ready";
     identity.session_id = record.session_id;
     return { identity, sessionFile };
@@ -127,15 +165,15 @@ export function resolveManagedSession(pane: HerdrPane, namespace = managedNamesp
 }
 
 /** Preserve engine status: a ready identity is not proof of idle, working or done. */
-export function labelManagedPanes(snapshot: SessionSnapshot, namespace = managedNamespace()): SessionSnapshot {
+export async function labelManagedPanes(snapshot: SessionSnapshot, namespace = managedNamespace(), deps: ManagedSessionDeps = {}): Promise<SessionSnapshot> {
   const identities = new Map<string, ManagedSessionIdentity>();
-  const panes = snapshot.panes.map(pane => {
-    const managed = resolveManagedSession(pane, namespace);
+  const panes = await Promise.all(snapshot.panes.map(async pane => {
+    const managed = await resolveManagedSession(pane, namespace, deps);
     if (!managed) return pane;
     const identity = managed.identity;
     identities.set(pane.pane_id, identity);
     return { ...pane, agent: identity.harness, agent_session: identity.state === "ready" ? { agent: identity.harness!, kind: "id", source: "herdr-manager", value: identity.session_id! } : null, managed_session: identity };
-  });
+  }));
   if (identities.size === 0) return snapshot;
   return {
     ...snapshot,

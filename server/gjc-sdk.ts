@@ -76,6 +76,15 @@ interface SessionBinding {
   stateRoot: string | null;
 }
 
+export interface GjcSdkSessionIdentity {
+  sessionId: string;
+  pid: number;
+  hostIncarnation: string;
+  endpointGeneration: number;
+}
+
+type ResolvedSession = GjcSdkSessionIdentity & { savedSession: unknown };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -266,7 +275,7 @@ async function resolveTranscript(
   agentDir: string,
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver,
-): Promise<{ sessionId: string; pid: number; path: string; hostIncarnation: string; endpointGeneration: number } | null> {
+): Promise<ResolvedSession | null> {
   try {
     if (!Array.isArray(pids) || pids.length === 0 || pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0)
       || typeof cwd !== "string" || cwd === ""
@@ -326,13 +335,11 @@ async function resolveTranscript(
       && !definitivelyRetired(row) && !directSessionFence(row, agentDir));
     if (samePidRows.length !== 1 || !sameBinding(samePidRows[0], expected, wantedPids, canonicalCwd, canonicalWorktreeRoot)) return null;
     if (!isRecord(samePidRows[0]) || samePidRows[0].sessionId !== expected.sessionId) return null;
-    if (!isRecord(exact.savedSession) || exact.savedSession.id !== expected.sessionId
-      || typeof exact.savedSession.path !== "string" || !nodePath.isAbsolute(exact.savedSession.path)) return null;
 
     return {
       sessionId: expected.sessionId,
       pid: expected.pid,
-      path: exact.savedSession.path,
+      savedSession: exact.savedSession,
       hostIncarnation: expected.hostIncarnation,
       endpointGeneration: expected.endpointGeneration,
     };
@@ -342,13 +349,37 @@ async function resolveTranscript(
   }
 }
 
+function savedTranscript(binding: ResolvedSession | null): (GjcSdkSessionIdentity & { path: string }) | null {
+  if (!binding || !isRecord(binding.savedSession) || binding.savedSession.id !== binding.sessionId
+    || typeof binding.savedSession.path !== "string" || !nodePath.isAbsolute(binding.savedSession.path)) return null;
+  const { savedSession, ...identity } = binding;
+  return { ...identity, path: savedSession.path as string };
+}
+
+function currentIdentity(binding: ResolvedSession | null): GjcSdkSessionIdentity | null {
+  if (!binding) return null;
+  return { sessionId: binding.sessionId, pid: binding.pid, hostIncarnation: binding.hostIncarnation, endpointGeneration: binding.endpointGeneration };
+}
+
+/** Live authority is independent of saved-store indexing, which excludes private session directories. */
+export function gjcSdkCurrentSession(pids: readonly number[], cwd: string, agentDir: string): Promise<GjcSdkSessionIdentity | null> {
+  return resolveTranscript(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot).then(currentIdentity);
+}
+
+export function gjcSdkCurrentSessionWithRunner(
+  pids: readonly number[], cwd: string, agentDir: string,
+  runner: GjcSdkCommandRunner, worktreeRootResolver: GjcSdkWorktreeRootResolver = gitWorktreeRoot,
+): Promise<GjcSdkSessionIdentity | null> {
+  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver).then(currentIdentity);
+}
+
 /** Resolves the current readable GJC transcript for one of the pane's known GJC processes. */
 export function gjcSdkTranscript(
   pids: readonly number[],
   cwd: string,
   agentDir: string,
 ): Promise<{ sessionId: string; pid: number; path: string; hostIncarnation: string; endpointGeneration: number } | null> {
-  return resolveTranscript(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot);
+  return resolveTranscript(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot).then(savedTranscript);
 }
 
 /** Fixture-injection entry point; production callers should use gjcSdkTranscript. */
@@ -359,5 +390,5 @@ export function gjcSdkTranscriptWithRunner(
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver = gitWorktreeRoot,
 ): Promise<{ sessionId: string; pid: number; path: string; hostIncarnation: string; endpointGeneration: number } | null> {
-  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver);
+  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver).then(savedTranscript);
 }

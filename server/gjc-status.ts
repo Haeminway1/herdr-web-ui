@@ -99,6 +99,7 @@ type ProcessInfo = { process_info?: { shell_pid?: unknown; foreground_processes?
  * two process identities. Tests give their own, so no live RPC is needed to tell the cases.
  */
 export interface GjcDiscovery {
+  managedSession?: typeof resolveManagedSession;
   processInfo?: (paneId: string) => Promise<ProcessInfo>;
   transcript?: (paneId: string, cwd: string) => Promise<string | null>;
   startedAt?: (pid: number) => number | null;
@@ -122,7 +123,7 @@ export async function gjcPanes(panes: HerdrPane[], deps: GjcDiscovery = {}): Pro
   const underShell = deps.underShell ?? ((shellPid: unknown) => gjcPidUnderShell(shellPid, deps.platform));
   const found = new Map<string, OmoPane>();
   await Promise.all(panes.filter((pane) => pane.agent === "gjc").map(async (pane) => {
-    const managed = resolveManagedSession(pane);
+    const managed = await (deps.managedSession ?? resolveManagedSession)(pane);
     if (managed) {
       if (managed.identity.state === "ready" && managed.identity.harness === "gjc") found.set(pane.pane_id, { path: managed.sessionFile, startedAt: null });
       return;
