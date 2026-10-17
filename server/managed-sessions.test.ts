@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
@@ -23,6 +23,8 @@ const deps: ManagedSessionDeps = {
 };
 const message = (role: string, text: string) => JSON.stringify({ type: "message", message: { role, content: [{ type: "text", text }] } });
 const save = () => writeFileSync(recordFile, JSON.stringify(record), { mode: 0o600 });
+const useOmo = () => { record.harness = "omo"; record.launcher_harness = "omo"; save(); };
+const pinCurrentFile = () => { const info = statSync(sessionFile); record.file_identity = { dev: info.dev, ino: info.ino }; save(); };
 const resolve = async () => (await resolveManagedSession(pane, namespace, deps))!;
 const labelManagedPanes = (snapshot: SessionSnapshot) => projectPanes(snapshot, namespace, deps);
 const resolveTranscript = (target: HerdrPane, cwd: string) => readTranscript(target, cwd, undefined, undefined, undefined, undefined, undefined, deps);
@@ -224,6 +226,106 @@ it("requires the exact ID, canonical project and pinned file identity", async ()
   record.file_identity = { dev: -1, ino: -1 }; save(); expect((await resolve()).identity.reason).toBe("blocked_session_replaced");
 });
 
+describe("pinned managed OMO transcripts", () => {
+  it("serves a group-writable pinned OMO transcript from its private nonce store", async () => {
+    useOmo(); chmodSync(sessionFile, 0o664);
+    expect(await resolve()).toMatchObject({ identity: { state: "ready", harness: "omo", session_id: sessionId }, sessionFile });
+    const answer = await conversationForPane(pane);
+    expect(answer.source).toBe("omo-transcript");
+    expect(answer.turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+  });
+
+  it("recovers from an OMO identity-pending record when its pin arrives", async () => {
+    useOmo(); delete record.file_identity; save();
+    expect(await resolve()).toMatchObject({ identity: { state: "identity_pending", reason: "identity_pending" }, sessionFile: null });
+    await expect(conversationForPane(pane)).rejects.toThrow("identity_pending");
+    pinCurrentFile();
+    const answer = await conversationForPane(pane);
+    expect(answer.source).toBe("omo-transcript");
+    expect(answer.turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+  });
+
+  it("rejects malformed OMO pins instead of treating them as absent", async () => {
+    useOmo();
+    for (const pin of [null, { dev: statSync(sessionFile).dev }, { dev: "wrong", ino: statSync(sessionFile).ino }]) {
+      record.file_identity = pin; save();
+      expect((await resolve()).identity.reason).toBe("blocked_session_replaced");
+    }
+  });
+
+  it("recovers after an incorrect group-writable OMO pin is corrected", async () => {
+    useOmo(); chmodSync(sessionFile, 0o664);
+    const info = statSync(sessionFile);
+    record.file_identity = { dev: info.dev, ino: info.ino + 1 }; save();
+    expect((await resolve()).identity.reason).toBe("blocked_session_replaced");
+    await expect(conversationForPane(pane)).rejects.toThrow("blocked_session_replaced");
+    pinCurrentFile();
+    expect((await conversationForPane(pane)).source).toBe("omo-transcript");
+  });
+
+  it("recovers after world-write is removed from a pinned OMO file", async () => {
+    useOmo(); chmodSync(sessionFile, 0o666);
+    expect((await resolve()).identity.reason).toBe("blocked_session_replaced");
+    await expect(conversationForPane(pane)).rejects.toThrow("blocked_session_replaced");
+    chmodSync(sessionFile, 0o664);
+    expect((await conversationForPane(pane)).source).toBe("omo-transcript");
+  });
+
+  it.each([0o750, 0o755])("rejects a group-accessible OMO nonce store at mode %o and recovers when private", async mode => {
+    useOmo(); chmodSync(sessionFile, 0o664); chmodSync(String(record.session_dir), mode);
+    expect((await resolve()).identity.reason).toBe("blocked_session_replaced");
+    chmodSync(String(record.session_dir), 0o700);
+    expect((await conversationForPane(pane)).source).toBe("omo-transcript");
+  });
+
+  it.each(["id", "cwd"] as const)("rejects an OMO header with a changed %s", async field => {
+    useOmo(); chmodSync(sessionFile, 0o664);
+    const header = field === "id" ? { type: "session", id: "changed-session", cwd: root } : { type: "session", id: sessionId, cwd: "/" };
+    writeFileSync(sessionFile, JSON.stringify(header) + "\n");
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+  });
+
+  it("rejects out-of-store and symlinked OMO files even when their inode is pinned", async () => {
+    useOmo(); chmodSync(sessionFile, 0o664);
+    const outside = join(root, "outside.jsonl");
+    writeFileSync(outside, JSON.stringify({ type: "session", id: sessionId, cwd: root }) + "\n", { mode: 0o664 });
+    const outsideInfo = statSync(outside);
+    record.session_file = outside; record.file_identity = { dev: outsideInfo.dev, ino: outsideInfo.ino }; save();
+    expect((await resolve()).identity.reason).toBe("blocked_session_root");
+    record.session_file = sessionFile; save(); rmSync(sessionFile); symlinkSync(outside, sessionFile);
+    expect((await resolve()).identity.reason).toBe("blocked_session_root");
+  });
+
+  it.each(["stopped", "generation"] as const)("keeps an OMO %s mismatch blocked despite a valid group-write pin", async mismatch => {
+    useOmo(); chmodSync(sessionFile, 0o664);
+    if (mismatch === "stopped") record.desired_state = "stopped";
+    else record.generation = 2;
+    save();
+    expect((await resolve()).identity.reason).toBe(mismatch === "stopped" ? "blocked_session_stopped" : "blocked_managed_generation");
+  });
+
+  it("rejects a cached OMO conversation after the pinned file is replaced", async () => {
+    useOmo(); chmodSync(sessionFile, 0o664);
+    expect((await conversationForPane(pane)).source).toBe("omo-transcript");
+    const replacement = join(root, "replacement.jsonl");
+    writeFileSync(replacement, [JSON.stringify({ type: "session", id: sessionId, cwd: root }), message("assistant", "replacement")].join("\n") + "\n", { mode: 0o664 });
+    rmSync(sessionFile); renameSync(replacement, sessionFile);
+    expect((await resolve()).identity.reason).toBe("blocked_session_replaced");
+    await expect(conversationForPane(pane)).rejects.toThrow("blocked_session_replaced");
+  });
+
+  it("rejects a cached OMO conversation after its header is rewritten in place", async () => {
+    useOmo(); chmodSync(sessionFile, 0o664);
+    expect((await conversationForPane(pane)).source).toBe("omo-transcript");
+    const before = statSync(sessionFile);
+    writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "changed-session", cwd: root }) + "\n");
+    const after = statSync(sessionFile);
+    expect(after.dev).toBe(before.dev); expect(after.ino).toBe(before.ino);
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+    await expect(conversationForPane(pane)).rejects.toThrow("blocked_session_header");
+  });
+});
+
 it("rejects out-of-store and subagent substitutions even with a matching filename", async () => {
   const outside = join(root, "outside.jsonl"); writeFileSync(outside, JSON.stringify({ type: "session", id: sessionId, cwd: root }) + "\n");
   record.session_file = outside; save(); expect((await resolve()).identity.reason).toBe("blocked_session_root");
@@ -239,10 +341,10 @@ it("rejects a replaced generation's cursors even when it keeps the same exact fi
   const second = await conversationForPane(pane); expect(second.history_id).not.toBe(first.history_id); expect(second.version).not.toBe(first.version);
 });
 
-describe.each(["omo", "codex", "claude"] as const)("%s exact managed transcript", harness => {
+describe.each(["gjc", "omo", "codex", "claude"] as const)("%s exact managed transcript", harness => {
   it("validates that harness's native header without any latest-session lookup", async () => {
     record.harness = harness; record.launcher_harness = harness;
-    if (harness !== "omo") {
+    if (harness === "codex" || harness === "claude") {
       const base = join(root, harness); mkdirSync(join(base, harness === "codex" ? "sessions" : "projects"), { recursive: true, mode: 0o700 });
       sessionFile = join(base, harness === "codex" ? "sessions" : "projects", "exact.jsonl"); record.env = { [harness === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]: base };
     }
@@ -250,6 +352,14 @@ describe.each(["omo", "codex", "claude"] as const)("%s exact managed transcript"
     writeFileSync(sessionFile, JSON.stringify(meta) + "\n", { mode: 0o600 }); const info = statSync(sessionFile);
     record.session_file = sessionFile; record.file_identity = { dev: info.dev, ino: info.ino }; save();
     expect((await resolve()).identity.state).toBe("ready"); expect(await resolveTranscript(pane, root)).toMatchObject({ source: `${harness}-transcript`, path: sessionFile });
+  });
+
+  it("allows group-write only for a pinned OMO transcript", async () => {
+    sizedNativeHeader(harness, 1024);
+    chmodSync(sessionFile, 0o664);
+    const result = await resolve();
+    expect(result.identity.state).toBe(harness === "omo" ? "ready" : "blocked");
+    expect(result.identity.reason).toBe(harness === "omo" ? null : "blocked_session_replaced");
   });
 });
 

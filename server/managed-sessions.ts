@@ -48,6 +48,31 @@ function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+interface FileIdentityPin { readonly dev: number; readonly ino: number }
+type TranscriptPermission = "strict" | "omo-private-store";
+
+function fileIdentityPin(value: unknown): FileIdentityPin | null {
+  const pin = object(value);
+  if (!pin || typeof pin.dev !== "number" || !Number.isSafeInteger(pin.dev) || pin.dev < 0 || typeof pin.ino !== "number" || !Number.isSafeInteger(pin.ino) || pin.ino < 0) return null;
+  return { dev: pin.dev, ino: pin.ino };
+}
+
+function privateStore(info: { uid: number; mode: number; isDirectory(): boolean }): boolean {
+  return info.isDirectory() && owned(info) && (info.mode & 0o077) === 0;
+}
+
+function transcriptPermission(
+  info: { uid: number; mode: number },
+  harness: Harness,
+  pinMatches: boolean,
+  storeInfo: { uid: number; mode: number; isDirectory(): boolean },
+): TranscriptPermission | null {
+  if (owned(info)) return "strict";
+  if (harness !== "omo" || !pinMatches || (process.getuid !== undefined && info.uid !== process.getuid())
+    || (info.mode & 0o020) === 0 || (info.mode & 0o002) !== 0 || !privateStore(storeInfo)) return null;
+  return "omo-private-store";
+}
+
 function recordAt(path: string): { record: Record<string, unknown> | null; unsafe: boolean } {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -135,6 +160,10 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     }
     if (record.state !== "ready") return blocked("blocked_record_state");
     if (typeof record.session_id !== "string" || !ID.test(record.session_id) || typeof record.session_file !== "string" || !isAbsolute(record.session_file)) return blocked("blocked_session_identity");
+    const hasFileIdentity = Object.hasOwn(record, "file_identity");
+    if (identity.harness === "omo" && !hasFileIdentity) return pending("identity_pending");
+    const pinned = hasFileIdentity ? fileIdentityPin(record.file_identity) : null;
+    if (hasFileIdentity && !pinned) return blocked("blocked_session_replaced");
     const sessionFile = record.session_file;
     const env = object(record.env) ?? {};
     let store: string;
@@ -149,8 +178,10 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     const storeInfo = lstatSync(store);
     if (!storeInfo.isDirectory() || !owned(storeInfo) || realpathSync(store) !== store || realpathSync(sessionFile) !== sessionFile || !inside(store, sessionFile) || !sessionFile.endsWith(".jsonl")) return blocked("blocked_session_root");
     const info = lstatSync(sessionFile);
-    const pinned = object(record.file_identity);
-    if (!info.isFile() || !owned(info) || (pinned ? pinned.dev !== info.dev || pinned.ino !== info.ino : identity.harness !== "gjc")) return blocked("blocked_session_replaced");
+    const pinMatches = pinned ? pinned.dev === info.dev && pinned.ino === info.ino : identity.harness === "gjc";
+    if (!info.isFile() || !pinMatches) return blocked("blocked_session_replaced");
+    const initialPermission = transcriptPermission(info, identity.harness, pinned !== null && pinMatches, storeInfo);
+    if (!initialPermission) return blocked("blocked_session_replaced");
     const meta = header(sessionFile, identity.harness);
     if (!meta || meta.id !== record.session_id || typeof meta.cwd !== "string" || !isAbsolute(meta.cwd) || realpathSync(meta.cwd) !== record.cwd) return blocked("blocked_session_header");
     if (identity.harness === "gjc") {
@@ -168,7 +199,14 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     }
     // Detect replacement during header validation as well as between polls.
     const after = lstatSync(sessionFile);
-    if (!after.isFile() || !owned(after) || realpathSync(sessionFile) !== sessionFile || after.dev !== info.dev || after.ino !== info.ino) return blocked("blocked_session_replaced");
+    const finalStoreCheck = initialPermission === "omo-private-store"
+      || (identity.harness === "omo" && !owned(after) && (after.mode & 0o020) !== 0);
+    const finalStoreInfo = finalStoreCheck ? lstatSync(store) : storeInfo;
+    const finalPinMatches = pinned !== null && pinned.dev === after.dev && pinned.ino === after.ino;
+    const finalPermission = transcriptPermission(after, identity.harness, finalPinMatches, finalStoreInfo);
+    if (!after.isFile() || !finalPermission || ((initialPermission === "omo-private-store" || finalPermission === "omo-private-store")
+      && (!privateStore(finalStoreInfo) || realpathSync(store) !== store))
+      || realpathSync(sessionFile) !== sessionFile || after.dev !== info.dev || after.ino !== info.ino) return blocked("blocked_session_replaced");
     const currentMeta = header(sessionFile, identity.harness);
     if (!currentMeta || currentMeta.id !== record.session_id || typeof currentMeta.cwd !== "string" || !isAbsolute(currentMeta.cwd) || realpathSync(currentMeta.cwd) !== record.cwd) return blocked("blocked_session_header");
     identity.state = "ready";
