@@ -24,6 +24,7 @@
  */
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc } from "./herdr/client.ts";
+import { resolveManagedSession } from "./managed-sessions.ts";
 import { gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, type GjcProcess } from "./gjc-runtime.ts";
 import type { OmoAsks } from "./omo-ask.ts";
 import { processStartedAt } from "./process-start.ts";
@@ -121,6 +122,11 @@ export async function gjcPanes(panes: HerdrPane[], deps: GjcDiscovery = {}): Pro
   const underShell = deps.underShell ?? ((shellPid: unknown) => gjcPidUnderShell(shellPid, deps.platform));
   const found = new Map<string, OmoPane>();
   await Promise.all(panes.filter((pane) => pane.agent === "gjc").map(async (pane) => {
+    const managed = resolveManagedSession(pane);
+    if (managed) {
+      if (managed.identity.state === "ready" && managed.identity.harness === "gjc") found.set(pane.pane_id, { path: managed.sessionFile, startedAt: null });
+      return;
+    }
     const info = await processInfo(pane.pane_id);
     const starts = (info?.process_info?.foreground_processes ?? [])
       .filter((process) => typeof process.pid === "number" && Array.isArray(process.argv) && isGjcProcess(process.argv.map(String)))

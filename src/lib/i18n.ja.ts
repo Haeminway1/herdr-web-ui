@@ -8,6 +8,11 @@
  * in English. Placeholders in braces keep their English names.
  */
 export const JA: Record<string, string> = {
+  "Session identified": "セッション識別済み",
+  "Waiting for identity": "セッション識別待ち",
+  "Session blocked": "セッション接続停止",
+  "Waiting for managed session identity": "管理セッションの識別待ち",
+  "Managed session blocked: {reason}": "管理セッションの接続を停止: {reason}",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravityのチャットを利用できません。ターミナルを開いて動作状況とツール呼び出しを確認してください。",
   "Chat read timed out.": "会話の読み込みがタイムアウトしました。",
   "Thinking…": "思考中…",

@@ -8,6 +8,7 @@ import { ChevronDown, ChevronRight, Download, Folder, GripVertical, Lock, Pencil
 
 import "./ClassicSidebar.css";
 import { BackgroundBadge, displayPaneTitle, RestoreErrorBadge, StatusBadge } from "./Sidebar.tsx";
+import { ManagedSessionStatus } from "./ManagedSessionStatus.tsx";
 
 import type { PaneInfo, SessionSnapshot, WorkspaceInfo, HerdrPane } from "../../shared/protocol.ts";
 import { paneTitle } from "../../shared/notify-policy.ts";
@@ -371,7 +372,9 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
                         )}
                       </span>
                       <span className="cl-pane-meta">
-                        {pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge status={paneStatus(pane as HerdrPane)} />}
+                        {pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} />
+                          : pane.managed_session && (pane.managed_session.state !== "ready" || pane.agent_status === "unknown") ? <ManagedSessionStatus identity={pane.managed_session} badge />
+                            : <StatusBadge status={paneStatus(pane as HerdrPane)} />}
                         <BackgroundBadge count={(pane as HerdrPane).background_tasks} />
                         <span className="cl-pane-subtitle">{byRepo ? displayTitle : byFolder ? workspace.label : placeLine(workspace.label, cwdBasename(pane.cwd))}</span>
                       </span>
@@ -483,7 +486,9 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
                   <span className="cl-pane-lock" role="img" aria-label={t("System pinned")} title={t("System pinned")}><Lock size={13} aria-hidden="true" /></span>
                 </span>
                 <span className="cl-pane-meta">
-                  {pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge status={paneStatus(pane as HerdrPane)} />}
+                  {pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} />
+                    : pane.managed_session && (pane.managed_session.state !== "ready" || pane.agent_status === "unknown") ? <ManagedSessionStatus identity={pane.managed_session} badge />
+                      : <StatusBadge status={paneStatus(pane as HerdrPane)} />}
                   <BackgroundBadge count={(pane as HerdrPane).background_tasks} />
                   <span className="cl-pane-subtitle">{byRepo ? displayTitle : byFolder ? workspace?.label ?? displayTitle : placeLine(workspace?.label ?? "", cwdBasename(pane.cwd))}</span>
                 </span>

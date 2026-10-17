@@ -17,7 +17,8 @@ import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Minimiz
 
 import "./Composer.css";
 
-import type { AgentStatus, ConversationMetadata, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
+import type { AgentStatus, ConversationMetadata, ManagedSessionIdentity, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
+import { ManagedSessionStatus } from "./ManagedSessionStatus.tsx";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { composerDrafts } from "../lib/composerDraft.ts";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -67,6 +68,7 @@ export interface ComposerProps {
   active?: boolean;
   agent: string | null;
   agentStatus?: AgentStatus;
+  managedSession?: ManagedSessionIdentity;
   /** what the running turn is doing now: shown after the status while it works */
   work?: WorkNow | null;
   /** an OmO pane's running background tasks: the status line opens their list */
@@ -247,6 +249,7 @@ export function Composer({
   active = true,
   agent,
   agentStatus,
+  managedSession,
   backgroundTasks = 0,
   plan = null,
   backgroundWait = false,
@@ -1357,7 +1360,8 @@ export function Composer({
           <span className="composer-status-meta">
             <span className="composer-agent-label visually-hidden">{agentLabel}</span>
             <span className="composer-status-separator visually-hidden" aria-hidden="true">·</span>
-            <strong className="visually-hidden">{t(composerStatusWord(shownStatus))}</strong>
+            {(!managedSession || (managedSession.state === "ready" && agentStatus !== "unknown")) && <strong className="visually-hidden">{t(composerStatusWord(shownStatus))}</strong>}
+            {managedSession && (managedSession.state !== "ready" || agentStatus === "unknown") && <ManagedSessionStatus identity={managedSession} badge />}
             {/* the mark, the model, the level and the context ring as one quiet pill. It only shows: no role,
                 no focus, nothing to press but the ring inside it. A pane that names no model draws no pill
                 (.is-bare): the mark, a level if it has one, and the ring stand in the row as they are */}

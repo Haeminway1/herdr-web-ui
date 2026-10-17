@@ -2,6 +2,7 @@ import { constants, fstatSync, closeSync, openSync, readdirSync, readFileSync, r
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { HerdrPane } from "../shared/protocol.ts";
 import { herdrRpc } from "./herdr/client.ts";
+import { resolveManagedSession } from "./managed-sessions.ts";
 import { recentProcessTable } from "./gjc-runtime.ts";
 import { processStartedAt } from "./process-start.ts";
 import { descendantProcesses, type ProcessRow } from "./windows-processes.ts";
@@ -482,8 +483,11 @@ export function omoTranscriptsOfCwd(cwd: string, panes: HerdrPane[], infos: Read
  * is the pane's resolved runtime cwd, and its peers are the panes resolving to the same one.
  */
 export async function omoSessionForPane(paneId: string, cwd: string, panes: HerdrPane[], home = process.env["HOME"] ?? ""): Promise<{ path: string | null; pending: string | null }> {
+  const pane = panes.find(candidate => candidate.pane_id === paneId);
+  const managed = pane ? resolveManagedSession(pane) : null;
+  if (managed) return { path: managed.identity.state === "ready" && managed.identity.harness === "omo" ? managed.sessionFile : null, pending: null };
   // A child model can change herdr's agent label: inspect each pane's processes once.
-  const candidates = panes;
+  const candidates = panes.filter(pane => !resolveManagedSession(pane));
   const infos = new Map(await Promise.all(candidates.map(async (pane) => [pane.pane_id, await processInfo(pane.pane_id)] as const)));
   const resolved = candidates.map((pane) => resolvePaneRuntime(pane, infos.get(pane.pane_id) ?? null, home, processEnviron));
   const target = resolved.find((entry) => entry.pane.pane_id === paneId);
@@ -504,10 +508,12 @@ export async function omoTranscriptForPane(paneId: string, cwd: string, panes: H
  * pane counts toward is the one its own processes resolve.
  */
 export async function omoPanes(panes: HerdrPane[], home = process.env["HOME"] ?? ""): Promise<Map<string, { path: string | null; startedAt: number | null }>> {
-  const candidates = panes;
+  const managed = new Map(panes.map(pane => [pane.pane_id, resolveManagedSession(pane)]));
+  const candidates = panes.filter(pane => !managed.get(pane.pane_id));
   const infos = new Map(await Promise.all(candidates.map(async (pane) => [pane.pane_id, await processInfo(pane.pane_id)] as const)));
   const resolved = candidates.map((pane) => resolvePaneRuntime(pane, infos.get(pane.pane_id) ?? null, home, processEnviron));
   const found = new Map<string, { path: string | null; startedAt: number | null }>();
+  for (const [paneId, entry] of managed) if (entry?.identity.state === "ready" && entry.identity.harness === "omo") found.set(paneId, { path: entry.sessionFile, startedAt: null });
   const cwds = new Set(resolved.flatMap((entry) => entry.omos.length === 0 ? [] : entry.ambiguous ? entry.omos.map((omo) => omo.cwd) : [entry.cwd]));
   for (const cwd of cwds) {
     const transcripts = cwd ? omoTranscriptsResolved(cwd, resolved, home) : new Map<string, { path: string | null; pending: string | null; startedAt: number | null }>();

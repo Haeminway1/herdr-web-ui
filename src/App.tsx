@@ -1721,6 +1721,7 @@ export function App() {
                         restoreError={item?.restore_error ?? null}
                         agent={item?.agent ?? null}
                         agentStatus={item?.agent_status}
+                        managedSession={item?.managed_session}
                         backgroundTasks={item?.background_tasks ?? 0}
                         // an offline PC's cached plan cannot be read
                         // fork: the plan rides the composer's chip only with Plan in the message box; else the header's button holds it

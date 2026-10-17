@@ -11,7 +11,6 @@ export type {
   AgentInfo,
   AgentSessionInfo,
   AgentStatus,
-  PaneInfo,
   PaneLayoutPane,
   PaneLayoutRect,
   PaneLayoutSnapshot,
@@ -19,13 +18,24 @@ export type {
   PaneScrollInfo,
   ReadFormat,
   ReadSource,
-  SessionSnapshot,
   Subscription as HerdrSubscriptionSpec,
   TabInfo,
   WorkspaceInfo,
 } from "./herdr-api.generated.ts";
 
-import type { AgentStatus, PaneInfo, PaneScrollInfo, SessionSnapshot, TabInfo, WorkspaceInfo } from "./herdr-api.generated.ts";
+import type { AgentStatus, PaneInfo as NativePaneInfo, PaneScrollInfo, SessionSnapshot as NativeSessionSnapshot, TabInfo, WorkspaceInfo } from "./herdr-api.generated.ts";
+
+/** Verified manager identity, independent of any detected provider child. */
+export interface ManagedSessionIdentity {
+  id: string | null;
+  harness: "gjc" | "omo" | "codex" | "claude" | null;
+  generation: number | null;
+  state: "ready" | "identity_pending" | "blocked";
+  reason: string | null;
+  session_id: string | null;
+}
+export type PaneInfo = NativePaneInfo & { managed_session?: ManagedSessionIdentity };
+export type SessionSnapshot = Omit<NativeSessionSnapshot, "panes"> & { panes: HerdrPane[] };
 
 /** Friendly aliases used across the UI. */
 export type HerdrWorkspace = WorkspaceInfo;
@@ -585,6 +595,7 @@ export interface PlanSummary {
 
 /** GET /api/pane/conversation: native conversation with settings, or scrollback fallback. */
 export interface ConversationResponse {
+  managed_session?: ManagedSessionIdentity;
   /** Grok/Agy latest native turn; display feedback only, never input-delivery authority. */
   activity?: "thinking" | "working" | "idle";
   /** Stable across appends; changes on transcript replacement or native context clear. */

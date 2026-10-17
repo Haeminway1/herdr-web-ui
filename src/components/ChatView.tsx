@@ -71,7 +71,8 @@ const ChatHistoryContext = createContext("");
  */
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult } from "../../shared/protocol.ts";
+import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, ManagedSessionIdentity, OmoTaskResult } from "../../shared/protocol.ts";
+import { ManagedSessionStatus } from "./ManagedSessionStatus.tsx";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { useT } from "../lib/i18n.ts";
@@ -145,6 +146,7 @@ export interface ChatViewProps {
 }
 
 interface ChatState {
+  managedSession?: ManagedSessionIdentity;
   activity?: ConversationResponse["activity"];
   source: "conversation" | "scrollback";
   conversationSource?: string;
@@ -972,7 +974,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         }
         showAnswerDetails(conversation);
         let next: ChatState;
-        if (conversation.source !== "scrollback") next = conversationState(conversation);
+        if (conversation.managed_session && conversation.managed_session.state !== "ready") next = { source: "conversation", turns: [], messages: [], truncated: false, managedSession: conversation.managed_session };
+        else if (conversation.source !== "scrollback") next = conversationState(conversation);
         else if (agent !== null) next = { source: "scrollback", turns: [], messages: [], truncated: false };
         else {
           // The reader has rejected this history. Hide it before the separate terminal
@@ -1427,6 +1430,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       {state.source === "conversation" && olderCursor === null && older.length > 0 && <p className="chat-endcap">{t("beginning of conversation")}</p>}
   </>;
   const footer = <>
+      {state.managedSession && <ManagedSessionStatus identity={state.managedSession} />}
       {/* fork: a message sent from the box shows at once, as sending, until the transcript has it */}
       {pendingOut.map((item) => <article key={`out:${item.id}`} className="chat-turn chat-turn-user is-outgoing" data-sent={item.sent ? "" : undefined}>
         <div className="chat-bubble"><Markdown>{item.text}</Markdown></div>
@@ -1440,7 +1444,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       {/* A native turn's activity, where no open work block says it: before the turn has an assistant
           or tool row, and while it thinks (a work block's head says Working). One Working at a time. */}
       {state.activity !== undefined && connected && !ended && activity !== "idle" && agentStatus !== "blocked" && prompt === null && (activity === "thinking" || !workBlockLive) && <p className="chat-activity" role="status"><CircleDot aria-hidden="true" />{activity === "thinking" ? t("Thinking…") : t("Working…")}</p>}
-      {loaded && empty && error === null && prompt === null && (state.activity === undefined || activity === "idle") && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
+      {loaded && empty && !state.managedSession && error === null && prompt === null && (state.activity === undefined || activity === "idle") && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}
   </>;
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>

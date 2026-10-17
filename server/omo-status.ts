@@ -347,7 +347,7 @@ export class OmoStatus {
    * `refreshMs` while the panes stay the same: each pane costs a process lookup.
    */
   async refresh(panes: HerdrPane[]): Promise<void> {
-    const key = panes.map((pane) => `${pane.pane_id}\0${pane.agent ?? ""}\0${pane.cwd ?? ""}`).join("\n");
+    const key = panes.map((pane) => `${pane.pane_id}\0${pane.agent ?? ""}\0${pane.cwd ?? ""}\0${JSON.stringify(pane.managed_session)}`).join("\n");
     if (key === this.refreshedFor && this.now() - this.refreshedAt < this.refreshMs) {
       if (this.refreshScreens(panes)) this.poll();
       return;

@@ -15,8 +15,10 @@ import type { AgentInfo, AgentManifestInfo, AgentStartParams, PaneInfo, PaneLayo
 import type { HerdrMethod, HerdrMethods, SingleHerdrMethod, UntypedHerdrMethod } from "./methods.ts";
 import type { HerdrIdentity } from "../../shared/machines.ts";
 import { correctOmoBlockedSnapshot } from "../omo-status.ts";
+import { labelManagedPanes } from "../managed-sessions.ts";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+export const EVENTS_SUBSCRIBE_METHOD = "events.subscribe";
 
 /** herdr's default socket: ~/.config/herdr on Unix, %APPDATA%\herdr on Windows. */
 export function herdrSocketPath(): string {
@@ -202,7 +204,7 @@ export async function ping(socketPath?: string): Promise<HerdrIdentity> {
 export async function sessionSnapshot(socketPath?: string, timeoutMs?: number): Promise<SessionSnapshot> {
   const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
   const result = await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {}, socketPath, timeoutMs);
-  return correctOmoBlockedSnapshot(result.snapshot, async (paneId) => {
+  return correctOmoBlockedSnapshot(labelManagedPanes(result.snapshot), async (paneId) => {
     const remaining = deadline === undefined ? undefined : deadline - Date.now();
     if (remaining !== undefined && remaining <= 0) return null;
     return (await paneRead({ paneId, source: "visible", format: "text", timeoutMs: remaining }, socketPath)).text;
@@ -754,7 +756,7 @@ export function subscribeEvents(
         }
         return;
       }
-      sock.write(`${JSON.stringify({ id: nextId(), method: "events.subscribe", params: { subscriptions } })}\n`);
+      sock.write(`${JSON.stringify({ id: nextId(), method: EVENTS_SUBSCRIBE_METHOD, params: { subscriptions } })}\n`);
     })
     .catch((err: Error) => {
       handlers.onError?.(new HerdrError("connect_failed", err.message));

@@ -6,6 +6,11 @@
  * braces keep their English names.
  */
 export const KO: Record<string, string> = {
+  "Session identified": "대화 식별 완료",
+  "Waiting for identity": "대화 식별 대기",
+  "Session blocked": "대화 연결 차단",
+  "Waiting for managed session identity": "관리형 대화 식별 대기 중",
+  "Managed session blocked: {reason}": "관리형 대화 연결 차단: {reason}",
   "Antigravity chat is unavailable. Open Terminal to see activity and tool calls.": "Antigravity 채팅을 사용할 수 없습니다. 터미널을 열어 작업 상태와 도구 호출을 확인하세요.",
   "Chat read timed out.": "대화 읽기 시간이 초과되었습니다.",
   "Thinking…": "생각 중…",

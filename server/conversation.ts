@@ -37,7 +37,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import nodePath, { type PlatformPath } from "node:path";
 
-import type { ConversationMetadata, ConversationPart, ConversationTurn, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
+import type { ConversationMetadata, ConversationPart, ConversationTurn, HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
+import { resolveManagedSession } from "./managed-sessions.ts";
 import { herdrRpc, paneRead, sessionSnapshot } from "./herdr/client.ts";
 import { codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, codexTranscriptImage } from "./codex-images.ts";
@@ -456,7 +457,7 @@ const writtenSessions = new Set<string>();
 const cache = new Map<string, { source: RecognizedConversation["source"]; signature: string; turns: ConversationTurn[]; metadata: ConversationMetadata; cursor: string | null; abandoned?: { count: number; branches: number; summary: string | null } }>();
 
 export class ConversationUnavailable extends Error {
-  constructor(reason: string) {
+  constructor(reason: string, readonly managedSession?: ManagedSessionIdentity) {
     super(reason);
     this.name = "ConversationUnavailable";
   }
@@ -480,6 +481,7 @@ export class HistoryChanged extends Error {
 
 /** What paneConversation resolved: which store the turns came from, and where they start. */
 export type RecognizedConversation = {
+  managed_session?: ManagedSessionIdentity;
   activity?: "thinking" | "working" | "idle";
   source: "grok-transcript" | "agy-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript";
   turns: ConversationTurn[];
@@ -1135,7 +1137,7 @@ export async function paneRunsOmo(paneId: string): Promise<boolean> {
  * (paneRunsOmo), including panes herdr has not recognized as an agent.
  */
 export async function labelOmoPanes(snapshot: SessionSnapshot): Promise<SessionSnapshot> {
-  const candidates = snapshot.panes;
+  const candidates = snapshot.panes.filter(pane => !pane.managed_session);
   const omo = new Set<string>();
   await Promise.all(candidates.map(async (pane) => { if (await paneRunsOmo(pane.pane_id)) omo.add(pane.pane_id); }));
   if (omo.size === 0) return snapshot;
@@ -1244,7 +1246,7 @@ async function ompTranscriptPath(paneId: string, cwd: string): Promise<string> {
 
 /** Where a pane's conversation is: a transcript file, or a session in OpenCode's database. */
 type ResolvedTranscript =
-  | { source: StreamSource; path: string; codexHome?: string; agy?: AgyStore }
+  | { source: StreamSource; path: string; codexHome?: string; agy?: AgyStore; managed?: ManagedSessionIdentity }
   | { source: "opencode-transcript"; path: string; session: string }
   | { source: "hermes-transcript"; path: string; sessionId: string };
 
@@ -1261,7 +1263,13 @@ export type NativeTranscript =
  * label: omo's own store is read only when omo is really running
  * in that pane, never on a matching cwd alone.
  */
-async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: string, panes?: HerdrPane[], opencodeDb?: string, hermesHome?: string, grokHome?: string): Promise<ResolvedTranscript> {
+export async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: string, panes?: HerdrPane[], opencodeDb?: string, hermesHome?: string, grokHome?: string): Promise<ResolvedTranscript> {
+  const managed = resolveManagedSession(pane);
+  if (managed) {
+    const identity = managed.identity;
+    if (identity.state !== "ready" || !managed.sessionFile || !identity.harness) throw new ConversationUnavailable(identity.reason ?? "identity_pending", identity);
+    return { source: `${identity.harness}-transcript`, path: managed.sessionFile, managed: identity };
+  }
   const paneId = pane.pane_id;
   let agent = pane.agent ?? pane.agent_session?.agent ?? "";
   // herdr names no agent for this pane: a session report an earlier agent left behind says
@@ -1431,6 +1439,8 @@ export async function paneTranscript(paneId: string, codexHome?: string, snapsho
  */
 export async function paneConversation(paneId: string, codexHome?: string, page: ConversationPage = {}, devinDbPath?: string, opencodeDb?: string, hermesHome?: string, grokHome?: string): Promise<RecognizedConversation> {
   const snapshot = await sessionSnapshot();
+  const managedPane = snapshot.panes.find(pane => pane.pane_id === paneId);
+  if (managedPane?.managed_session) return conversationForPane(managedPane, codexHome, page);
   let resolved: NativeTranscript;
 
   // no transcript states the model yet: the agent's own screen does (start-screen.ts). A screen
@@ -1520,6 +1530,33 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     catch { throw new ConversationUnavailable("transcript_missing"); }
   }
   return answer;
+}
+
+/** Managed generations scope cursors and caches, without changing native agent readers. */
+export async function conversationForPane(pane: HerdrPane, codexHome?: string, page: ConversationPage = {}): Promise<RecognizedConversation> {
+  const resolution = resolveManagedSession(pane);
+  if (!resolution) throw new ConversationUnavailable("no_recognized_transcript");
+  const managed = resolution.identity;
+  const path = resolution.sessionFile;
+  if (managed.state !== "ready" || !path || !managed.harness) throw new ConversationUnavailable(managed.reason ?? "identity_pending", managed);
+  const source: StreamSource = `${managed.harness}-transcript`;
+  const prefix = `managed-${managed.id}-${managed.generation}:`;
+  const requested: ConversationPage = { ...page };
+  for (const field of ["before", "since", "from"] as const) {
+    const cursor = requested[field];
+    if (cursor === undefined) continue;
+    if (!cursor.startsWith(prefix)) throw new HistoryChanged();
+    requested[field] = cursor.slice(prefix.length);
+  }
+  let result: RecognizedConversation;
+  try { result = transcriptPage(source, path, requested, codexHome); }
+  catch (error) {
+    if (error instanceof ConversationUnavailable) throw new ConversationUnavailable("blocked_transcript_unavailable", { ...managed, state: "blocked", reason: "blocked_transcript_unavailable" });
+    throw error;
+  }
+  const current = resolveManagedSession(pane);
+  if (!current || current.sessionFile !== path || JSON.stringify(current.identity) !== JSON.stringify(managed)) throw new ConversationUnavailable("blocked_managed_identity_changed", { ...managed, state: "blocked", reason: "blocked_managed_identity_changed" });
+  return { ...result, managed_session: managed, cursor: result.cursor === null ? null : prefix + result.cursor, history_id: prefix + result.history_id, version: answerVersion(prefix, result.version) };
 }
 
 /** One page of a resolved transcript (paneConversation's `page`). */

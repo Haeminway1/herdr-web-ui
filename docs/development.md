@@ -322,6 +322,78 @@ and owned PTY children. No browser errors occurred in these samples.
 These resource results do not remeasure the latency or compressed payload figures
 in the historical table above.
 
+## Managed session identity
+
+Panes carrying `hm_managed_session` and `hm_managed_generation` use Herdr Manager's
+schema-2 record before any foreground-process or terminal breadcrumb heuristic.
+The namespace is `HERDR_MANAGED_NAMESPACE`, defaulting to
+`~/dev/agents/herdr_manager/state/managed-sessions`. The bridge reads this namespace
+on the machine that owns the pane; it never scans another machine's records.
+
+The resolver checks nonce, generation, launcher harness, canonical project directory,
+workspace, pane and terminal, then validates the exact recorded session file's native
+ID, cwd, owner and pinned device/inode. GJC/OMO files must stay inside that launch's
+private session directory. Native Codex/Claude files must stay inside their recorded
+native store. No newest-file selection, screen matching, child-provider substitution,
+record migration or recovery is attempted for a managed pane. Invalid records fail
+closed rather than falling through to the direct-session resolvers.
+
+The browser receives the harness, generation, exact session ID and identity state,
+not the record's environment, command line or private transcript filename. `ready`
+means identity verified, not that the engine is idle or the task is done. Pending
+and blocked identities have explicit notices in the sidebar, composer and chat.
+Their chat does not read scrollback as a substitute. Managed generations also scope
+history IDs, cursors and ETags. Direct/unmanaged session discovery is unchanged.
+The generated native Herdr protocol remains unchanged; the optional identity is a
+Web UI response extension in `shared/protocol.ts`.
+
+```bash
+HERDR_TEST_MODE=unit bun test server/managed-sessions.test.ts server/gjc-runtime.test.ts
+bun run build
+UI_EVIDENCE_DIR=docs/screenshots/managed-sessions bun scripts/managed-session-regression.ts
+# Optional: one read-only phase1 snapshot; only this project's managed pane is displayed.
+# No live message-body/screen reads, terminal attaches, input, restart or migration.
+UI_EVIDENCE_DIR=docs/screenshots/managed-sessions bun scripts/managed-session-regression.ts --live
+```
+
+The browser check uses a temporary Unix-socket fixture and real Web UI HTTP handlers
+for schema-2 chat. Chromium verifies a managed GJC despite a raw Codex child label,
+then ready → pending → blocked → ready transitions without stale chat or scrollback
+fallback. All messages in the fixture screenshots are synthetic. WebSockets are
+intercepted to prevent terminal attachment or input. The optional live check projects
+the current pane-list metadata and masks titles; it is not a live model round trip.
+
+On 2026-10-17, the read-only observation found `w4Y:p1` with raw agent null and an
+existing schema-1 record. The changed resolver displays GJC with
+`blocked_record_schema`, not Codex, unknown, or a guessed conversation. This old
+record was not upgraded or restarted. A real schema-2 engine round trip remains
+unverified; the schema-2 exact-file path is covered by disposable fixtures.
+Screenshots are under `docs/screenshots/managed-sessions/`.
+Verification on that implementation: 593 unit tests passed across 72 files, including
+the managed resolver and existing native GJC cases. Application and browser-script
+strict type checks passed, production build passed, and Chromium passed the fixture
+transitions plus the read-only live projection. The build still warns about the
+JavaScript chunk exceeding 500 kB. That initial S7 verification did not restart phase1
+or existing sessions and did not deploy the bridge.
+
+Production backport v0.4.1102 starts from the running fork's v0.4.1101 (`3e301e5`),
+not the older S7 checkout. It retains the current React/virtual timeline and fork
+defaults, adds the same notices to ClassicSidebar, and makes the existing GJC/OMO
+status trackers resolve managed records first. Identity state and generation changes
+invalidate status discovery immediately rather than keeping an old transcript hold.
+The production port passed strict application/tool type checks, 4,037 unit tests
+(8 existing skips), 509 integration tests (15 existing skips), production build,
+and the dedicated Chromium identity/transition/classic-sidebar checks. Integration
+and general UI tests used disposable Herdr sessions, never phase1.
+The standalone legacy/Kitty sticky-modifier browser check also passed. One later unit
+run hit Portal's process-start argv race; a complete rerun passed without code changes.
+
+The full UI gate is **not green**: split-view navigation, connection or drag waits
+timed out on candidate runs and on a clean, unchanged `3e301e5` production baseline.
+No test was disabled and no timeout was increased. This inherited full-suite failure
+is distinct from the passing scoped managed-session browser check. A real schema-2
+live model round trip remains unverified; legacy live records stay blocked.
+
 ## README media
 
 `bun run build && bun scripts/readme-media/capture.ts` regenerates the stills and demos in `docs/screenshots/` from a staged, fictional session in its own herdr session (`herdr-web-ui-demo`). Pass `shots` or `video` to redo only one of them. It needs ffmpeg.

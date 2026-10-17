@@ -2768,7 +2768,7 @@ export function createServer(
           if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
           // an unrecognized pane is not an error: the client falls back to the
           // scrollback transcript, exactly like chatmux's terminal fallback
-          if (error instanceof ConversationUnavailable) return jsonResponse({ source: "scrollback", turns: [] });
+          if (error instanceof ConversationUnavailable) return jsonResponse({ source: "scrollback", turns: [], ...(error.managedSession ? { managed_session: error.managedSession } : {}) });
           return errorResponse(error);
         }
       }
