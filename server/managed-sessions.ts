@@ -63,16 +63,31 @@ function bindingKey(record: Record<string, unknown> | null): string {
   return JSON.stringify(["nonce", "generation", "harness", "launcher_harness", "cwd", "pane_id", "workspace_id", "terminal_id", "desired_state", "state", "error", "session_id", "session_file", "session_dir", "child", "file_identity"].map(key => record?.[key]));
 }
 
-/** Read at most 16 KiB per identity row, never transcript messages beyond Claude's header prefix. */
+/** Codex's first row allows 1 MiB including newline; other identity/prefix rows allow 16 KiB. */
 function header(path: string, harness: Harness): { id: unknown; cwd: unknown } | null {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    const buffer = Buffer.alloc(16385);
+    const limit = harness === "codex" ? 1024 * 1024 : 16384;
+    let buffer = Buffer.alloc(16385);
     let offset = 0;
     for (let row = 0; row < (harness === "claude" ? 32 : 1); row++) {
-      const count = readSync(fd, buffer, 0, buffer.length, offset);
-      const newline = buffer.subarray(0, count).indexOf(10);
-      if (count === 0 || newline < 0) return null;
+      let count = 0;
+      let newline = -1;
+      while (newline < 0) {
+        const added = readSync(fd, buffer, count, buffer.length - count, offset + count);
+        if (added === 0) return null;
+        newline = buffer.subarray(count, count + added).indexOf(10);
+        if (newline >= 0) newline += count;
+        count += added;
+        if (newline >= 0) break;
+        if (count > limit) return null;
+        if (count === buffer.length) {
+          const grown = Buffer.alloc(Math.min(buffer.length * 2, limit + 1));
+          buffer.copy(grown, 0, 0, count);
+          buffer = grown;
+        }
+      }
+      if (newline + 1 > limit) return null;
       const entry = object(JSON.parse(buffer.subarray(0, newline).toString("utf8")));
       if (!entry) return null;
       offset += newline + 1;

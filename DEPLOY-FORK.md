@@ -97,6 +97,13 @@ default; the user lost the folder sidebar and the hover rename/close, and v0.4.2
   boot and cwd. The recovery schema and normal saved-store index are not chat gates.
   Records are not migrated, recovery readiness is not promoted, and native sessions
   are not restarted to connect an already running conversation.
+- Managed chat fixes (v0.4.1104): GJC single-choice cards use the current unanswered
+  `ask`'s logical labels and a matching native dialog, not individual wrapped terminal
+  rows. Answers are fenced by call, question and managed binding. Unsupported multi-select,
+  rich or incomplete focused dialogs remain in the native terminal rather than guessed.
+  Codex identity headers may contain up to 1 MiB including the newline, read with bounded
+  buffer growth; all exact ID, cwd and inode checks remain. This never adopts an unrelated
+  raw Codex process or changes Manager's recovery records and runtime fingerprints.
 - Tests that encode the above: `classic-sidebar-regression.ts`, `needs-input-regression.ts` (re-wired into `ui-regression.ts`),
   the top-panel part of `usage-regression.ts` (it reopens the phone drawer: a closed one is hidden
   since #683), `alert-sound-regression.ts` waiting for the toast.

@@ -201,10 +201,15 @@ export async function ping(socketPath?: string): Promise<HerdrIdentity> {
   return { version: result.version, protocol: result.protocol, terminal_attach: attach, ...(attach ? {} : { terminal_mirror: true }) };
 }
 
+/** Native metadata before per-pane managed identity and status projection. */
+export async function nativeSessionSnapshot(socketPath?: string, timeoutMs?: number): Promise<SessionSnapshot> {
+  return (await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {}, socketPath, timeoutMs)).snapshot;
+}
+
 export async function sessionSnapshot(socketPath?: string, timeoutMs?: number): Promise<SessionSnapshot> {
   const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
-  const result = await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {}, socketPath, timeoutMs);
-  return correctOmoBlockedSnapshot(await labelManagedPanes(result.snapshot), async (paneId) => {
+  const snapshot = await nativeSessionSnapshot(socketPath, timeoutMs);
+  return correctOmoBlockedSnapshot(await labelManagedPanes(snapshot), async (paneId) => {
     const remaining = deadline === undefined ? undefined : deadline - Date.now();
     if (remaining !== undefined && remaining <= 0) return null;
     return (await paneRead({ paneId, source: "visible", format: "text", timeoutMs: remaining }, socketPath)).text;

@@ -10,7 +10,7 @@ import { createGjcStatus, gjcPanes as discoverGjc } from "./gjc-status.ts";
 import { omoPanes, omoSessionForPane } from "./omo.ts";
 
 const nonce = "0123456789abcdef0123456789abcdef";
-const sessionId = "01a147f3-ec90-756f-948e-9fcb84998ec3";
+const sessionId = "00000000-0000-4000-8000-000000000001";
 let root: string, namespace: string, sessionFile: string, recordFile: string;
 let pane: HerdrPane;
 let record: Record<string, unknown>;
@@ -250,5 +250,77 @@ describe.each(["omo", "codex", "claude"] as const)("%s exact managed transcript"
     writeFileSync(sessionFile, JSON.stringify(meta) + "\n", { mode: 0o600 }); const info = statSync(sessionFile);
     record.session_file = sessionFile; record.file_identity = { dev: info.dev, ino: info.ino }; save();
     expect((await resolve()).identity.state).toBe("ready"); expect(await resolveTranscript(pane, root)).toMatchObject({ source: `${harness}-transcript`, path: sessionFile });
+  });
+});
+
+/** Synthetic UTF-8 rows sized including their terminating newline, never a native session. */
+function sizedNativeHeader(harness: "gjc" | "omo" | "codex" | "claude", bytes: number, identity: { id?: string; cwd?: string } = {}): string {
+  record.harness = harness; record.launcher_harness = harness;
+  if (harness === "codex" || harness === "claude") {
+    const base = join(root, harness);
+    const store = join(base, harness === "codex" ? "sessions" : "projects");
+    mkdirSync(store, { recursive: true, mode: 0o700 });
+    sessionFile = join(store, "synthetic-header.jsonl");
+    record.env = { [harness === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]: base };
+  }
+  const id = identity.id ?? sessionId;
+  const cwd = identity.cwd ?? root;
+  const instructions = { text: "합성" };
+  const meta = harness === "codex" ? { type: "session_meta", payload: { id, cwd, base_instructions: instructions } }
+    : harness === "claude" ? { type: "user", sessionId: id, cwd, padding: instructions }
+      : { type: "session", id, cwd, padding: instructions };
+  instructions.text += "x".repeat(bytes - Buffer.byteLength(JSON.stringify(meta) + "\n"));
+  const row = JSON.stringify(meta) + "\n";
+  writeFileSync(sessionFile, row, { mode: 0o600 });
+  const info = statSync(sessionFile);
+  record.session_file = sessionFile; record.file_identity = { dev: info.dev, ino: info.ino }; save();
+  return row;
+}
+
+describe("finite native identity row bounds", () => {
+  it.each([22796, 1024 * 1024])("accepts a synthetic %i-byte Codex session_meta row including newline", async bytes => {
+    const row = sizedNativeHeader("codex", bytes);
+    expect(Buffer.byteLength(row)).toBe(bytes);
+    // An oversized, malformed body after the identity row must not be parsed as metadata.
+    writeFileSync(sessionFile, row + "{".repeat(1024 * 1024 + 1));
+    expect(await resolve()).toMatchObject({ identity: { state: "ready", harness: "codex", session_id: sessionId }, sessionFile });
+  });
+
+  it.each([1024 * 1024 + 1, 1024 * 1024 + 16385])("rejects a %i-byte Codex first row", async bytes => {
+    sizedNativeHeader("codex", bytes);
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+  });
+
+  it("requires the newline within the Codex bound and never skips a different first row", async () => {
+    const row = sizedNativeHeader("codex", 1024 * 1024);
+    writeFileSync(sessionFile, row.slice(0, -1));
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+    writeFileSync(sessionFile, JSON.stringify({ type: "message" }) + "\n" + row);
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+  });
+
+  it.each(["id", "cwd"] as const)("still rejects incorrect Codex %s beyond 16 KiB", async field => {
+    sizedNativeHeader("codex", 22796, field === "id" ? { id: "synthetic-wrong-session" } : { cwd: "/" });
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+  });
+
+  it.each(["gjc", "omo", "claude"] as const)("keeps %s rows bounded to 16 KiB including newline", async harness => {
+    sizedNativeHeader(harness, 16384);
+    expect((await resolve()).identity.state).toBe("ready");
+    for (const bytes of [16385, 22796]) {
+      sizedNativeHeader(harness, bytes);
+      expect((await resolve()).identity.reason).toBe("blocked_session_header");
+    }
+  });
+
+  it("keeps Claude's prefix limited to 32 rows and 16 KiB per row", async () => {
+    const header = sizedNativeHeader("claude", 16384);
+    const prefix = (bytes: number) => JSON.stringify({ type: "file-history-snapshot", padding: "x".repeat(bytes - Buffer.byteLength(JSON.stringify({ type: "file-history-snapshot", padding: "" }) + "\n")) }) + "\n";
+    writeFileSync(sessionFile, prefix(16384).repeat(31) + header);
+    expect((await resolve()).identity.state).toBe("ready");
+    writeFileSync(sessionFile, prefix(16384).repeat(32) + header);
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+    writeFileSync(sessionFile, prefix(16385) + header);
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
   });
 });

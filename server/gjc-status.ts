@@ -45,7 +45,7 @@ interface GjcEntry {
  * for its id arrives — an error result ends the asking the same, since nothing waits on the
  * user then. Assistant narration that carries no call leaves every question as it was.
  */
-function gjcAsksAfter(open: OmoAsks, entry: GjcEntry): OmoAsks {
+export function gjcAsksAfter(open: OmoAsks, entry: GjcEntry): OmoAsks {
   if (entry.type !== "message") return open;
   const message = entry.message;
   if (message?.role === "assistant" && message.stopReason === "toolUse") {

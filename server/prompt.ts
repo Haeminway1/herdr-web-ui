@@ -2,7 +2,12 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type { HerdrPane, InteractivePrompt, PromptAnswer } from "../shared/protocol.ts";
 import { codexTranscriptPath, paneCodexHome, unansweredCodexQuestions, type QueuedQuestion } from "./codex.ts";
-import { HerdrError, paneRead, paneScrollInfo, paneSendKeys, paneSendText, sessionSnapshot } from "./herdr/client.ts";
+import { HerdrError, nativeSessionSnapshot, paneRead, paneScrollInfo, paneSendKeys, paneSendText } from "./herdr/client.ts";
+import { resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
+import { correctOmoBlockedPanes } from "./omo-status.ts";
+import { gjcTranscriptForPane } from "./gjc-runtime.ts";
+import { gjcAsksAfter } from "./gjc-status.ts";
+import { gjcAskMenu, gjcAskScreen } from "./gjc-prompt.ts";
 import { omoTranscriptForPane } from "./omo.ts";
 import { OmoAskReader, omoAsksAfter, type OmoAskCall, type OmoAsks } from "./omo-ask.ts";
 import { badRequest, errorResponse, jsonResponse } from "./http.ts";
@@ -123,11 +128,14 @@ type Responder =
   | "hermes-question"
   | "hermes-input"
   | "fallback-menu"
+  | "gjc-question"
   | "fallback-gjc-menu"
   | "fallback-keys";
 
 type ParsedPrompt = InteractivePrompt & {
   responder: Responder;
+  /** Verified manager binding; never part of the public prompt schema. */
+  managedBinding?: string;
   /** Stable question identity across the folded widget and the expanded form. */
   omoQuestion?: { call: string; index: number };
   menuLabels: string[];
@@ -2776,19 +2784,21 @@ const answerTurns = new Map<string, number>();
  */
 function asked(paneId: string, prompt: InteractivePrompt | null, turns: number): InteractivePrompt | null {
   let asking = askings.get(paneId);
+  const binding = prompt && parsedByPublicPrompt.get(prompt)?.managedBinding;
+  const content = prompt && (binding ? JSON.stringify([prompt.id, binding]) : prompt.id);
   if (!answersUnderWay.has(paneId) && (answerTurns.get(paneId) ?? 0) === turns) {
     if (prompt === null) {
       if (asking) asking.content = null;
       return null;
     }
-    if (asking?.content !== prompt.id) {
+    if (asking?.content !== content) {
       // kept until its pane closes (readPrompt): a live asking is never dropped to make room
-      asking = { content: prompt.id, n: askingCount += 1, queued: prompt.queued !== undefined };
+      asking = { content, n: askingCount += 1, queued: prompt.queued !== undefined };
       askings.set(paneId, asking);
     }
   }
   if (prompt === null) return null;
-  prompt.id = createHash("sha256").update(JSON.stringify([prompt.id, SERVER_RUN, asking?.n ?? 0])).digest("hex").slice(0, 12);
+  prompt.id = createHash("sha256").update(JSON.stringify([content, SERVER_RUN, asking?.n ?? 0])).digest("hex").slice(0, 12);
   return prompt;
 }
 
@@ -3199,28 +3209,54 @@ export async function claudeHeldIsGrey(paneId: string, prompt: InteractivePrompt
     .then((read) => same(claudeGreyInput(read.text)), () => false);
 }
 
-async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[] }> {
-  const { panes } = await sessionSnapshot();
+async function readPrompt(paneId: string, codexHome?: string, managedDeps?: ManagedSessionDeps): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; screen?: string; pane: HerdrPane; panes: HerdrPane[] }> {
+  const snapshot = await nativeSessionSnapshot();
+  const panes = snapshot.panes.slice();
   // a closed pane's wait has ended too
   for (const logged of fallbackLogged) if (!panes.some((candidate) => candidate.pane_id === logged)) fallbackLogged.delete(logged);
   for (const known of askings.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) askings.delete(known);
   for (const known of answerTurns.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) answerTurns.delete(known);
   for (const known of heldCandidates.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) heldCandidates.delete(known);
   for (const known of chatSent.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) chatSent.delete(known);
-  const pane = panes.find((candidate) => candidate.pane_id === paneId);
-  if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
+  const index = panes.findIndex((candidate) => candidate.pane_id === paneId);
+  if (index < 0) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
+  // Resolve only this pane through the canonical projection, retaining every peer for
+  // transcript uniqueness checks. Menu navigation must not probe unrelated managed runtimes.
+  const original = panes[index]!;
+  const resolution = await resolveManagedSession(original, undefined, managedDeps);
+  const identity = resolution?.identity;
+  const projected = identity ? { ...original, agent: identity.harness, managed_session: identity,
+    agent_session: identity.state === "ready" ? { agent: identity.harness!, kind: "id" as const, source: "herdr-manager", value: identity.session_id! } : null,
+  } : original;
+  const corrected = await correctOmoBlockedPanes([projected], async (target) =>
+    (await paneRead({ paneId: target, source: "visible", format: "text" })).text);
+  const pane = corrected[0]!;
+  panes[index] = pane;
   const agent = pane.agent ?? "";
   const status = pane.agent_status;
   // counted right before the screen is read, after the snapshot: what matters is whether an
   // answer ran while the screen was being read
   const turns = answerTurns.get(paneId) ?? 0;
-  const known = await readKnownPrompt(paneId, pane, agent, codexHome, panes);
+  const managed = pane.managed_session;
+  if (managed && managed.state !== "ready") {
+    fallbackLogged.delete(paneId);
+    return { agent, status, prompt: asked(paneId, null, turns), pane, panes };
+  }
+  const bind = (prompt: InteractivePrompt | null): InteractivePrompt | null => {
+    const parsed = prompt && parsedByPublicPrompt.get(prompt);
+    if (parsed && managed) parsed.managedBinding = JSON.stringify([
+      managed.id, managed.generation, managed.harness, managed.session_id,
+      pane.workspace_id, pane.terminal_id,
+    ]);
+    return asked(paneId, prompt, turns);
+  };
+  const known = await readKnownPrompt(paneId, pane, agent, codexHome, panes, resolution ? { path: resolution.sessionFile } : undefined);
   // an omo form just answered has closed, while herdr still reports the wait for a moment: that
   // is no screen to answer, and its fallback card would flash up after the form's last answer
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
-  if (known.prompt !== null || status !== "blocked" || !agent || settling) {
+  if (known.prompt !== null || known.suppressFallback || status !== "blocked" || !agent || settling) {
     fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes };
+    return { agent, status, prompt: bind(known.prompt), screen: known.screen, pane, panes };
   }
   // herdr says the agent waits on the user and no reader knows the screen: the fallback card
   const screen = known.screen ?? await liveScreen(paneId);
@@ -3229,16 +3265,16 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   // (claudeModelListWaits, codexModelListWaits)
   if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexModelListWaits(screen))) || claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE)) {
     fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, null, turns), pane, panes };
+    return { agent, status, prompt: bind(null), screen, pane, panes };
   }
-  const prompt = asked(paneId, parseFallbackPrompt(agent, screen), turns)!;
+  const prompt = bind(parseFallbackPrompt(agent, screen))!;
   if (!fallbackLogged.has(paneId) && fallbackLogged.size < FALLBACK_LOGGED_MAX) {
     fallbackLogged.add(paneId);
     console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
     // fork: the screen itself, to teach a reader its layout (this machine's log only)
     console.warn(`prompt: fallback screen of ${paneId} (${agent}):\n${screen.replace(ANSI_RE, "").split(/\r?\n/).slice(-40).join("\n")}\n-- end of screen`);
   }
-  return { agent, status, prompt, pane, panes };
+  return { agent, status, prompt, screen, pane, panes };
 }
 
 /**
@@ -3253,6 +3289,24 @@ async function liveScreen(paneId: string): Promise<string> {
 /** omo's form or widget hint: a narrow pane wraps it, including between "just" and "type". */
 const OMO_FORM_RE = /\b1-9\s+select\b|enter\s+save\s+and\s+next|\btab\s+next\s+question\b|\bor\s+just\s+type\s+your\s+reply\b/;
 const omoAskReader = new OmoAskReader();
+const gjcAskReader = new OmoAskReader(gjcAsksAfter);
+
+/** Full logical options from the current call, only when the native dialog proves its page. */
+export function parseGjcAskPrompt(screen: string, asks: OmoAsks, path: string): InteractivePrompt | null {
+  const menu = gjcAskMenu(screen, asks);
+  if (!menu) return null;
+  const call = JSON.stringify([path, menu.call, menu.questionIndex]);
+  return publicPrompt(finishPrompt("gjc", {
+    kind: "question", title: "Question", question: menu.question, body: null,
+    options: menu.labels.map((label) => ({ label, description: null })),
+    multi_select: false, custom_option_index: null,
+  }, {
+    responder: "gjc-question", menuLabels: menu.labels, selectedIndex: menu.selectedIndex,
+    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+    // Other/clarification only enter the native inline editor. No automatic free text.
+    optionSteps: menu.labels.map((_, index) => keySteps([...navigationKeys(index - menu.selectedIndex), KEY.enter])),
+  }, { call }));
+}
 
 /** Resolve the live process tree every time: a cached session can outlive its agent. */
 async function omoAsksFor(paneId: string, cwd: string, panes: HerdrPane[]): Promise<OmoAsk[]> {
@@ -3264,13 +3318,23 @@ async function omoAsksFor(paneId: string, cwd: string, panes: HerdrPane[]): Prom
 
 async function readKnownPrompt(
   paneId: string,
-  pane: { cwd?: string | null; agent_status?: string },
+  pane: { cwd?: string | null; foreground_cwd?: string | null; agent_status?: string },
   agent: string,
   codexHome?: string,
   panes: HerdrPane[] = [],
-): Promise<{ prompt: InteractivePrompt | null; screen?: string }> {
+  gjcSession?: { path: string | null },
+): Promise<{ prompt: InteractivePrompt | null; screen?: string; suppressFallback?: boolean }> {
   if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", ""].includes(agent)) return { prompt: null };
   const screen = await liveScreen(paneId);
+  if (agent === "gjc") {
+    // A managed pane was resolved once above, including its SDK identity. Never resolve it
+    // again just to get the transcript; unmanaged panes retain the exact live SDK lookup.
+    const path = gjcSession ? gjcSession.path : await gjcTranscriptForPane(paneId, pane.foreground_cwd || pane.cwd || "").catch(() => null);
+    let asks: OmoAsks = [];
+    try { if (path) asks = gjcAskReader.read(path); } catch { /* absent or unreadable transcript is no evidence */ }
+    const prompt = path ? parseGjcAskPrompt(screen, asks, path) : null;
+    if (prompt || asks.length > 0 || gjcAskScreen(screen)) return { prompt, screen, suppressFallback: true };
+  }
   // omo's form reads its text from the session's call, the screen showing where the form stands
   const omoAsks = ["omo", "pi", "claude", ""].includes(agent) && pane.cwd && OMO_FORM_RE.test(screen)
     ? await omoAsksFor(paneId, pane.cwd, panes) : [];
@@ -3386,10 +3450,10 @@ const SETTLE_MS = 1_500;
  * step and never the one just answered. A screen that does not move within a second leaves it to
  * the card's next poll.
  */
-async function formMovedOn(paneId: string, answered: string, codexHome?: string): Promise<void> {
+async function formMovedOn(paneId: string, answered: string, codexHome?: string, managedDeps?: ManagedSessionDeps): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await Bun.sleep(50);
-    const prompt = await readPrompt(paneId, codexHome).then((read) => read.prompt, () => null);
+    const prompt = await readPrompt(paneId, codexHome, managedDeps).then((read) => read.prompt, () => null);
     // by what it says: the answer ended that asking, so the same step still on screen has a new id
     if (contentId(prompt) !== answered) return;
   }
@@ -3404,6 +3468,8 @@ export interface PromptRequestOptions {
   serialize?: <T>(paneId: string, task: () => Promise<T>) => Promise<T>;
   /** Native Codex store, for the rollout behind a collapsed queue; defaults to CODEX_HOME */
   codexHome?: string;
+  /** Exact managed runtime identity readers; synthetic fixtures supply inert identities. */
+  managedDeps?: ManagedSessionDeps;
   /** a Claude pane's transcript, for the plan file behind a plan card */
   claudeTranscript?: (paneId: string) => string | null;
   /** the requester can only watch: it gets the screen's card, never the plan file's text or path */
@@ -3432,7 +3498,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       if (request.method !== "GET") return badRequest("method_not_allowed", "GET is required.");
       const paneId = url.searchParams.get("pane_id")?.trim();
       if (!paneId) return badRequest("missing_pane_id", "pane_id is required.");
-      const read = await readPrompt(paneId, options.codexHome);
+      const read = await readPrompt(paneId, options.codexHome, options.managedDeps);
       const { agent, status } = read;
       // `plan=0` is how a connection server asks for a watching device through its PC proxy, which
       // reaches this PC with its own credential: it only ever narrows the answer
@@ -3474,7 +3540,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     const response = await serialize(body.pane_id, async () => {
       // given up while it waited its turn: nothing is read, opened or sent for it
       if (request.signal.aborted) return promptChanged();
-      const { prompt, agent, pane, panes } = await readPrompt(body.pane_id, options.codexHome);
+      const { prompt, agent, pane, panes } = await readPrompt(body.pane_id, options.codexHome, options.managedDeps);
       // a plan card's id carries its plan file's revision: the file as it is now must match too
       if (!prompt || (await withPlanFile(prompt, options.claudeTranscript?.(body.pane_id)))!.id !== body.prompt_id) return promptChanged();
       log.matched = true;
@@ -3490,6 +3556,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // agent back at work), no key of this answer goes out any more, whatever the screen shows.
       const asking = askings.get(body.pane_id)!;
       const asks = (): boolean => askings.get(body.pane_id) === asking && asking.content !== null;
+      const managedBinding = parsedByPublicPrompt.get(prompt)?.managedBinding;
       let target = prompt;
       /** what the card said at the answer's last look: a list drawn as another window by then is another text */
       let lastSeen: string | undefined;
@@ -3521,9 +3588,13 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           while (Date.now() < deadline) {
             if (!asks() || request.signal.aborted) return promptChanged();
             const left = deadline - Date.now();
-            const read = await Promise.race([readKnownPrompt(body.pane_id, pane, agent, options.codexHome, panes), Bun.sleep(left).then(() => null)]);
+            const reading = managedBinding === undefined
+              ? readKnownPrompt(body.pane_id, pane, agent, options.codexHome, panes)
+              : readPrompt(body.pane_id, options.codexHome, options.managedDeps);
+            const read = await Promise.race([reading, Bun.sleep(left).then(() => null)]);
             if (!read || Date.now() > deadline) return promptChanged();
             const parsed = read.prompt && parsedByPublicPrompt.get(read.prompt);
+            if (managedBinding !== undefined && parsed?.managedBinding !== managedBinding) return promptChanged();
             if (parsed?.responder === "omo-question") {
               // Opening a form changes its drawing, but not the call or question it answers.
               const pending = parsedByPublicPrompt.get(prompt)!;
@@ -3548,7 +3619,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         // Claude's unnumbered rows and pi's models are read with no number to aim at: looked at
         // again before the Enter even when it needs no move. So is Claude's model list, picked
         // with a letter: typed after the list has gone, it would stand in the agent's own prompt
-        let moved = responder === "claude-confirm" || responder === "pi-model" || responder === "omo-question" || responder === "claude-model" || responder === "claude-effort" || responder === "codex-model" || responder === "fallback-gjc-menu";
+        let moved = responder === "claude-confirm" || responder === "pi-model" || responder === "omo-question" || responder === "claude-model" || responder === "claude-effort" || responder === "codex-model" || responder === "fallback-gjc-menu" || responder === "gjc-question";
         // Claude's and Codex's model lists: a window on a list, picked with a letter; Claude's effort
         // slider the same way, its levels side by side
         const list = responder === "claude-model" || responder === "claude-effort" || responder === "codex-model";
@@ -3583,18 +3654,23 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
          * not show so within SETTLE_MS.
          */
         const onRow = async (): Promise<boolean> => {
-          const deadline = Date.now() + SETTLE_MS;
+          // A fresh GJC SDK identity lookup can itself exceed the screen-only settle window.
+          const deadline = Date.now() + (managedBinding !== undefined || responder === "gjc-question" ? 8_000 : SETTLE_MS);
           for (;;) {
             // nobody waits for this answer any more: nothing that cannot be undone is started
             if (!asks() || request.signal.aborted) return false;
             const left = deadline - Date.now();
             if (left <= 0) return false;
             // a read that outlasts the wait is no read
-            const reading = readKnownPrompt(body.pane_id, pane, agent, options.codexHome, panes);
+            const reading = managedBinding === undefined && responder !== "gjc-question"
+              ? readKnownPrompt(body.pane_id, pane, agent, options.codexHome, panes)
+              : readPrompt(body.pane_id, options.codexHome, options.managedDeps);
             reading.catch(() => undefined);
             const read = await Promise.race([reading, Bun.sleep(left).then(() => null)]);
             if (!read || Date.now() > deadline) return false;
             const shown = read.prompt ? parsedByPublicPrompt.get(read.prompt) ?? null : null;
+            if (shown?.managedBinding !== managedBinding) return false;
+            if ((managedBinding !== undefined || responder === "gjc-question") && shown && shown.id !== parsed.id) return false;
             if (asks() && aimed(shown, read.screen ?? "")) { looked(shown); return true; }
             await Bun.sleep(50);
           }
@@ -3610,7 +3686,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           // keys to the agent's own prompt, where an arrow walks the prompt's history: each move
           // after the first goes only once the list shows the one before it
           // GJC's selector the same: dismissed under the answer, its composer would take the moves
-          if (move && walked && (list || responder === "fallback-gjc-menu") && !(await onRow())) return promptChanged();
+          if (move && (walked || responder === "gjc-question") && (list || responder === "fallback-gjc-menu" || responder === "gjc-question") && !(await onRow())) return promptChanged();
           if (!move && !committed) {
             // An answer is only as good as the menu and the cursor it moves from, and both are
             // as old as the read above by the time its moves are done: the menu answered in the
@@ -3681,7 +3757,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     });
     // the wait for the form's next step only reads the pane: after the pane's turn, so a message
     // queued for it meanwhile is not held up behind the polls
-    if (form.answered !== undefined) await formMovedOn(body.pane_id, form.answered, options.codexHome);
+    if (form.answered !== undefined) await formMovedOn(body.pane_id, form.answered, options.codexHome, options.managedDeps);
     await logAnswer(log, response);
     return response;
   } catch (error) {

@@ -81,6 +81,8 @@ export function omoAsksAfter(open: OmoAsks, entry: Entry): OmoAsks {
 export class OmoAskReader {
   private files = new Map<string, { id: string; size: number; mtime: number; offset: number; asks: OmoAsks }>();
 
+  constructor(private readonly reduce: (open: OmoAsks, entry: Entry) => OmoAsks = omoAsksAfter) {}
+
   read(path: string): OmoAsks {
     const fd = openSync(path, "r");
     try {
@@ -93,7 +95,10 @@ export class OmoAskReader {
       state.offset = readOmoLines(fd, state.offset, stat.size, (line) => {
         const text = "text" in line ? line.text : line.record;
         if (text === undefined) return;
-        try { state!.asks = omoAsksAfter(state!.asks, JSON.parse(text)); } catch { /* partial or invalid record */ }
+        try {
+          const entry: unknown = JSON.parse(text);
+          if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) state!.asks = this.reduce(state!.asks, entry);
+        } catch { /* partial or invalid record */ }
       });
       state.size = stat.size;
       state.mtime = stat.mtimeMs;

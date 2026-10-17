@@ -1,13 +1,173 @@
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { InteractivePrompt } from "../shared/protocol.ts";
+import type { HerdrPane, InteractivePrompt } from "../shared/protocol.ts";
+import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
+import type { ManagedSessionDeps } from "./managed-sessions.ts";
+import { OmoAskReader, type OmoAsks } from "./omo-ask.ts";
+import { gjcAsksAfter } from "./gjc-status.ts";
+import { gjcAskMenu } from "./gjc-prompt.ts";
 
-import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, modelListWaits, openOmoAsks, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, modelListWaits, openOmoAsks, parseClaudeSuggestion, parseFallbackPrompt, parseGjcAskPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
 
 const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
+const gjcQuestion = "어떤 방식을 선택할까요?";
+const gjcChoices = [
+  "현재 동작을 유지하면서 긴 한국어 선택지를 여러 줄에 걸쳐 정확하게 표시합니다",
+  "이름이 매우 길어서 비선택 상태에서는 말줄임표로 잘리는 두 번째 선택지",
+  "취소",
+];
+const gjcOther = "Other (type your own)";
+const gjcQuestions = (question = gjcQuestion, options = gjcChoices, extra: Record<string, unknown> = {}) => [
+  { question, options: options.map((label) => ({ label })), ...extra },
+];
+const gjcAskRecord = (id = "gjc-ask-1", questions: unknown = gjcQuestions(), extra: Record<string, unknown> = {}) => JSON.stringify({
+  type: "message", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "ask", id, arguments: { questions }, ...extra }] },
+}) + "\n";
+const gjcResultRecord = (id = "gjc-ask-1", isError = false) => JSON.stringify({
+  type: "message", message: { role: "toolResult", toolCallId: id, isError, content: [] },
+}) + "\n";
+const gjcOpen = (questions: unknown = gjcQuestions(), id = "gjc-ask-1"): OmoAsks => [{ id, wait: true, args: { questions } }];
+
+// Synthetic fixtures derived from public GJC 0.18.12 HookSelector/FocusAwareList and ask.
+// No native renderer or model is invoked. Only focus wraps; siblings truncate to one row.
+function gjcFixtureWrap(text: string, width: number): string[] {
+  const rows: string[] = [];
+  let part = "";
+  for (const char of text) {
+    if (Bun.stringWidth(part + char) > width) {
+      const space = part.lastIndexOf(" ");
+      rows.push((space > 0 ? part.slice(0, space) : part).trim());
+      part = space > 0 ? part.slice(space + 1) : "";
+    }
+    part += char;
+  }
+  rows.push(part.trim());
+  return rows.filter(Boolean);
+}
+
+function gjcNativeDialog(rows: string[], title = gjcQuestion, width = 24, pages = false): string {
+  const border = "─".repeat(width);
+  const footer = `↑/↓ select  enter${pages ? "  ←/→ question" : ""}  esc  PgUp/PgDn/Ctrl+u/d: question · Wheel: transcript`;
+  // Text pads one column on either side. At 24 columns its footer exceeds three rows.
+  const physical = gjcFixtureWrap(footer, width - 2).map((line) => ` ${line}`);
+  return [border, "", ...gjcFixtureWrap(title, width - 2).map((line) => ` ${line}`), "", border,
+    ...rows.map((row) => `│${row}${" ".repeat(Math.max(0, width - 2 - Bun.stringWidth(row)))}│`),
+    border, "", ...physical, "", border, ""].join("\n");
+}
+
+function gjcNativeChoices(at = 0, options = gjcChoices, question = gjcQuestion, width = 24): string {
+  const limit = width - 4;
+  const truncate = (label: string) => {
+    if (Bun.stringWidth(label) <= limit) return label;
+    let prefix = "";
+    for (const char of label) {
+      if (Bun.stringWidth(prefix + char + "…") > limit) break;
+      prefix += char;
+    }
+    return prefix + "…";
+  };
+  const rows: string[] = [];
+  for (const [index, label] of [...options, gjcOther].entries()) {
+    if (index !== at) { rows.push(`  ${truncate(label)}`); continue; }
+    const wrapped = gjcFixtureWrap(label, limit);
+    wrapped.forEach((text, row) => rows.push(`${row === 0 ? "❯ " : "  "}${text.trimStart()}`));
+  }
+  return gjcNativeDialog(rows, question, width);
+}
+
+describe("GJC transcript-backed native asks", () => {
+  test("reconstructs full logical Korean options instead of physical focused wrap rows", () => {
+    const screen = gjcNativeChoices();
+    const prompt = parseGjcAskPrompt(screen, gjcOpen(), "/synthetic/session.jsonl")!;
+    expect(prompt).not.toBeNull();
+    expect(prompt.kind).toBe("question");
+    expect(prompt.fallback).toBeUndefined();
+    expect(labels(prompt)).toEqual([...gjcChoices, gjcOther]);
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+    const moved = parseGjcAskPrompt(gjcNativeChoices(2), gjcOpen(), "/synthetic/session.jsonl")!;
+    expect(moved.id).toBe(prompt.id);
+    expect(answerKeys(moved, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["up"] }, { keys: ["enter"] }]);
+    expect(() => answerKeys(prompt, { custom_text: "never send this to a vanished dialog" })).toThrow();
+    const timed = parseGjcAskPrompt(gjcNativeChoices(0, gjcChoices, `${gjcQuestion} (12s)`), gjcOpen(), "/synthetic/session.jsonl")!;
+    expect(timed.id).toBe(prompt.id);
+  });
+
+  test("uses exact viewport position plus focused label and truncated siblings", () => {
+    const options = ["First", "Second option with a very long label", "Third", "Fourth", "Fifth"];
+    const screen = gjcNativeDialog(["  Second option with a very long …", "❯ Third", "  Fourth", "  (3/6)"], "Pick one", 36);
+    const menu = gjcAskMenu(screen, gjcOpen(gjcQuestions("Pick one", options)));
+    expect(menu?.labels).toEqual([...options, gjcOther]);
+    expect(menu?.selectedIndex).toBe(2);
+    expect(gjcAskMenu(screen.replace("(3/6)", "(2/6)"), gjcOpen(gjcQuestions("Pick one", options)))).toBeNull();
+    expect(gjcAskMenu(screen.replace("(3/6)", "(3/7)"), gjcOpen(gjcQuestions("Pick one", options)))).toBeNull();
+    expect(gjcAskMenu(screen.replace("Third", "Wrong"), gjcOpen(gjcQuestions("Pick one", options)))).toBeNull();
+  });
+
+  test("includes only actual automatic Other and numbered clarification controls", () => {
+    const questions = gjcQuestions("Choose a route", ["Fast", "Careful"], { deepInterview: {}, recommended: 1 });
+    const expected = ["1. Fast", "2. Careful (Recommended)", "3. Other (type your own)", "4. Ask about these choices"];
+    const screen = gjcNativeDialog(expected.map((label, index) => `${index === 1 ? "❯ " : "  "}${label}`), "Choose a route", 64);
+    const prompt = parseGjcAskPrompt(screen, gjcOpen(questions), "/synthetic/numbered.jsonl")!;
+    expect(labels(prompt)).toEqual(expected);
+    expect(answerKeys(prompt, { option_index: 3 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+    expect(parseGjcAskPrompt(screen, gjcOpen(gjcQuestions("Choose a route", ["Fast", "Careful"])), "/synthetic/ordinary.jsonl")).toBeNull();
+  });
+
+  test("requires the exact question page even when pages have identical labels and questions", () => {
+    const questions = [...gjcQuestions("Same?", ["Yes", "No"]), ...gjcQuestions("Same?", ["Yes", "No"])];
+    const screen = (title: string) => gjcNativeDialog(["❯ Yes", "  No", `  ${gjcOther}`], title, 36, true);
+    const first = parseGjcAskPrompt(screen("Same? (1/2)"), gjcOpen(questions), "/synthetic/pages.jsonl")!;
+    const second = parseGjcAskPrompt(screen("Same? (2/2)"), gjcOpen(questions), "/synthetic/pages.jsonl")!;
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(second.id).not.toBe(first.id);
+    expect(parseGjcAskPrompt(screen("Same?"), gjcOpen(questions), "/synthetic/pages.jsonl")).toBeNull();
+  });
+
+  test("refuses malformed, ambiguous, mismatching, inline-editor and unproven multi-select states", () => {
+    const screen = gjcNativeChoices();
+    for (const questions of [null, [], [{ question: gjcQuestion, options: [null] }], gjcQuestions(gjcQuestion, gjcChoices, { multi: true }), gjcQuestions(gjcQuestion, gjcChoices, { multi: "yes" })]) {
+      expect(gjcAskMenu(screen, gjcOpen(questions))).toBeNull();
+    }
+    expect(gjcAskMenu(screen, [...gjcOpen(), ...gjcOpen(gjcQuestions(), "second-open-call")])).toBeNull();
+    expect(gjcAskMenu(screen.replace("어떤", "다른"), gjcOpen())).toBeNull();
+    expect(gjcAskMenu(screen.replace("❯ ", "  "), gjcOpen())).toBeNull();
+    expect(gjcAskMenu(screen + "❯ composer\n", gjcOpen())).toBeNull();
+    expect(gjcAskMenu(screen.replace("PgUp/PgDn", "changed keys"), gjcOpen())).toBeNull();
+    expect(gjcAskMenu(gjcNativeDialog(["❯ First", "  … 8 wrapped rows omitted …", "  (1/4)"]), gjcOpen())).toBeNull();
+    const editor = screen.slice(0, screen.lastIndexOf("\n─")) + "\n> local draft\nenter submit  esc back to options  ctrl+g external editor\n" + "─".repeat(36);
+    expect(gjcAskMenu(editor, gjcOpen())).toBeNull();
+  });
+
+  test("shares incremental pending-call semantics including partial lines, large records and error results", () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-gjc-ask-reader-"));
+    try {
+      const path = join(root, "fixture.jsonl");
+      const reader = new OmoAskReader(gjcAsksAfter);
+      writeFileSync(path, 'null\n[null]\n{"type":"message","message":null}\n' + gjcAskRecord("incomplete", gjcQuestions(), { incomplete: true }));
+      expect(reader.read(path)).toEqual([]);
+      const record = gjcAskRecord().trimEnd();
+      appendFileSync(path, record);
+      expect(reader.read(path)).toEqual([]);
+      appendFileSync(path, "\n");
+      expect(reader.read(path).map((call) => call.id)).toEqual(["gjc-ask-1"]);
+      appendFileSync(path, JSON.stringify({ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "thinking", thinking: "x".repeat(180_000) }] } }) + "\n" + gjcResultRecord("unrelated"));
+      expect(reader.read(path).map((call) => call.id)).toEqual(["gjc-ask-1"]);
+      appendFileSync(path, gjcResultRecord("gjc-ask-1", true));
+      expect(reader.read(path)).toEqual([]);
+      appendFileSync(path, gjcAskRecord("gjc-ask-2"));
+      expect(reader.read(path).map((call) => call.id)).toEqual(["gjc-ask-2"]);
+      appendFileSync(path, gjcResultRecord("gjc-ask-2") + gjcAskRecord("large-envelope").replace('"content":[', `"content":[{"type":"thinking","thinking":"${"x".repeat(180_000)}"},`));
+      expect(reader.read(path).map((call) => call.id)).toEqual(["large-envelope"]);
+      expect(gjcAskMenu(gjcNativeChoices(), reader.read(path))?.labels).toEqual([...gjcChoices, gjcOther]);
+      appendFileSync(path, gjcResultRecord("large-envelope") + gjcAskRecord("oversized", gjcQuestions(gjcQuestion, ["x".repeat(80_000), "Short"])));
+      expect(gjcAskMenu(gjcNativeChoices(1, ["x".repeat(80_000), "Short"]), reader.read(path))).toBeNull();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
 // Real omo-ai 5.1.30 pane.read captures at 120 and 45 columns, with the recorded open calls.
 const omoPendingFixture = (name: string) => readFileSync(new URL(`./fixtures/omo-pending-5.1.30-${name}`, import.meta.url), "utf8");
 const omoExtensionTail = omoPendingFixture("extension-tail.txt");
@@ -3284,7 +3444,9 @@ describe("Codex's model lists", () => {
 // change, between two reads or under an answer's own keys, and every key the route sends is kept.
 describe("an answer and the menu it was made for", () => {
   interface Pane {
-    agent: string; status: string; screen: string; sent: string[]; onSent?: (sent: string) => void;
+    agent: string | null; status: string; screen: string; sent: string[]; onSent?: (sent: string) => void;
+    metadata?: Partial<HerdrPane>;
+    peers?: Partial<HerdrPane>[];
     /** the pane's folder and its Codex rollout, for a prompt named by the agent's own call */
     cwd?: string; rollout?: string;
     /** how long herdr takes over each screen read from now on */
@@ -3306,7 +3468,7 @@ describe("an answer and the menu it was made for", () => {
     omo?: { pid: number; path: string; live: boolean };
   }
 
-  async function withPane(agent: string, status: string, screen: string, run: (pane: Pane) => Promise<void>): Promise<void> {
+  async function withPane(agent: string | null, status: string, screen: string, run: (pane: Pane) => Promise<void>): Promise<void> {
     const root = mkdtempSync(join(tmpdir(), "herdr-prompt-answer-"));
     const path = join(root, "herdr.sock");
     const pane: Pane = { agent, status, screen, sent: [], root };
@@ -3323,7 +3485,7 @@ describe("an answer and the menu it was made for", () => {
         const answer = (result: unknown) => socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
         const snapshotDelay = request.method === "session.snapshot" ? pane.nextSnapshotDelay : undefined;
         if (snapshotDelay !== undefined) pane.nextSnapshotDelay = undefined;
-        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}) })), layouts: [] } }), snapshotDelay ?? 0);
+        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}), ...(index === 0 ? pane.metadata : pane.peers?.[index - 1]) })), layouts: [] } }), snapshotDelay ?? 0);
         if (request.method === "pane.read") {
           pane.onRead?.();
           const once = pane.nextRead;
@@ -3357,14 +3519,14 @@ describe("an answer and the menu it was made for", () => {
     }
   }
 
-  async function card(codexHome?: string, paneId = "p_1"): Promise<InteractivePrompt | null> {
+  async function card(codexHome?: string, paneId = "p_1", managedDeps?: ManagedSessionDeps): Promise<InteractivePrompt | null> {
     const url = new URL(`http://127.0.0.1/api/pane/prompt?pane_id=${paneId}`);
-    return ((await (await handlePromptRequest(new Request(url), url, { codexHome }))!.json()) as { prompt: InteractivePrompt | null }).prompt;
+    return ((await (await handlePromptRequest(new Request(url), url, { codexHome, managedDeps }))!.json()) as { prompt: InteractivePrompt | null }).prompt;
   }
 
-  async function answer(promptId: string, choice: { option_index?: number; option_indices?: number[]; custom_text?: string }, more: { signal?: AbortSignal; codexHome?: string } = {}): Promise<{ status: number; code?: string }> {
+  async function answer(promptId: string, choice: { option_index?: number; option_indices?: number[]; custom_text?: string }, more: { signal?: AbortSignal; codexHome?: string; managedDeps?: ManagedSessionDeps } = {}): Promise<{ status: number; code?: string }> {
     const url = new URL("http://127.0.0.1/api/pane/prompt/answer");
-    const response = (await handlePromptRequest(new Request(url, { method: "POST", signal: more.signal, body: JSON.stringify({ pane_id: "p_1", prompt_id: promptId, ...choice }) }), url, { codexHome: more.codexHome }))!;
+    const response = (await handlePromptRequest(new Request(url, { method: "POST", signal: more.signal, body: JSON.stringify({ pane_id: "p_1", prompt_id: promptId, ...choice }) }), url, { codexHome: more.codexHome, managedDeps: more.managedDeps }))!;
     const body = await response.json() as { error?: { code: string } };
     return { status: response.status, code: body.error?.code };
   }
@@ -3624,6 +3786,365 @@ ${heldRule}
   const DELETE = ["Keep the branch", "Delete the branch", "Quit"];
   const gjcSelector = (at = 0, rows = ["OpenAI-compatible", "Anthropic-compatible"]) =>
     `Step 1: Compatibility\n\n${rows.map((row, index) => `${index === at ? "❯" : " "} ${row}`).join("\n")}\n[↑↓ to navigate, Enter to select, Esc to cancel]\n`;
+
+  interface ManagedGjcFixture {
+    namespace: string;
+    record: Record<string, unknown>;
+    live: GjcSdkSessionIdentity;
+    queried: number[];
+    sdkQueries: number[][];
+    save: () => void;
+    card: () => Promise<InteractivePrompt | null>;
+    answer: (id: string, index: number) => ReturnType<typeof answer>;
+  }
+
+  async function withManagedGjc(run: (pane: Pane, managed: ManagedGjcFixture) => Promise<void>, sdkDelay = 0): Promise<void> {
+    await withPane(null, "unknown", gjcSelector(), async (pane) => {
+      const namespace = join(pane.root, "managed");
+      const nonce = "0123456789abcdef0123456789abcdef";
+      const child = { pid: 42, starttime: "123", boot: "fixture-boot", cwd: pane.root };
+      const live: GjcSdkSessionIdentity = { sessionId: "managed-fixture-session", pid: 42, hostIncarnation: "linux:123", endpointGeneration: 1 };
+      const record: Record<string, unknown> = {
+        schema: 2, nonce, generation: 1, harness: "gjc", launcher_harness: "gjc",
+        cwd: pane.root, pane_id: "p_1", workspace_id: "fixture-workspace", terminal_id: "fixture-terminal",
+        desired_state: "running", state: "ready", session_id: live.sessionId, child, env: {},
+      };
+      pane.cwd = pane.root;
+      pane.metadata = { workspace_id: "fixture-workspace", terminal_id: "fixture-terminal", tokens: { hm_managed_session: nonce, hm_managed_generation: "1" } };
+      const save = (): void => {
+        const directory = join(namespace, `${record.nonce}.sessions`);
+        mkdirSync(directory, { recursive: true, mode: 0o700 });
+        const path = join(directory, "exact.jsonl");
+        writeFileSync(path, JSON.stringify({ type: "session", id: record.session_id, cwd: pane.root }) + "\n", { mode: 0o600 });
+        const info = statSync(path);
+        record.session_dir = directory;
+        record.session_file = path;
+        record.file_identity = { dev: info.dev, ino: info.ino };
+        writeFileSync(join(namespace, `${record.nonce}.json`), JSON.stringify(record), { mode: 0o600 });
+      };
+      save();
+      const queried: number[] = [];
+      const sdkQueries: number[][] = [];
+      const deps: ManagedSessionDeps = {
+        processIdentity: (pid) => { queried.push(pid); return pid === child.pid ? { ...child } : null; },
+        // fixed wait: reproduce SDK identity latency exceeding the screen-only settling budget
+        gjcSession: async (pids) => { sdkQueries.push([...pids]); if (sdkDelay > 0) await Bun.sleep(sdkDelay); return { ...live }; },
+      };
+      const previous = process.env.HERDR_MANAGED_NAMESPACE;
+      process.env.HERDR_MANAGED_NAMESPACE = namespace;
+      try {
+        await run(pane, {
+          namespace, record, live, queried, sdkQueries, save,
+          card: () => card(undefined, "p_1", deps),
+          answer: (id, index) => answer(id, { option_index: index }, { managedDeps: deps }),
+        });
+      } finally {
+        if (previous === undefined) delete process.env.HERDR_MANAGED_NAMESPACE;
+        else process.env.HERDR_MANAGED_NAMESPACE = previous;
+      }
+    });
+  }
+
+  test("HTTP shows the live pending Korean ask before blocked status, with logical moves and one identity lookup per read", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      pane.screen = gjcNativeChoices();
+      appendFileSync(String(managed.record.session_file), gjcAskRecord());
+      const prompt = (await managed.card())!;
+      expect(pane.status).toBe("unknown");
+      expect(prompt.kind).toBe("question");
+      expect(labels(prompt)).toEqual([...gjcChoices, gjcOther]);
+      expect(managed.sdkQueries).toHaveLength(1);
+      expect((await managed.card())!.id).toBe(prompt.id);
+      expect(managed.sdkQueries).toHaveLength(2);
+      let at = 0;
+      pane.onSent = (sent) => {
+        if (sent === "down") pane.screen = gjcNativeChoices(++at);
+      };
+      expect(await managed.answer(prompt.id, 2)).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "down", "enter"]);
+    });
+  });
+
+  test("HTTP permits fresh SDK identity checks slower than screen settling", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      pane.screen = gjcNativeChoices();
+      appendFileSync(String(managed.record.session_file), gjcAskRecord());
+      const prompt = (await managed.card())!;
+      expect(await managed.answer(prompt.id, 0)).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["enter"]);
+    }, 1_600);
+  }, 15_000);
+
+  test("HTTP follows logical indices across a native viewport change", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      const options = ["First", "Second option with a very long label", "Third", "Fourth", "Fifth"];
+      appendFileSync(String(managed.record.session_file), gjcAskRecord("viewport", gjcQuestions("Pick one", options)));
+      pane.screen = gjcNativeDialog(["  Second option with a very long …", "❯ Third", "  Fourth", "  (3/6)"], "Pick one", 36);
+      const prompt = (await managed.card())!;
+      expect(labels(prompt)).toEqual([...options, gjcOther]);
+      pane.onSent = (sent) => {
+        if (sent === "down") pane.screen = gjcNativeDialog(["  Third", "❯ Fourth", "  Fifth", "  (4/6)"], "Pick one", 36);
+      };
+      expect(await managed.answer(prompt.id, 3)).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "enter"]);
+    });
+  });
+
+  test.each([false, true])("HTTP rejects a settled ask's old card (error result: %s), even when an identical question is reasked", async (isError) => {
+    await withManagedGjc(async (pane, managed) => {
+      const path = String(managed.record.session_file);
+      appendFileSync(path, gjcAskRecord());
+      pane.screen = gjcNativeChoices();
+      const prompt = (await managed.card())!;
+      appendFileSync(path, gjcResultRecord("gjc-ask-1", isError));
+      expect(await managed.answer(prompt.id, 0)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(await managed.card()).toBeNull();
+      expect(pane.sent).toEqual([]);
+      appendFileSync(path, gjcAskRecord("gjc-ask-2"));
+      const reasked = (await managed.card())!;
+      expect(labels(reasked)).toEqual(labels(prompt));
+      expect(reasked.id).not.toBe(prompt.id);
+      expect(await managed.answer(prompt.id, 0)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test("HTTP rejects an identical reasked call even with no poll between settlement and reask", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      const path = String(managed.record.session_file);
+      appendFileSync(path, gjcAskRecord());
+      pane.screen = gjcNativeChoices();
+      const prompt = (await managed.card())!;
+      appendFileSync(path, gjcResultRecord() + gjcAskRecord("immediately-reasked"));
+      expect(await managed.answer(prompt.id, 0)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+      const current = (await managed.card())!;
+      expect(labels(current)).toEqual(labels(prompt));
+      expect(current.id).not.toBe(prompt.id);
+    });
+  });
+
+  test.each(["call", "generation", "closed", "composer"] as const)("HTTP stops after one logical move if the GJC %s changes", async (change) => {
+    await withManagedGjc(async (pane, managed) => {
+      appendFileSync(String(managed.record.session_file), gjcAskRecord());
+      pane.screen = gjcNativeChoices();
+      const prompt = (await managed.card())!;
+      pane.onSent = (sent) => {
+        if (sent !== "down") return;
+        pane.screen = gjcNativeChoices(1);
+        if (change === "generation") {
+          managed.record.generation = 2;
+          pane.metadata!.tokens!.hm_managed_generation = "2";
+          managed.save();
+          appendFileSync(String(managed.record.session_file), gjcAskRecord());
+        } else if (change === "composer") pane.screen = "Ready\n❯ composer\n";
+        else {
+          appendFileSync(String(managed.record.session_file), gjcResultRecord());
+          if (change === "call") appendFileSync(String(managed.record.session_file), gjcAskRecord("replacement-call"));
+        }
+      };
+      expect(await managed.answer(prompt.id, 2)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down"]);
+    });
+  });
+
+  test("HTTP rejects an identical pending ask after a managed generation change before sending any key", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      appendFileSync(String(managed.record.session_file), gjcAskRecord());
+      pane.screen = gjcNativeChoices();
+      const prompt = (await managed.card())!;
+      managed.record.generation = 2;
+      pane.metadata!.tokens!.hm_managed_generation = "2";
+      managed.save();
+      appendFileSync(String(managed.record.session_file), gjcAskRecord());
+      expect(await managed.answer(prompt.id, 0)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test.each(["mismatch", "malformed", "multi", "ambiguous", "incomplete"])("HTTP never falls back to physical-row buttons for a %s pending ask", async (kind) => {
+    await withManagedGjc(async (pane, managed) => {
+      pane.status = "blocked";
+      pane.screen = gjcNativeChoices();
+      const questions = kind === "malformed" ? [{ question: gjcQuestion, options: [null] }]
+        : gjcQuestions(kind === "mismatch" ? "A different question?" : gjcQuestion, gjcChoices, kind === "multi" ? { multi: true } : {});
+      appendFileSync(String(managed.record.session_file), gjcAskRecord("first", questions, kind === "incomplete" ? { incomplete: true } : {}));
+      if (kind === "ambiguous") appendFileSync(String(managed.record.session_file), gjcAskRecord("second", questions));
+      expect(await managed.card()).toBeNull();
+      expect(await managed.answer("not-an-actionable-card", 0)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test("HTTP Other only opens the native editor, and never sends free text after the selector is lost", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      appendFileSync(String(managed.record.session_file), gjcAskRecord());
+      pane.screen = gjcNativeChoices();
+      const prompt = (await managed.card())!;
+      let at = 0;
+      pane.onSent = (sent) => {
+        if (sent === "down") pane.screen = gjcNativeChoices(++at);
+        if (sent === "enter") pane.screen = "Native custom input\n> local draft\nenter submit  esc back to options  ctrl+g external editor\n";
+      };
+      expect(await managed.answer(prompt.id, 3)).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "down", "down", "enter"]);
+      expect(await managed.card()).toBeNull();
+      expect(await managed.answer(prompt.id, 0)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent.some((sent) => sent.startsWith("text:"))).toBe(false);
+    });
+  });
+
+  test("HTTP preserves a startup selector below historical ask output when no call is pending", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      pane.screen = gjcNativeChoices() + gjcSelector();
+      const prompt = (await managed.card())!;
+      expect(labels(prompt)).toEqual(["OpenAI-compatible", "Anthropic-compatible", "Esc"]);
+      pane.onSent = (sent) => { if (sent === "down") pane.screen = gjcNativeChoices() + gjcSelector(1); };
+      expect(await managed.answer(prompt.id, 1)).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "enter"]);
+    });
+  });
+
+  test.each([null, "unknown", "codex"])("projects a ready managed GJC over native agent %s and confirms its moved selection", async (agent) => {
+    await withManagedGjc(async (pane, managed) => {
+      pane.agent = agent;
+      const prompt = (await managed.card())!;
+      expect(prompt.agent).toBe("gjc");
+      expect(labels(prompt)).toEqual(["OpenAI-compatible", "Anthropic-compatible", "Esc"]);
+      expect(JSON.stringify(prompt)).not.toContain("managedBinding");
+      expect((await managed.card())!.id).toBe(prompt.id);
+      pane.onSent = (sent) => { if (sent === "down") pane.screen = gjcSelector(1); };
+      expect(await managed.answer(prompt.id, 1)).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "enter"]);
+    });
+  });
+
+  test.each(["identity_pending", "blocked"])("does not act on a %s managed identity's old GJC screen", async (state) => {
+    await withManagedGjc(async (pane, managed) => {
+      const prompt = (await managed.card())!;
+      pane.agent = "gjc";
+      pane.status = "blocked";
+      managed.record.state = state;
+      managed.save();
+      expect(await managed.card()).toBeNull();
+      expect(await managed.answer(prompt.id, 0)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test("refuses a declared managed pane whose exact native session disagrees", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      pane.agent = "gjc";
+      pane.status = "blocked";
+      managed.live.sessionId = "another-fixture-session";
+      expect(await managed.card()).toBeNull();
+      expect(await managed.answer("stale-fixture-card", 0)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test("keeps unmanaged GJC navigation but never reuses a managed card after its tokens disappear", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      const prompt = (await managed.card())!;
+      pane.agent = "gjc";
+      pane.metadata!.tokens = {};
+      expect(await managed.answer(prompt.id, 1)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+      const unmanaged = (await managed.card())!;
+      expect(labels(unmanaged)).toEqual(labels(prompt));
+      pane.onSent = (sent) => { if (sent === "down") pane.screen = gjcSelector(1); };
+      expect(await managed.answer(unmanaged.id, 1)).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "enter"]);
+    });
+  });
+
+  test.each(["nonce", "generation", "session_id", "terminal_id"] as const)("scopes an identical managed menu to its %s before any answer input", async (field) => {
+    await withManagedGjc(async (pane, managed) => {
+      const prompt = (await managed.card())!;
+      if (field === "nonce") {
+        managed.record.nonce = "f".repeat(32);
+        pane.metadata!.tokens!.hm_managed_session = managed.record.nonce;
+      } else if (field === "generation") {
+        managed.record.generation = 2;
+        pane.metadata!.tokens!.hm_managed_generation = "2";
+      } else if (field === "session_id") {
+        managed.record.session_id = "replacement-fixture-session";
+        managed.live.sessionId = String(managed.record.session_id);
+      } else {
+        managed.record.terminal_id = "replacement-fixture-terminal";
+        pane.metadata!.terminal_id = String(managed.record.terminal_id);
+      }
+      managed.save();
+      expect(await managed.answer(prompt.id, 1)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+      const replacement = (await managed.card())!;
+      expect(labels(replacement)).toEqual(labels(prompt));
+      expect(replacement.id).not.toBe(prompt.id);
+      expect(await managed.answer(replacement.id, 0)).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["enter"]);
+    });
+  });
+
+  test.each(["replacement", "identity_pending", "blocked"])("stops managed GJC confirmation after navigation encounters %s", async (change) => {
+    await withManagedGjc(async (pane, managed) => {
+      const prompt = (await managed.card())!;
+      pane.onSent = (sent) => {
+        if (sent !== "down") return;
+        pane.screen = gjcSelector(1);
+        if (change === "replacement") {
+          managed.record.generation = 2;
+          pane.metadata!.tokens!.hm_managed_generation = "2";
+        } else managed.record.state = change;
+        managed.save();
+      };
+      expect(await managed.answer(prompt.id, 1)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down"]);
+    });
+  });
+
+  test("retains managed GJC screen and cursor guards during an answer", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      const prompt = (await managed.card())!;
+      pane.onSent = (sent) => { if (sent === "down") pane.screen = gjcSelector(1, ["Resume", "Delete"]); };
+      expect(await managed.answer(prompt.id, 1)).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down"]);
+    });
+  });
+
+  test("does not resolve an unrelated managed runtime on prompt reads or arrow navigation", async () => {
+    await withManagedGjc(async (pane, managed) => {
+      const nonce = "e".repeat(32);
+      const directory = join(managed.namespace, `${nonce}.sessions`);
+      mkdirSync(directory, { mode: 0o700 });
+      const path = join(directory, "peer.jsonl");
+      writeFileSync(path, JSON.stringify({ type: "session", id: "peer-fixture-session", cwd: pane.root }) + "\n", { mode: 0o600 });
+      const info = statSync(path);
+      writeFileSync(join(managed.namespace, `${nonce}.json`), JSON.stringify({ ...managed.record,
+        nonce, pane_id: "p_2", terminal_id: "peer-terminal", session_id: "peer-fixture-session",
+        session_dir: directory, session_file: path, file_identity: { dev: info.dev, ino: info.ino },
+        child: { pid: 43, starttime: "456", boot: "fixture-boot", cwd: pane.root },
+      }), { mode: 0o600 });
+      pane.more = 1;
+      pane.peers = [{ workspace_id: "fixture-workspace", terminal_id: "peer-terminal", tokens: { hm_managed_session: nonce, hm_managed_generation: "1" } }];
+      const rows = ["First", "Second", "Third"];
+      pane.screen = gjcSelector(0, rows);
+      let at = 0;
+      pane.onSent = (sent) => { if (sent === "down") pane.screen = gjcSelector(++at, rows); };
+      expect(await managed.answer((await managed.card())!.id, 2)).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "down", "enter"]);
+      expect(managed.queried.length).toBeGreaterThan(0);
+      expect(managed.queried.every((pid) => pid === 42)).toBe(true);
+    });
+  });
+
+  test("preserves unmanaged OmO working-footer correction rather than offering a fallback answer", async () => {
+    const screen = "Fixture output\n──── • Working (2s • esc to interrupt) ────\n❯\nOMO Native\n";
+    await withPane("omo", "blocked", screen, async (pane) => {
+      expect(await card()).toBeNull();
+      expect(await answer("stale-fixture-card", { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
+  });
 
   /** the pane as a menu would run it: ↓ and ↑ move the cursor, and the screen shows it */
   function moving(pane: Pane, rows: string[], draw: (at: number) => string = (at) => menu(rows, at), start = 0): void {
