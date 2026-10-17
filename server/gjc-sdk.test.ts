@@ -2,7 +2,9 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import {
+  gjcSdkCurrentSessionWithRunner as sdkCurrentSessionWithRunner,
   gjcSdkTranscriptWithRunner as sdkTranscriptWithRunner,
   type GjcSdkCommandOptions,
   type GjcSdkCommandRunner,
@@ -24,8 +26,20 @@ function gjcSdkTranscriptWithRunner(
   directory: string,
   runner: GjcSdkCommandRunner,
   rootResolver: GjcSdkWorktreeRootResolver = testWorktreeRootResolver,
+  cacheClock?: () => number,
 ) {
-  return sdkTranscriptWithRunner(pids, workingDirectory, directory, runner, rootResolver);
+  return sdkTranscriptWithRunner(pids, workingDirectory, directory, runner, rootResolver, cacheClock);
+}
+
+function gjcSdkCurrentSessionWithRunner(
+  pids: readonly number[],
+  workingDirectory: string,
+  directory: string,
+  runner: GjcSdkCommandRunner,
+  rootResolver: GjcSdkWorktreeRootResolver = testWorktreeRootResolver,
+  cacheClock?: () => number,
+) {
+  return sdkCurrentSessionWithRunner(pids, workingDirectory, directory, runner, rootResolver, cacheClock);
 }
 
 function session(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -88,6 +102,23 @@ const commandArgs = [
   "--agent-dir", agentDir,
   "--attach-only", "--json",
 ];
+
+describe("GJC live identity independent of saved-store indexing", () => {
+  it("proves the current private session even when the saved-store index has no path", async () => {
+    const fixture = fakeRunner([page([session()]), page([session()], { savedSession: null })]);
+    expect(await gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver))
+      .toEqual({ sessionId: "session-1", pid: 321, hostIncarnation: "linux:12345", endpointGeneration: 4 });
+    const transcript = fakeRunner([page([session()]), page([session()], { savedSession: null })]);
+    expect(await gjcSdkTranscriptWithRunner([321], cwd, agentDir, transcript.runner)).toBeNull();
+  });
+
+  it("does not relax ambiguous, uncertain or changed live authority for private sessions", async () => {
+    for (const invalid of [{ ambiguous: true }, { terminalUncertain: true }, { live: false }, { endpointGeneration: 5 }, { hostIncarnation: "linux:other" }]) {
+      const fixture = fakeRunner([page([session()]), page([session(invalid)], { savedSession: null })]);
+      expect(await gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver)).toBeNull();
+    }
+  });
+});
 
 describe("GJC SDK transcript identity binding", () => {
   it("ignores only the proven generation-zero direct-session GC fence after /new", async () => {
@@ -264,11 +295,18 @@ describe("GJC SDK transcript identity binding", () => {
 
   it("distinguishes two same-cwd panes by each pane's supplied GJC pid", async () => {
     const rows = [session(), session({ sessionId: "session-2", pid: 322 })];
-    const { runner } = fakeRunner((args, call) => {
-      if (call % 2 === 0) return page(rows);
-      const input = JSON.parse(args[args.indexOf("--json-input") + 1]!);
-      const row = rows.find((candidate) => candidate.sessionId === input.resolveSessionId)!;
-      return saved(row, row.sessionId as string, join(cwd, `${row.sessionId}.jsonl`));
+    const { runner } = fakeRunner((args) => {
+      const inputIndex = args.indexOf("--json-input");
+      const rawInput = args[inputIndex + 1];
+      if (rawInput === undefined) throw new Error("Missing SDK query input");
+      const input: unknown = JSON.parse(rawInput);
+      if (typeof input !== "object" || input === null || Array.isArray(input)) throw new Error("Invalid SDK query input");
+      if (!("resolveSessionId" in input)) return page(rows);
+      const sessionId = input.resolveSessionId;
+      if (typeof sessionId !== "string") throw new Error("Invalid exact session id");
+      const row = rows.find((candidate) => candidate.sessionId === sessionId);
+      if (row === undefined) throw new Error("Unknown exact session id");
+      return saved(row, sessionId, join(cwd, `${sessionId}.jsonl`));
     });
 
     const first = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner);
@@ -291,15 +329,18 @@ describe("GJC SDK transcript identity binding", () => {
     expect(conflictingCwd.calls).toHaveLength(1);
   });
 
-  it("observes a /new session on the next call without retaining a resolved path", async () => {
+  it("observes a /new session after the raw listing cache expires", async () => {
+    let now = 0;
+    const cacheClock = () => now;
     const { calls, runner } = fakeRunner((_args, call) => {
       const turn = Math.floor(call / 2);
       const row = session({ sessionId: `session-${turn + 1}` });
       return call % 2 === 0 ? page([row]) : saved(row, `session-${turn + 1}`, join(cwd, `session-${turn + 1}.jsonl`));
     });
 
-    const first = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner);
-    const second = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner);
+    const first = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock);
+    now = 10_000;
+    const second = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock);
     expect(first?.sessionId).toBe("session-1");
     expect(second).toEqual({
       sessionId: "session-2",
@@ -400,7 +441,7 @@ describe("GJC SDK transcript identity binding", () => {
 
     const pages = fakeRunner((_args, call) => page([], { continuationCursor: `cursor-${call}` }));
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, pages.runner)).resolves.toBeNull();
-    expect(pages.calls).toHaveLength(8);
+    expect(pages.calls).toHaveLength(6); // the global spawn budget precedes the larger page ceiling
   });
 
   it("keeps SDK execution bounded, non-interactive, and quiet on transport failure", async () => {
@@ -420,5 +461,262 @@ describe("GJC SDK transcript identity binding", () => {
     expect(captured?.options.timeout).toBeGreaterThan(0);
     expect(captured?.options.timeout).toBeLessThanOrEqual(2_000);
     expect(captured?.options.killSignal).toBe("SIGKILL");
+  });
+});
+
+describe("GJC SDK session.list cache", () => {
+  it("coalesces concurrent callers for the same raw query", async () => {
+    let resolveFirstStarted: () => void = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      resolveFirstStarted = resolve;
+    });
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let resolveSecondRoot: () => void = () => {};
+    const secondRootStarted = new Promise<void>((resolve) => {
+      resolveSecondRoot = resolve;
+    });
+    let rootLookups = 0;
+    const rootResolver: GjcSdkWorktreeRootResolver = async () => {
+      rootLookups += 1;
+      if (rootLookups === 2) resolveSecondRoot();
+      return cwd;
+    };
+    const calls: Call[] = [];
+    const runner: GjcSdkCommandRunner = async (command, args, options) => {
+      const call = calls.length;
+      calls.push({ command, args: [...args], options });
+      if (call === 0) {
+        resolveFirstStarted();
+        await firstGate;
+      }
+      return call % 2 === 0 ? page([session()]) : saved();
+    };
+
+    const first = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, rootResolver);
+    await firstStarted;
+    const second = gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, rootResolver);
+    await secondRootStarted;
+    await nextTurn();
+    releaseFirst();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { sessionId: "session-1", pid: 321, path: savedPath, hostIncarnation: "linux:12345", endpointGeneration: 4 },
+      { sessionId: "session-1", pid: 321, path: savedPath, hostIncarnation: "linux:12345", endpointGeneration: 4 },
+    ]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("hits the TTL cache and starts new listings at expiry", async () => {
+    let now = 0;
+    const cacheClock = () => now;
+    const { calls, runner } = fakeRunner((_args, call) => call % 2 === 0 ? page([session()]) : saved());
+
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock))
+      .resolves.toMatchObject({ sessionId: "session-1" });
+    now = 9_999;
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock))
+      .resolves.toMatchObject({ sessionId: "session-1" });
+    expect(calls).toHaveLength(2);
+
+    now = 10_000;
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, testWorktreeRootResolver, cacheClock))
+      .resolves.toMatchObject({ sessionId: "session-1" });
+    expect(calls).toHaveLength(4);
+  });
+
+  it("retries failed and malformed listings without caching them", async () => {
+    for (const firstResult of ["malformed", "failed"] as const) {
+      const fixture = fakeRunner((_args, call) => {
+        if (call === 0 && firstResult === "malformed") return "not json";
+        if (call === 0) throw new Error("fixture transport failure");
+        return page([session()]);
+      });
+
+      await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toBeNull();
+      await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toEqual({
+        sessionId: "session-1",
+        pid: 321,
+        hostIncarnation: "linux:12345",
+        endpointGeneration: 4,
+      });
+      expect(fixture.calls).toHaveLength(3);
+    }
+  });
+
+  it("keeps identity rejection when raw discovery and exact rows are cached", async () => {
+    const changedIdentity = session({ endpointGeneration: 5 });
+    const fixture = fakeRunner([page([session()]), saved(changedIdentity)]);
+
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toBeNull();
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toBeNull();
+    expect(fixture.calls).toHaveLength(2);
+  });
+
+  it("separates listings by agentDir", async () => {
+    const secondAgentDir = join(cwd, "second-agent");
+    const fixture = fakeRunner((_args, _call) => page([session()]));
+
+    await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toMatchObject({ sessionId: "session-1" });
+    await expect(gjcSdkCurrentSessionWithRunner([321], cwd, secondAgentDir, fixture.runner)).resolves.toMatchObject({ sessionId: "session-1" });
+    expect(fixture.calls).toHaveLength(4);
+    expect(fixture.calls[0]?.args).toContain(agentDir);
+    expect(fixture.calls[2]?.args).toContain(secondAgentDir);
+  });
+
+  it("isolates fixture caches by command runner", async () => {
+    const firstRunner = fakeRunner((_args, _call) => page([session()]));
+    const secondRunner = fakeRunner((_args, _call) => page([session({ sessionId: "session-2" })]));
+
+    await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, firstRunner.runner)).resolves.toMatchObject({ sessionId: "session-1" });
+    await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, secondRunner.runner)).resolves.toMatchObject({ sessionId: "session-2" });
+    expect(firstRunner.calls).toHaveLength(2);
+    expect(secondRunner.calls).toHaveLength(2);
+  });
+
+  it("bounds starts across agent roots, fails closed at the deadline, and recovers at the next window", async () => {
+    let now = 0;
+    const clock = () => now;
+    const fixture = fakeRunner(() => page([session()]));
+    const lookup = (root: number) => gjcSdkCurrentSessionWithRunner([321], cwd, join(cwd, `budget-agent-${root}`), fixture.runner, testWorktreeRootResolver, clock);
+    for (const root of [1, 2, 3]) await expect(lookup(root)).resolves.toMatchObject({ sessionId: "session-1" });
+    await expect(lookup(4)).resolves.toBeNull();
+    await expect(lookup(4)).resolves.toBeNull();
+    expect(fixture.calls).toHaveLength(6);
+    now = 10_050;
+    await expect(lookup(4)).resolves.toMatchObject({ sessionId: "session-1" });
+    expect(fixture.calls).toHaveLength(8);
+  });
+
+  it.each(["same", "different"])("serializes raw queries with %s agent directories", async (directory) => {
+    const nestedCwd = join(cwd, "nested-query");
+    mkdirSync(nestedCwd, { recursive: true });
+    const nestedSession = session({
+      sessionId: "session-2",
+      pid: 322,
+      locator: { ...locator(), cwd: nestedCwd },
+    });
+    let resolveFirstStarted: () => void = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      resolveFirstStarted = resolve;
+    });
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let resolveSecondRoot: () => void = () => {};
+    const secondRootStarted = new Promise<void>((resolve) => {
+      resolveSecondRoot = resolve;
+    });
+    let rootLookups = 0;
+    const rootResolver: GjcSdkWorktreeRootResolver = async () => {
+      rootLookups += 1;
+      if (rootLookups === 2) resolveSecondRoot();
+      return cwd;
+    };
+    const calls: Call[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const runner: GjcSdkCommandRunner = async (command, args, options) => {
+      const call = calls.length;
+      calls.push({ command, args: [...args], options });
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (call === 0) {
+        resolveFirstStarted();
+        await firstGate;
+      }
+      active -= 1;
+      return page([session(), nestedSession]);
+    };
+
+    const first = gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, runner, rootResolver);
+    await firstStarted;
+    const second = gjcSdkCurrentSessionWithRunner([322], nestedCwd, directory === "same" ? agentDir : join(cwd, "other-agent"), runner, rootResolver);
+    await secondRootStarted;
+    await nextTurn();
+    const callsWhileFirstIsActive = calls.length;
+    releaseFirst();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { sessionId: "session-1", pid: 321, hostIncarnation: "linux:12345", endpointGeneration: 4 },
+      { sessionId: "session-2", pid: 322, hostIncarnation: "linux:12345", endpointGeneration: 4 },
+    ]);
+    expect(callsWhileFirstIsActive).toBe(1);
+    expect(calls).toHaveLength(4);
+    expect(maxActive).toBe(1);
+  });
+});
+
+
+describe("GJC SDK session.list timeout queue", () => {
+  it("keeps the queue until a timed-out runner actually settles", async () => {
+    const nestedCwd = join(cwd, "timeout-nested");
+    mkdirSync(nestedCwd, { recursive: true });
+    const nestedSession = session({
+      sessionId: "session-2",
+      pid: 322,
+      locator: { ...locator(), cwd: nestedCwd },
+    });
+    let notifyFirstStarted: () => void = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      notifyFirstStarted = resolve;
+    });
+    let releaseFirstRunner: () => void = () => {};
+    const firstRunnerGate = new Promise<void>((resolve) => {
+      releaseFirstRunner = resolve;
+    });
+    let notifySecondRoot: () => void = () => {};
+    const secondRootStarted = new Promise<void>((resolve) => {
+      notifySecondRoot = resolve;
+    });
+    const rootResolver: GjcSdkWorktreeRootResolver = async (requestedCwd) => {
+      if (requestedCwd === nestedCwd) notifySecondRoot();
+      return cwd;
+    };
+    const calls: Call[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const runner: GjcSdkCommandRunner = async (command, args, options) => {
+      const call = calls.length;
+      calls.push({ command, args: [...args], options });
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (call === 0) {
+        notifyFirstStarted();
+        await firstRunnerGate;
+        active -= 1;
+        return page([session()]);
+      }
+      active -= 1;
+      const inputIndex = args.indexOf("--json-input");
+      const rawInput = args[inputIndex + 1];
+      if (rawInput === undefined) throw new Error("Missing SDK query input");
+      const input: unknown = JSON.parse(rawInput);
+      if (typeof input !== "object" || input === null || Array.isArray(input)) throw new Error("Invalid SDK query input");
+      if ("resolveSessionId" in input) return page([nestedSession], { savedSession: null });
+      return page([session(), nestedSession]);
+    };
+
+    const first = sdkCurrentSessionWithRunner([321], cwd, agentDir, runner, rootResolver);
+    await firstStarted;
+    await expect(first).resolves.toBeNull();
+
+    const second = sdkCurrentSessionWithRunner([322], nestedCwd, agentDir, runner, rootResolver);
+    await secondRootStarted;
+    await nextTurn();
+    expect(calls).toHaveLength(1);
+
+    releaseFirstRunner();
+    await expect(second).resolves.toEqual({
+      sessionId: "session-2",
+      pid: 322,
+      hostIncarnation: "linux:12345",
+      endpointGeneration: 4,
+    });
+    expect(calls).toHaveLength(3);
+    expect(maxActive).toBe(1);
   });
 });

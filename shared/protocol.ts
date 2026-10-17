@@ -11,7 +11,6 @@ export type {
   AgentInfo,
   AgentSessionInfo,
   AgentStatus,
-  PaneInfo,
   PaneLayoutPane,
   PaneLayoutRect,
   PaneLayoutSnapshot,
@@ -19,13 +18,30 @@ export type {
   PaneScrollInfo,
   ReadFormat,
   ReadSource,
-  SessionSnapshot,
   Subscription as HerdrSubscriptionSpec,
   TabInfo,
   WorkspaceInfo,
 } from "./herdr-api.generated.ts";
 
-import type { AgentStatus, PaneInfo, PaneScrollInfo, SessionSnapshot, TabInfo, WorkspaceInfo } from "./herdr-api.generated.ts";
+import type { AgentStatus, PaneInfo as NativePaneInfo, PaneScrollInfo, SessionSnapshot as NativeSessionSnapshot, TabInfo, WorkspaceInfo } from "./herdr-api.generated.ts";
+
+export interface ManagedSessionIdentity {
+  id: string | null;
+  harness: "gjc" | "omo" | "codex" | "claude" | null;
+  generation: number | null;
+  state: "ready" | "identity_pending" | "blocked";
+  reason: string | null;
+  session_id: string | null;
+}
+
+export interface PaneAttention {
+  finished_at: string | null;
+  seen_at: string | null;
+  preview: string | null;
+}
+
+export type PaneInfo = NativePaneInfo & { managed_session?: ManagedSessionIdentity; attention?: PaneAttention };
+export type SessionSnapshot = Omit<NativeSessionSnapshot, "panes"> & { panes: PaneInfo[] };
 
 /** Friendly aliases used across the UI. */
 export type HerdrWorkspace = WorkspaceInfo;
@@ -593,6 +609,7 @@ export interface PlanSummary {
 
 /** GET /api/pane/conversation: native conversation with settings, or scrollback fallback. */
 export interface ConversationResponse {
+  managed_session?: ManagedSessionIdentity;
   /** Grok/Agy latest native turn; display feedback only, never input-delivery authority. */
   activity?: "thinking" | "working" | "idle";
   /** Stable across appends; changes on transcript replacement or native context clear. */
@@ -1238,6 +1255,7 @@ export type ServerMessage =
   | { type: "conversation-changed"; pane_id: string; signature: string }
   /** a pane's process exited (pushed even when nobody is attached to it) */
   | { type: "pane-exited"; pane_id: string }
+  | { type: "pane-attention"; pane_id: string; attention: PaneAttention }
   /** session structure changed (pane created/closed): refetch /api/session */
   | { type: "session-changed" }
   /** a watched pane's screen as herdr draws it for the watch's grid: whole screens and changes, written as they come; never acknowledged */
@@ -1251,4 +1269,4 @@ export type ServerMessage =
 
 /** herdr's default socket, under XDG_CONFIG_HOME when set, as herdr itself resolves it. */
 export const HERDR_SOCKET_PATH = `${process.env["XDG_CONFIG_HOME"] || `${process.env["HOME"] ?? ""}/.config`}/herdr/herdr.sock`;
-export const DEFAULT_PORT = 7317;
+export const DEFAULT_PORT = 7320;

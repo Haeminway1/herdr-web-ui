@@ -192,8 +192,8 @@ function decodeNumericEntities(value: string): string {
  * read as a browser reads them, and only the matched tag's content attribute is re-serialized. Its
  * getAttribute returns the first `name` undecoded, so numeric references are decoded here as a browser would.
  */
-export function renderIndex(css: string, html: string, amber = resolveAmber(parseThemeBlocks(css))): string {
-  const color = amberColor(amber, "--bg-panel", "dark", "resolved");
+export function renderIndex(css: string, html: string): string {
+  const color = resolveEntry(css, "report", "dark").resolved["--bg-panel"]!;
   let count = 0;
   const output = new HTMLRewriter().on("meta", {
     element(element) {
@@ -242,8 +242,9 @@ function topLevelKeys(json: string): { key: string; value: { start: number; end:
   return keys;
 }
 
-export function renderManifest(css: string, json: string, amber = resolveAmber(parseThemeBlocks(css))): string {
-  const values = { theme_color: amberColor(amber, "--bg-panel", "dark", "resolved"), background_color: amberColor(amber, "--bg", "dark", "resolved") };
+export function renderManifest(css: string, json: string): string {
+  const report = resolveEntry(css, "report", "dark").resolved;
+  const values = { theme_color: report["--bg-panel"]!, background_color: report["--bg"]! };
   const before = JSON.parse(json) as Record<string, unknown>;
   // JSON.parse keeps only the last of duplicate keys, so the keys are counted in the text itself
   const keys = topLevelKeys(json);
@@ -272,8 +273,8 @@ export function renderAll(root: string): { path: string; content: string }[] {
   return [
     { path: OUTPUTS.module, content: renderModule(css, blocks, amber) },
     { path: OUTPUTS.design, content: renderDesign(css, readFileSync(at(OUTPUTS.design), "utf8"), amber) },
-    { path: OUTPUTS.index, content: renderIndex(css, readFileSync(at(OUTPUTS.index), "utf8"), amber) },
-    { path: OUTPUTS.manifest, content: renderManifest(css, readFileSync(at(OUTPUTS.manifest), "utf8"), amber) },
+    { path: OUTPUTS.index, content: renderIndex(css, readFileSync(at(OUTPUTS.index), "utf8")) },
+    { path: OUTPUTS.manifest, content: renderManifest(css, readFileSync(at(OUTPUTS.manifest), "utf8")) },
   ];
 }
 

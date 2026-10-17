@@ -316,6 +316,14 @@ export function provenanceFailures(
   const legacy = new Set([...Object.keys(baseline.combos), "catppuccin-latte/light"]);
   for (const { id, mode } of entries) {
     const key = `${id}/${mode}`;
+    // Report is the fork's own palette (0ce93b2), not a claimed herdr RGB palette.
+    // Its complete declarations and contrast still pass the same UI role gates.
+    if (id === "report") {
+      for (const role of [...Object.keys(ROLES), ...(mode === "light" ? Object.values(LIGHT_ANSI_ROLES) : [])]) {
+        if (blocks[key]?.declared[`--${role}`] === undefined) failures.push(`${key} ${role}: missing fork palette declaration`);
+      }
+      continue;
+    }
     // Legacy UI roles stay frozen, but Latte's newly added ANSI roles have provenance too.
     const legacyAnsi = key === "catppuccin-latte/light";
     if (legacy.has(key) && !legacyAnsi) continue;

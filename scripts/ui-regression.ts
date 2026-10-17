@@ -92,7 +92,8 @@ try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.addInitScript((ids) => {
     // only the first load: a reload must keep what Settings stored, such as the language
-    if (!localStorage.getItem("herdr-web-ui:settings")) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
+    // These scenarios target upstream's separate Agents and Spaces layout.
+    if (!localStorage.getItem("herdr-web-ui:settings")) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
     for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");
   }, panes);
   // A hook for a check that changes the roster on a page already loaded: a route cannot reach the
@@ -292,7 +293,6 @@ try {
   // pointer move still does.
   await page.setViewportSize({ width: 1280, height: 400 });
   await openPalette();
-  const restingOptionCount = await palette.getByRole("option").count();
   const firstOption = (await palette.locator("#palette-item-0").boundingBox())!;
   await page.mouse.move(firstOption.x + firstOption.width / 2, firstOption.y + firstOption.height / 2);
   await until(async () => await paletteSearch.getAttribute("aria-activedescendant") === "palette-item-0", "the resting pointer is over the first option");
@@ -304,7 +304,9 @@ try {
   await paletteSearch.press("ArrowUp");
   await until(async () => await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.some((id) => id !== "" && id !== "palette-item-0")),
     "the scroll moves another option under the resting pointer");
-  assert.equal(await paletteSearch.getAttribute("aria-activedescendant"), `palette-item-${restingOptionCount - 1}`,
+  // Async native commands can extend the list after opening it; compare the live
+  // last option, not a count captured before those commands arrived.
+  assert.equal(await paletteSearch.getAttribute("aria-activedescendant"), await palette.getByRole("option").last().getAttribute("id"),
     "a scroll under a resting pointer leaves the arrow's selection alone");
   const hoveredId = await page.evaluate(() => (window as unknown as { paletteHovered: string[] }).paletteHovered.findLast((id) => id !== "")!);
   const hoveredBox = (await palette.locator(`#${hoveredId}`).boundingBox())!;
@@ -408,7 +410,7 @@ try {
   const offlineContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   let offlineEvidence: BrowserEvidenceSession | undefined;
   try {
-    await offlineContext.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertsOn: false })));
+    await offlineContext.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertsOn: false, sidebarLayout: "upstream" })));
     await offlineContext.route("**/api/machines", (route) => route.fulfill({ json: { machines: offlineMachines } }));
     await offlineContext.route("**/api/machines/events", (route) => route.fulfill({
       contentType: "text/event-stream", body: `retry: 60000\ndata: ${JSON.stringify({ type: "machines", machines: offlineMachines })}\n\n`,
@@ -2213,7 +2215,7 @@ try {
   const typing = (target: typeof mobilePage) => target.evaluate(() => document.activeElement?.matches("textarea, input, [contenteditable]") ?? false);
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).blur();
   await mobilePage.locator('button[aria-controls="workspace-drawer"]').click();
-  await mobilePage.locator(`.pane-select[title^="${paneA} —"]`).click();
+  await mobilePage.locator(`.cl-pane-select[title^="${paneA} —"]`).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).waitFor();
   await mobilePage.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await mobilePage.waitForTimeout(NO_SEND_WAIT_MS);
@@ -2226,8 +2228,9 @@ try {
   await until(() => typing(mobilePage), "a tap on the message box takes the keyboard");
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).blur();
   await mobilePage.locator('button[aria-controls="workspace-drawer"]').click();
-  assert.equal(await mobilePage.locator(".agents-sidebar .agent-section-toggle").getAttribute("aria-expanded"), "false", "a phone's drawer opens with Agents folded");
-  await mobilePage.locator(`.pane-select[title^="${paneB} —"]`).click();
+  assert.equal(await mobilePage.locator(".cl-sidebar-list").isVisible(), true, "a phone without stored settings uses the classic drawer");
+  assert.equal(await mobilePage.locator(".agents-sidebar").count(), 0, "classic rows replace the separate upstream Agents section");
+  await mobilePage.locator(`.cl-pane-select[title^="${paneB} —"]`).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).waitFor();
   console.log("PASS a pane picked on a phone waits for a tap before raising the keyboard");
 

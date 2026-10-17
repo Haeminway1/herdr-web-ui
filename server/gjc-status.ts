@@ -24,6 +24,7 @@
  */
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc } from "./herdr/client.ts";
+import { resolveManagedSession, type ManagedSessionResolution } from "./managed-sessions.ts";
 import { gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, type GjcProcess } from "./gjc-runtime.ts";
 import type { OmoAsks } from "./omo-ask.ts";
 import { processStartedAt } from "./process-start.ts";
@@ -44,7 +45,7 @@ interface GjcEntry {
  * for its id arrives — an error result ends the asking the same, since nothing waits on the
  * user then. Assistant narration that carries no call leaves every question as it was.
  */
-function gjcAsksAfter(open: OmoAsks, entry: GjcEntry): OmoAsks {
+export function gjcAsksAfter(open: OmoAsks, entry: GjcEntry): OmoAsks {
   if (entry.type !== "message") return open;
   const message = entry.message;
   if (message?.role === "assistant" && message.stopReason === "toolUse") {
@@ -98,6 +99,7 @@ type ProcessInfo = { process_info?: { shell_pid?: unknown; foreground_processes?
  * two process identities. Tests give their own, so no live RPC is needed to tell the cases.
  */
 export interface GjcDiscovery {
+  managedSession?: (pane: HerdrPane) => Promise<ManagedSessionResolution | null>;
   processInfo?: (paneId: string) => Promise<ProcessInfo>;
   transcript?: (paneId: string, cwd: string) => Promise<string | null>;
   startedAt?: (pid: number) => number | null;
@@ -115,12 +117,32 @@ export interface GjcDiscovery {
  * foreground process runs in now, not where the pane started — the same cwd the chat binds by.
  */
 export async function gjcPanes(panes: HerdrPane[], deps: GjcDiscovery = {}): Promise<Map<string, OmoPane>> {
+  const managedSession = deps.managedSession ?? ((pane: HerdrPane) => resolveManagedSession(pane));
   const processInfo = deps.processInfo ?? ((paneId: string) => herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: paneId }).catch(() => null));
   const transcript = deps.transcript ?? ((paneId: string, cwd: string) => gjcTranscriptForPane(paneId, cwd).catch(() => null));
   const startedAt = deps.startedAt ?? processStartedAt;
   const underShell = deps.underShell ?? ((shellPid: unknown) => gjcPidUnderShell(shellPid, deps.platform));
   const found = new Map<string, OmoPane>();
-  await Promise.all(panes.filter((pane) => pane.agent === "gjc").map(async (pane) => {
+  const declared = (pane: HerdrPane): boolean => {
+    const tokens = pane.tokens ?? {};
+    return pane.managed_session !== undefined || Object.hasOwn(tokens, "hm_managed_session") || Object.hasOwn(tokens, "hm_managed_generation");
+  };
+  const lookupPane = (pane: HerdrPane): HerdrPane => {
+    const tokens = pane.tokens ?? {};
+    if (Object.hasOwn(tokens, "hm_managed_session") || Object.hasOwn(tokens, "hm_managed_generation")) return pane;
+    const identity = pane.managed_session;
+    return identity?.id === null || identity?.id === undefined || identity.generation === null
+      ? pane
+      : { ...pane, tokens: { ...tokens, hm_managed_session: identity.id, hm_managed_generation: String(identity.generation) } };
+  };
+  const managed = await Promise.all(panes.filter(declared).map(async (pane) => ({ pane, resolution: await managedSession(lookupPane(pane)) })));
+  for (const { pane, resolution } of managed) {
+    if (resolution?.identity.state === "ready" && resolution.identity.harness === "gjc" && resolution.sessionFile !== null) {
+      found.set(pane.pane_id, { path: resolution.sessionFile, startedAt: null });
+    }
+  }
+  const nativePanes = panes.filter((pane) => !declared(pane) && pane.agent === "gjc");
+  await Promise.all(nativePanes.map(async (pane) => {
     const info = await processInfo(pane.pane_id);
     const starts = (info?.process_info?.foreground_processes ?? [])
       .filter((process) => typeof process.pid === "number" && Array.isArray(process.argv) && isGjcProcess(process.argv.map(String)))
@@ -144,10 +166,28 @@ export async function gjcPanes(panes: HerdrPane[], deps: GjcDiscovery = {}): Pro
  * nothing — or not everything — was read from back to herdr's status.
  */
 export function createGjcStatus(deps: Omit<OmoStatusDeps, "agent" | "aliases" | "turnAfter" | "ready" | "background" | "staleIsFailure">, nativeOmo?: OmoStatus): OmoStatus {
-  return new OmoStatus({
+  class GenerationAwareGjcStatus extends OmoStatus {
+    override refresh(panes: HerdrPane[]): Promise<void> {
+      const keyed = panes.map((pane) => {
+        const tokens = pane.tokens ?? {};
+        const id = pane.managed_session?.id ?? tokens["hm_managed_session"];
+        const generation = pane.managed_session?.generation ?? tokens["hm_managed_generation"];
+        if (id === undefined && generation === undefined) return pane;
+        const identity = pane.managed_session;
+        const state = identity ? `${identity.state}:${identity.harness ?? ""}:${identity.session_id ?? ""}:${identity.reason ?? ""}` : "";
+        return { ...pane, agent: `${pane.agent ?? ""}\0hm-managed:${String(id ?? "")}:${String(generation ?? "")}:${state}` };
+      });
+      return super.refresh(keyed);
+    }
+  }
+  return new GenerationAwareGjcStatus({
     ...deps,
     discover: async (panes) => {
-      const found = await deps.discover(panes.filter((pane) => !nativeOmo?.runs(pane.pane_id)));
+      const restored = panes.map((pane) => {
+        const marker = pane.agent?.indexOf("\0hm-managed:") ?? -1;
+        return marker < 0 ? pane : { ...pane, agent: pane.agent?.slice(0, marker) || null };
+      });
+      const found = await deps.discover(restored.filter((pane) => !nativeOmo?.runs(pane.pane_id)));
       // Native discovery may have finished while gjc's process lookup was in flight.
       for (const paneId of found.keys()) if (nativeOmo?.runs(paneId)) found.delete(paneId);
       return found;

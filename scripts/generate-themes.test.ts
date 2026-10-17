@@ -106,7 +106,7 @@ describe("generate-themes", () => {
     for (const lookalike of ['"x_theme_color": "#abcdef",', '"note": "\\"theme_color\\": \\"#abcdef\\"",', '"extra": { "theme_color": "#abcdef" },', '"list": [{ "background_color": "#abcdef" }],']) {
       const rendered = renderManifest(css, manifest.replace('"theme_color": ', `${lookalike}\n  "theme_color": `));
       expect(rendered, lookalike).toContain(lookalike);
-      expect(JSON.parse(rendered).theme_color).toBe("#181613");
+      expect(JSON.parse(rendered).theme_color).toBe("#0f1319");
     }
     expect(() => renderManifest(css, manifest.replace('"theme_color"', '"x_theme_color"'))).toThrow('"theme_color" found 0 times');
 
@@ -144,7 +144,7 @@ describe("generate-themes", () => {
 
   it("writes every copy from one edit in src/styles.css and never writes the CSS", async () => {
     const root = copyRoot();
-    const source = read(root, SOURCE).replace("--bg-panel: #181613;", "--bg-panel: #1a1714;");
+    const source = read(root, SOURCE).replace("--bg-panel: #181613;", "--bg-panel: #1a1714;").replace("--bg-panel: #0f1319;", "--bg-panel: #1a1714;");
     expect(source).not.toBe(css);
     writeFileSync(join(root, SOURCE), source);
 

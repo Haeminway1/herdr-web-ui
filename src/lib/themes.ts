@@ -18,15 +18,17 @@ export function isThemeId(value: unknown): value is ThemeId {
   return typeof value === "string" && (THEME_IDS as readonly string[]).includes(value);
 }
 
-const AMBER: Record<Mode, ThemeEntry> = {
-  dark: SUPPORTED_ENTRIES.find((entry) => entry.id === "amber" && entry.mode === "dark")!,
-  light: SUPPORTED_ENTRIES.find((entry) => entry.id === "amber" && entry.mode === "light")!,
+export const DEFAULT_THEME: ThemeId = "report";
+
+const DEFAULT_ROWS: Record<Mode, ThemeEntry> = {
+  dark: SUPPORTED_ENTRIES.find((entry) => entry.id === DEFAULT_THEME && entry.mode === "dark")!,
+  light: SUPPORTED_ENTRIES.find((entry) => entry.id === DEFAULT_THEME && entry.mode === "light")!,
 };
 
-/** The row drawn for a side: a both-mode theme's row of that side, a single-kind theme's only row, amber for an unknown id. */
+/** The row drawn for a side: a both-mode theme's row, a single-kind theme's only row, Report for an unknown id. */
 export function rowFor(id: string, side: Mode): ThemeEntry {
   const rows = SUPPORTED_ENTRIES.filter((entry) => entry.id === id);
-  return rows.find((entry) => entry.mode === side) ?? (rows.length === 1 ? rows[0] : undefined) ?? AMBER[side];
+  return rows.find((entry) => entry.mode === side) ?? (rows.length === 1 ? rows[0] : undefined) ?? DEFAULT_ROWS[side];
 }
 
 /** `<meta name="theme-color">`: the panel surface of the row drawn for `mode`. */
@@ -54,9 +56,6 @@ export function siblingFor(id: string, targetSide: Mode): ThemeId | undefined {
   const pair = SIBLING_PAIRS.find(([dark, light]) => targetSide === "light" ? id === dark : id === light);
   return pair?.[targetSide === "light" ? 1 : 0];
 }
-
-/** The theme either side starts from, and falls back to for an unknown id. */
-export const DEFAULT_THEME: ThemeId = "amber";
 
 const SIDE_KEY = { dark: "darkTheme", light: "lightTheme" } as const;
 

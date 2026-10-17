@@ -10,10 +10,25 @@ import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
 import { SHARED_SETTING_KEYS } from "../../shared/preferences.ts";
 import { NOTICE_VERSION, TELEMETRY_SETTINGS_KEYS, TELEMETRY_THEME_SIDE_KEYS, telemetrySettings } from "../../shared/telemetry.ts";
-import { SETTING_SCOPE, telemetrySettingsSnapshot, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, DICTATION_LANGUAGES, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
+import { SETTING_SCOPE, telemetrySettingsSnapshot as projectTelemetrySettings, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, DICTATION_LANGUAGES, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
 import { applyToDocument, loadSettings, saveSettings } from "./settings.ts";
 import { sanitizeSettings as oldSanitizeSettings, saveSettings as oldSaveSettings } from "./settings.legacy-fixture.ts";
 import { themeFor } from "./themeFor.ts";
+
+/** These schema tests use an upstream profile. Report's omitted snapshot is tested separately. */
+function telemetrySettingsSnapshot(settings: Parameters<typeof projectTelemetrySettings>[0]) {
+  const theme = (id: typeof settings.palette) => id === "report" ? "amber" : id;
+  return projectTelemetrySettings({ ...settings, palette: theme(settings.palette), paletteLight: theme(settings.paletteLight), paletteDark: theme(settings.paletteDark), darkTheme: theme(settings.darkTheme), lightTheme: theme(settings.lightTheme) })!;
+}
+
+it("omits settings the deployed upstream telemetry schema cannot represent", () => {
+  expect(projectTelemetrySettings(DEFAULT_SETTINGS)).toBeNull();
+  const upstream = { ...DEFAULT_SETTINGS, palette: "amber", paletteLight: "amber", paletteDark: "amber", darkTheme: "amber", lightTheme: "amber" } as const;
+  expect(projectTelemetrySettings(upstream)).not.toBeNull();
+  for (const key of ["palette", "paletteLight", "paletteDark", "darkTheme", "lightTheme"] as const) {
+    expect(projectTelemetrySettings({ ...upstream, [key]: "report" })).toBeNull();
+  }
+});
 
 describe("saved theme migration", () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -299,6 +314,7 @@ describe("telemetry settings snapshot", () => {
 
   it("reports all supported ids on either side and rejects ids outside the schema", () => {
     for (const id of THEME_IDS) {
+      if (id === "report") continue; // fork-only settings deliberately have no upstream telemetry snapshot
       for (const side of ["darkTheme", "lightTheme"] as const) {
         const snapshot = telemetrySettingsSnapshot(sanitizeSettings({ [side]: id }));
         expect(snapshot[side]).toBe(id);
@@ -350,8 +366,10 @@ describe("clipboard from a pane", () => {
   });
 });
 
-it("drops the folder grouping an older version stored", () => {
-  expect(sanitizeSettings({ sidebarGrouping: "directory" })).not.toHaveProperty("sidebarGrouping");
+it("keeps selected grouping and rejects unsupported sidebar choices", () => {
+  expect(sanitizeSettings({ sidebarGrouping: "directory" }).sidebarGrouping).toBe("directory");
+  expect(sanitizeSettings({ sidebarGrouping: "dashboard", sidebarLayout: "dashboard" })).toMatchObject({ sidebarGrouping: "repo", sidebarLayout: "classic" });
+  expect(sanitizeSettings({ sidebarLayout: "upstream" }).sidebarLayout).toBe("upstream");
 });
 
 describe("chat font size", () => {
@@ -667,17 +685,18 @@ describe("language", () => {
 });
 
 describe("palette", () => {
-  it("defaults to amber, the look before this setting, and keeps only a known palette", () => {
-    expect(DEFAULT_SETTINGS.palette).toBe("amber");
+  it("uses report for unconfigured devices and keeps every selectable upstream theme", () => {
+    expect(DEFAULT_SETTINGS.palette).toBe("report");
     // settings stored before palettes existed carry no palette key
-    expect(sanitizeSettings({ theme: "light" }).palette).toBe("amber");
+    expect(sanitizeSettings({ theme: "light" }).palette).toBe("report");
     expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
     expect(sanitizeSettings({ palette: "catppuccin" }).palette).toBe("catppuccin");
-    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("amber");
+    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("report");
   });
 
-  it("loads a removed palette (report, lilac, forest) as amber", () => {
-    for (const removed of ["report", "lilac", "forest"]) expect(sanitizeSettings({ palette: removed }).palette).toBe("amber");
+  it("does not restore other fork palettes", () => {
+    for (const removed of ["lilac", "forest"]) expect(sanitizeSettings({ palette: removed }).palette).toBe("report");
+    expect(sanitizeSettings({ palette: "report" }).palette).toBe("report");
   });
 
   it("preserves Catppuccin through a saved settings round-trip and unrelated edits", () => {
@@ -802,8 +821,8 @@ describe("palette", () => {
     expect(failures).toEqual([]);
   });
 
-  it("gives index.html and the web manifest amber dark's panel and page colors", () => {
-    const { resolved } = resolveEntry(css, "amber", "dark");
+  it("gives index.html and the web manifest Report dark's panel and page colors", () => {
+    const { resolved } = resolveEntry(css, "report", "dark");
     const metas: string[] = [];
     new HTMLRewriter().on('meta[name="theme-color"]', { element: (meta) => void metas.push(meta.getAttribute("content") ?? "") })
       .transform(readFileSync(join(import.meta.dir, "..", "..", "index.html"), "utf8"));
@@ -889,12 +908,12 @@ describe("palette", () => {
     expect(failures).toEqual([]);
   });
 
-  it("paints amber before settings load: the base blocks are the default palette's", () => {
+  it("keeps upstream's amber base blocks while Report is the explicit fork default", () => {
     const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
     const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
-    expect(root).toContain(`--term-bg: ${terminalTheme("dark").background};`);
-    expect(root).toContain(`--term-cursor: ${terminalTheme("dark").cursor};`);
-    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "amber"));
+    expect(root).toContain(`--term-bg: ${terminalTheme("dark", "amber").background};`);
+    expect(root).toContain(`--term-cursor: ${terminalTheme("dark", "amber").cursor};`);
+    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "report"));
   });
 });
 

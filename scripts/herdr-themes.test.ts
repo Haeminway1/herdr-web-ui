@@ -121,6 +121,14 @@ describe("executable provenance policy", () => {
     ]);
   });
 
+  it("checks the fork-owned Report palette without claiming it came from herdr", () => {
+    const report = SUPPORTED_ENTRIES.filter((entry) => entry.id === "report");
+    expect(report.map((entry) => entry.mode).sort()).toEqual(["dark", "light"]);
+    expect(provenanceFailures(css, report, [])).toHaveLength(0);
+    const changed = css.replace("--accent: #1f5fcc;", "");
+    expect(provenanceFailures(changed, report, []).join("\n")).toContain("report/light accent: missing fork palette declaration");
+  });
+
   it("accepts a matching explicit deviation with numeric distance and reason", () => {
     const changed = fixture.replace("--bg: #1a1b26;", "--bg: #123456;");
     const override: ThemeOverride = { theme: "tokyo-night", mode: "dark", role: "bg", value: "#123456", dE: 12, reason: "Reviewed surface change" };

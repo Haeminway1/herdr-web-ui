@@ -60,7 +60,7 @@ if (-not (Get-Command bun -ErrorAction SilentlyContinue)) { throw 'Bun did not i
 $bunVersion = Run-Tool bun @('--version')
 if ([version]($bunVersion -replace '-.*$', '') -lt [version]'1.4.0') { throw "Needs Bun 1.4 or newer; this is $bunVersion." }
 
-$pluginId = 'devswha.herdr-web-ui'
+$pluginId = 'haeminway1.herdr-web-ui'
 function Find-Plugin {
     (Run-Tool herdr @('plugin', 'list', '--json') | ConvertFrom-Json).result.plugins |
         Where-Object { $_.plugin_id -eq $pluginId } | Select-Object -First 1
@@ -78,13 +78,13 @@ if ($plugin -and -not (Test-WindowsPlugin $plugin)) {
 }
 if (-not $plugin) {
     if (-not $Ref) {
-        $Ref = Run-Tool git @('ls-remote', '--tags', '--refs', 'https://github.com/devswha/herdr-web-ui.git', 'v*') |
+        $Ref = Run-Tool git @('ls-remote', '--tags', '--refs', 'https://github.com/Haeminway1/herdr-web-ui.git', 'v*') |
             ForEach-Object { if ($_ -match 'refs/tags/(v\d+\.\d+\.\d+)$') { $Matches[1] } } |
             Sort-Object { [version]$_.Substring(1) } | Select-Object -Last 1
     }
     if (-not $Ref) { throw 'Could not find the latest app release on GitHub. Check your connection and run this again.' }
     Write-Host "herdr web ui: installing the plugin at $Ref"
-    Run-Tool herdr @('plugin', 'install', 'devswha/herdr-web-ui', '--ref', $Ref, '--yes')
+    Run-Tool herdr @('plugin', 'install', 'Haeminway1/herdr-web-ui', '--ref', $Ref, '--yes')
     $newInstall = $true
     $plugin = Find-Plugin
     if (-not $plugin.plugin_root) { throw 'herdr does not list the plugin after installing it. See: herdr plugin list' }

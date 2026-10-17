@@ -14,9 +14,9 @@ describe("theme lookups", () => {
     }
   });
 
-  it("falls back to amber of the same side for an unknown id", () => {
+  it("falls back to Report of the same side for an unknown id", () => {
     for (const side of ["dark", "light"] as const) {
-      expect(rowFor("not-a-theme", side)).toBe(rowFor("amber", side));
+      expect(rowFor("not-a-theme", side)).toBe(rowFor("report", side));
       expect(rowFor("not-a-theme", side).mode).toBe(side);
     }
   });
@@ -33,9 +33,9 @@ describe("theme lookups", () => {
 
 describe("picking a theme", () => {
   it("fills the other side with the sibling while that side is the default or the previous pick's sibling", () => {
-    expect(pickTheme({ darkTheme: "amber", lightTheme: "amber" }, "dark", "tokyo-night")).toEqual({ darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" });
+    expect(pickTheme({ darkTheme: "report", lightTheme: "report" }, "dark", "tokyo-night")).toEqual({ darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" });
     expect(pickTheme({ darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" }, "dark", "gruvbox")).toEqual({ darkTheme: "gruvbox", lightTheme: "gruvbox-light" });
-    expect(pickTheme({ darkTheme: "amber", lightTheme: "amber" }, "light", "catppuccin-latte")).toEqual({ darkTheme: "catppuccin", lightTheme: "catppuccin-latte" });
+    expect(pickTheme({ darkTheme: "report", lightTheme: "report" }, "light", "catppuccin-latte")).toEqual({ darkTheme: "catppuccin", lightTheme: "catppuccin-latte" });
   });
 
   it("keeps a side the user chose, and fills nothing for a theme without a pair or picked for its own kind's other side", () => {

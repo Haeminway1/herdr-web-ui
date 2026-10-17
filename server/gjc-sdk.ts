@@ -2,12 +2,18 @@ import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import nodePath from "node:path";
 import { promisify } from "node:util";
+import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 
 const PAGE_LIMIT = 100;
 const MAX_PAGES = 8;
 const MAX_ROWS = PAGE_LIMIT * MAX_PAGES;
 const COMMAND_TIMEOUT_MS = 2_000;
 const TOTAL_TIMEOUT_MS = 8_000;
+// Share roster polls across discovery and exact lookups instead of repeatedly
+// spawning the CLI. Managed generation/process/header checks remain per read.
+const SESSION_LIST_CACHE_TTL_MS = 10_000;
+const SESSION_LIST_MAX_STARTS = 6;
+const SESSION_LIST_START_WINDOW_MS = 10_050;
 const MAX_BUFFER = 1024 * 1024;
 const MAX_CURSOR_LENGTH = 4096;
 
@@ -34,6 +40,33 @@ const runGjcSdkCommand: GjcSdkCommandRunner = async (command, args, options) => 
   const { stdout } = await execution;
   return stdout;
 };
+
+interface SessionListCacheEntry {
+  readonly output: string;
+  readonly expiresAt: number;
+}
+
+interface SessionListState {
+  readonly cache: Map<string, SessionListCacheEntry>;
+  readonly inFlight: Map<string, Promise<string>>;
+  readonly queue: SessionListQueue;
+}
+
+interface SessionListQueue {
+  tail: Promise<void>;
+  starts: number[];
+}
+
+interface SessionListRequest {
+  readonly agentDir: string;
+  readonly jsonInput: Record<string, unknown>;
+  readonly deadline: number;
+  readonly cacheClock: () => number;
+}
+
+const sessionListStates = new WeakMap<GjcSdkCommandRunner, Map<string, SessionListState>>();
+const sessionListQueues = new WeakMap<GjcSdkCommandRunner, SessionListQueue>();
+const sessionListCacheClock = () => performance.now();
 
 const GIT_MAX_BUFFER = 64 * 1024;
 
@@ -75,6 +108,15 @@ interface SessionBinding {
   worktreeRoot: string | null;
   stateRoot: string | null;
 }
+
+export interface GjcSdkSessionIdentity {
+  readonly sessionId: string;
+  readonly pid: number;
+  readonly hostIncarnation: string;
+  readonly endpointGeneration: number;
+}
+
+type ResolvedSession = GjcSdkSessionIdentity & { readonly savedSession: unknown };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -209,9 +251,13 @@ async function runBounded(
   runner: GjcSdkCommandRunner,
   args: string[],
   deadline: number,
+  onRunnerSettled: () => void,
 ): Promise<string> {
   const remaining = Math.min(COMMAND_TIMEOUT_MS, deadline - Date.now());
-  if (remaining <= 0) throw new Error("SDK lookup deadline exceeded");
+  if (remaining <= 0) {
+    onRunnerSettled();
+    throw new Error("SDK lookup deadline exceeded");
+  }
 
   const options: GjcSdkCommandOptions = {
     env: { ...process.env, GJC_SDK_BROKER_AUTOSTART: "0" },
@@ -223,10 +269,23 @@ async function runBounded(
     windowsHide: true,
   };
 
+  const execution = Promise.resolve()
+    .then(() => runner("gjc", args, options))
+    .then(
+      (output) => {
+        onRunnerSettled();
+        return output;
+      },
+      (error: unknown) => {
+        onRunnerSettled();
+        throw error;
+      },
+    );
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      Promise.resolve().then(() => runner("gjc", args, options)),
+      execution,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error("SDK lookup deadline exceeded")), remaining);
       }),
@@ -234,6 +293,142 @@ async function runBounded(
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+function sessionListState(runner: GjcSdkCommandRunner, agentDir: string): SessionListState {
+  let directories = sessionListStates.get(runner);
+  if (directories === undefined) {
+    directories = new Map();
+    sessionListStates.set(runner, directories);
+  }
+
+  let state = directories.get(agentDir);
+  if (state === undefined) {
+    let queue = sessionListQueues.get(runner);
+    if (queue === undefined) {
+      queue = { tail: Promise.resolve(), starts: [] };
+      sessionListQueues.set(runner, queue);
+    }
+    state = { cache: new Map(), inFlight: new Map(), queue };
+    directories.set(agentDir, state);
+  }
+  return state;
+}
+
+function cachedSessionList(state: SessionListState, key: string, now: number): string | null {
+  for (const [entryKey, entry] of state.cache) {
+    if (entry.expiresAt <= now) state.cache.delete(entryKey);
+  }
+  return state.cache.get(key)?.output ?? null;
+}
+
+async function waitForSessionListTurn(previous: Promise<void>, deadline: number): Promise<void> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("SDK lookup deadline exceeded");
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      previous,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("SDK lookup deadline exceeded")), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function reserveSessionListStart(queue: SessionListQueue, deadline: number, clock: () => number): Promise<void> {
+  for (;;) {
+    const now = clock();
+    queue.starts = queue.starts.filter((start) => start > now - SESSION_LIST_START_WINDOW_MS);
+    if (queue.starts.length < SESSION_LIST_MAX_STARTS) {
+      queue.starts.push(now);
+      return;
+    }
+    // The queue is global, including other native agent roots. An identity lookup
+    // that cannot fit the next slot in its existing deadline fails closed.
+    const wait = queue.starts[0]! + SESSION_LIST_START_WINDOW_MS - now;
+    if (wait >= deadline - Date.now()) throw new Error("SDK spawn budget exhausted");
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.max(1, Math.ceil(wait))));
+  }
+}
+
+async function runSerializedSessionList(
+  runner: GjcSdkCommandRunner,
+  request: SessionListRequest,
+  state: SessionListState,
+  key: string,
+): Promise<string> {
+  const { agentDir, jsonInput, deadline, cacheClock } = request;
+  const previous = state.queue.tail;
+  let releaseQueue: (() => void) | undefined;
+  const queueTurn = new Promise<void>((resolve) => {
+    releaseQueue = resolve;
+  });
+  state.queue.tail = previous.then(() => queueTurn);
+  const release = () => releaseQueue?.();
+  let acquired = false;
+  let runnerPending = false;
+  let callerFinished = false;
+  const releaseWhenFinished = () => {
+    if (callerFinished && !runnerPending) release();
+  };
+
+  try {
+    await waitForSessionListTurn(previous, deadline);
+    acquired = true;
+
+    const cachedAfterWait = cachedSessionList(state, key, cacheClock());
+    if (cachedAfterWait !== null) return cachedAfterWait;
+
+    await reserveSessionListStart(state.queue, deadline, cacheClock);
+    const args = sdkArgs(agentDir, jsonInput);
+    runnerPending = true;
+    const output = await runBounded(runner, args, deadline, () => {
+      runnerPending = false;
+      releaseWhenFinished();
+    });
+    const parsed = parseBrokerPage(output);
+    const exactLookup = Object.hasOwn(jsonInput, "resolveSessionId");
+    if (parsed !== null && parsed.sessions.length <= PAGE_LIMIT
+      && (!exactLookup || parsed.continuationCursor === null)) {
+      state.cache.set(key, { output, expiresAt: cacheClock() + SESSION_LIST_CACHE_TTL_MS });
+    }
+    return output;
+  } catch (error) {
+    if (!acquired) void previous.then(release, release);
+    throw error;
+  } finally {
+    if (acquired) {
+      callerFinished = true;
+      releaseWhenFinished();
+    }
+  }
+}
+
+function runCachedSessionList(
+  runner: GjcSdkCommandRunner,
+  request: SessionListRequest,
+): Promise<string> {
+  if (request.deadline <= Date.now()) throw new Error("SDK lookup deadline exceeded");
+
+  const state = sessionListState(runner, request.agentDir);
+  const key = JSON.stringify(request.jsonInput);
+  const cached = cachedSessionList(state, key, request.cacheClock());
+  if (cached !== null) return Promise.resolve(cached);
+
+  const inFlight = state.inFlight.get(key);
+  if (inFlight !== undefined) return inFlight;
+
+  const requestPromise = runSerializedSessionList(runner, request, state, key);
+  state.inFlight.set(key, requestPromise);
+  const removeInFlight = () => {
+    if (state.inFlight.get(key) === requestPromise) state.inFlight.delete(key);
+  };
+  void requestPromise.then(removeInFlight, removeInFlight);
+  return requestPromise;
 }
 
 async function resolveWorktreeRoot(
@@ -266,7 +461,8 @@ async function resolveTranscript(
   agentDir: string,
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver,
-): Promise<{ sessionId: string; pid: number; path: string; hostIncarnation: string; endpointGeneration: number } | null> {
+  cacheClock: () => number = sessionListCacheClock,
+): Promise<ResolvedSession | null> {
   try {
     if (!Array.isArray(pids) || pids.length === 0 || pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0)
       || typeof cwd !== "string" || cwd === ""
@@ -290,7 +486,7 @@ async function resolveTranscript(
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const input = cursor === null ? { scope } : { scope, cursor };
-      const output = await runBounded(runner, sdkArgs(agentDir, input), deadline);
+      const output = await runCachedSessionList(runner, { agentDir, jsonInput: input, deadline, cacheClock });
       const response = parseBrokerPage(output);
       if (response === null || response.sessions.length > PAGE_LIMIT) return null;
       if (indexSeq !== null && response.indexSeq !== indexSeq) return null;
@@ -317,7 +513,12 @@ async function resolveTranscript(
     if (candidates.length !== 1) return null;
     const expected = candidates[0]!;
 
-    const lookup = await runBounded(runner, sdkArgs(agentDir, { cwd: expected.locatorCwd, resolveSessionId: expected.sessionId }), deadline);
+    const lookup = await runCachedSessionList(runner, {
+      agentDir,
+      jsonInput: { cwd: expected.locatorCwd, resolveSessionId: expected.sessionId },
+      deadline,
+      cacheClock,
+    });
     const exact = parseBrokerPage(lookup);
     if (exact === null || exact.continuationCursor !== null || indexSeq === null || exact.indexSeq < indexSeq) return null;
 
@@ -326,13 +527,10 @@ async function resolveTranscript(
       && !definitivelyRetired(row) && !directSessionFence(row, agentDir));
     if (samePidRows.length !== 1 || !sameBinding(samePidRows[0], expected, wantedPids, canonicalCwd, canonicalWorktreeRoot)) return null;
     if (!isRecord(samePidRows[0]) || samePidRows[0].sessionId !== expected.sessionId) return null;
-    if (!isRecord(exact.savedSession) || exact.savedSession.id !== expected.sessionId
-      || typeof exact.savedSession.path !== "string" || !nodePath.isAbsolute(exact.savedSession.path)) return null;
-
     return {
       sessionId: expected.sessionId,
       pid: expected.pid,
-      path: exact.savedSession.path,
+      savedSession: exact.savedSession,
       hostIncarnation: expected.hostIncarnation,
       endpointGeneration: expected.endpointGeneration,
     };
@@ -342,13 +540,58 @@ async function resolveTranscript(
   }
 }
 
+function savedTranscript(binding: ResolvedSession | null): (GjcSdkSessionIdentity & { path: string }) | null {
+  if (!binding) return null;
+  const savedSession = binding.savedSession;
+  if (!isRecord(savedSession) || savedSession.id !== binding.sessionId
+    || typeof savedSession.path !== "string" || !nodePath.isAbsolute(savedSession.path)) return null;
+  return {
+    sessionId: binding.sessionId,
+    pid: binding.pid,
+    path: savedSession.path,
+    hostIncarnation: binding.hostIncarnation,
+    endpointGeneration: binding.endpointGeneration,
+  };
+}
+
+function currentIdentity(binding: ResolvedSession | null): GjcSdkSessionIdentity | null {
+  if (!binding) return null;
+  return {
+    sessionId: binding.sessionId,
+    pid: binding.pid,
+    hostIncarnation: binding.hostIncarnation,
+    endpointGeneration: binding.endpointGeneration,
+  };
+}
+
+export function gjcSdkCurrentSession(
+  pids: readonly number[],
+  cwd: string,
+  agentDir: string,
+): Promise<GjcSdkSessionIdentity | null> {
+  return resolveTranscript(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot)
+    .then(async (binding) => binding && await gjcSdkGenerationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? currentIdentity(binding) : null);
+}
+
+export function gjcSdkCurrentSessionWithRunner(
+  pids: readonly number[],
+  cwd: string,
+  agentDir: string,
+  runner: GjcSdkCommandRunner,
+  worktreeRootResolver: GjcSdkWorktreeRootResolver = gitWorktreeRoot,
+  cacheClock: () => number = sessionListCacheClock,
+): Promise<GjcSdkSessionIdentity | null> {
+  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock).then(currentIdentity);
+}
+
 /** Resolves the current readable GJC transcript for one of the pane's known GJC processes. */
 export function gjcSdkTranscript(
   pids: readonly number[],
   cwd: string,
   agentDir: string,
 ): Promise<{ sessionId: string; pid: number; path: string; hostIncarnation: string; endpointGeneration: number } | null> {
-  return resolveTranscript(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot);
+  return resolveTranscript(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot)
+    .then(async (binding) => binding && await gjcSdkGenerationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? savedTranscript(binding) : null);
 }
 
 /** Fixture-injection entry point; production callers should use gjcSdkTranscript. */
@@ -358,6 +601,7 @@ export function gjcSdkTranscriptWithRunner(
   agentDir: string,
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver = gitWorktreeRoot,
+  cacheClock: () => number = sessionListCacheClock,
 ): Promise<{ sessionId: string; pid: number; path: string; hostIncarnation: string; endpointGeneration: number } | null> {
-  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver);
+  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock).then(savedTranscript);
 }

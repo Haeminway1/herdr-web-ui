@@ -15,6 +15,7 @@
 import type { AgentIntegration, AgentStatus, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
 import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope } from "../../shared/protocol.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
+import { DEFAULT_RESIDENTS, sanitizeResidents } from "../../shared/residents.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
 import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
@@ -56,6 +57,7 @@ type SseListener = (event: MessageEvent) => void;
 const machines: Machine[] = structuredClone(machinesFixture.machines as Machine[]);
 const local = machines[0]!;
 const snapshot = (): SessionSnapshot => local.snapshot!;
+let residents = DEFAULT_RESIDENTS;
 /** pane id -> fixture key ("api", "web", …) */
 const keyOfPane = new Map<string, string>(Object.entries(panesFixture as Record<string, string>).map(([key, paneId]) => [paneId, key]));
 const chats = new Map<string, { turns: ConversationTurn[]; metadata: { model: string; reasoning_effort: string } }>(
@@ -479,6 +481,24 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   }
   if (path === "/api/machines") return json({ machines });
   if (path === "/api/session") return json({ snapshot: snapshot() });
+  if (path === "/api/residents") {
+    if (method === "PUT") residents = sanitizeResidents(await bodyOf(init, input));
+    else if (method !== "GET") return error("method_not_allowed", "use GET or PUT", 400);
+    return json(residents);
+  }
+  if (path === "/api/pane/seen") {
+    if (method !== "POST") return error("method_not_allowed", "use POST", 400);
+    const body = await bodyOf(init, input);
+    const target = paneOf(String(body["pane_id"] ?? ""));
+    if (!target) return error("pane_not_found", "pane not found", 404);
+    if (target.attention) {
+      target.attention = { ...target.attention, seen_at: new Date().toISOString() };
+      const message: ServerMessage = { type: "pane-attention", pane_id: target.pane_id, attention: target.attention };
+      emitSse({ type: "machine-message", machine_id: local.id, message });
+      for (const socket of sockets) socket.push(message);
+    }
+    return json({ attention: target.attention ?? null });
+  }
   if (path === "/api/agents") return json(agentsFixture);
   if (path === "/api/integrations") return json({ integrations: integrationsFixture } satisfies IntegrationsResponse);
   if (path === "/api/updates") return json({ managed: false, auto_update: false, phase: "idle", current_revision: null, latest_revision: null, current_version: __APP_VERSION__, latest_version: null, available: false, checked_at: null, blocked_reason: null, error: null }, 200, { "cache-control": "no-store" });

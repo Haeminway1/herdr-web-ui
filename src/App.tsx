@@ -2,7 +2,7 @@ import { type CSSProperties, type DragEvent, type ReactNode, useCallback, useEff
 import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
-import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, routeMissing, sendTestPush, signOut, splitPane, zoomPane, type HealthInfo } from "./lib/api.ts";
+import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, markPaneSeen, pairDevice, routeMissing, sendTestPush, signOut, splitPane, zoomPane, type HealthInfo } from "./lib/api.ts";
 import { deviceLabel, takePairCode } from "./lib/phone.ts";
 import { alertPaneTitle, displayPaneTitle } from "./components/Sidebar.tsx";
 import { PaneCanvas } from "./components/PaneCanvas.tsx";
@@ -37,6 +37,7 @@ import { headerCrumb, showsChat } from "./lib/headerCrumb.ts";
 import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
+import { applyPaneAttention, isUnread } from "./lib/attention.ts";
 import { rosterPanes } from "./lib/dagPane.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
 import { alertPrefs, useSettings } from "./lib/settings.ts";
@@ -664,6 +665,10 @@ export function App() {
       const machine = machinesRef.current.find((m) => m.id === payload.machine_id);
       if (!machine) return;
       const message = payload.message;
+      if (message.type === "pane-attention") {
+        setMachines((list) => list.map((entry) => entry.id === machine.id && entry.snapshot
+          ? { ...entry, snapshot: applyPaneAttention(entry.snapshot, message.pane_id, message.attention) } : entry));
+      }
       if (message.type === "pane-status") {
         const key = paneStorageId(machine.id, message.pane_id);
         const previous = statusRef.current.get(key);
@@ -929,6 +934,22 @@ export function App() {
 
 
   const selectedPane = snapshot?.panes.find((pane) => pane.pane_id === selectedPaneId) ?? null;
+  useEffect(() => {
+    if (locked !== false || drawerOpen || !selectedPane || !isUnread(selectedPane)) return;
+    let disposed = false;
+    const paneId = selectedPane.pane_id;
+    const read = () => {
+      if (document.visibilityState !== "visible") return;
+      void markPaneSeen(paneId, selectedMachineId).then((attention) => {
+        if (disposed || !attention) return;
+        setMachines((list) => list.map((entry) => entry.id === selectedMachineId && entry.snapshot
+          ? { ...entry, snapshot: applyPaneAttention(entry.snapshot, paneId, attention) } : entry));
+      }).catch(() => undefined);
+    };
+    read();
+    document.addEventListener("visibilitychange", read);
+    return () => { disposed = true; document.removeEventListener("visibilitychange", read); };
+  }, [locked, drawerOpen, selectedMachineId, selectedPane?.pane_id, selectedPane?.attention?.finished_at, selectedPane?.attention?.seen_at, selectedPane?.agent_status]);
   useScreenWakeLock(settings.keepScreenOn && locked === false && selectedPane !== null);
   const selectedWorkspace = selectedPane
     ? (snapshot?.workspaces.find((workspace) => workspace.workspace_id === selectedPane.workspace_id) ?? null)

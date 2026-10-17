@@ -1,13 +1,13 @@
 {
   "name": "herdr-web-ui",
   "private": true,
-  "version": "0.4.11",
+  "version": "0.4.1106",
   "type": "module",
   "description": "Browser version of the herdr terminal - live herdr workspaces, panes and agents in a web UI",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/devswha/herdr-web-ui.git"
+    "url": "git+https://github.com/Haeminway1/herdr-web-ui.git"
   },
   "scripts": {
     "dev": "bun --bun vite",

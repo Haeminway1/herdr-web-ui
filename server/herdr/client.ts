@@ -10,10 +10,12 @@ import type {
   PaneFindRequest,
   PaneFindResponse,
   PaneFindMatch,
+  PaneInfo,
 } from "../../shared/protocol.ts";
-import type { AgentInfo, AgentManifestInfo, AgentStartParams, PaneInfo, PaneLayoutSnapshot, PaneProcessInfo, PaneScrollInfo, TabInfo, WorkspaceInfo } from "../../shared/herdr-api.generated.ts";
+import type { AgentInfo, AgentManifestInfo, AgentStartParams, PaneLayoutSnapshot, PaneProcessInfo, PaneScrollInfo, SessionSnapshot as NativeSessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/herdr-api.generated.ts";
 import type { HerdrMethod, HerdrMethods, SingleHerdrMethod, UntypedHerdrMethod } from "./methods.ts";
 import type { HerdrIdentity } from "../../shared/machines.ts";
+import { labelManagedPanes } from "../managed-sessions.ts";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -199,7 +201,11 @@ export async function ping(socketPath?: string): Promise<HerdrIdentity> {
 }
 
 export async function sessionSnapshot(socketPath?: string, timeoutMs?: number): Promise<SessionSnapshot> {
-  const result = await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {}, socketPath, timeoutMs);
+  return labelManagedPanes(await nativeSessionSnapshot(socketPath, timeoutMs));
+}
+
+export async function nativeSessionSnapshot(socketPath?: string, timeoutMs?: number): Promise<NativeSessionSnapshot> {
+  const result = await herdrRpc<{ snapshot: NativeSessionSnapshot }>("session.snapshot", {}, socketPath, timeoutMs);
   return result.snapshot;
 }
 

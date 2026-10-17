@@ -1,11 +1,12 @@
-import { afterAll, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { afterAll, expect, it, spyOn } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { herdrRpc, herdrSocketPath, sessionSnapshot, workspaceClose, workspaceCreate, paneRead } from "./herdr/client.ts";
 import { ConversationUnavailable, gjcTranscriptPath, paneConversation } from "./conversation.ts";
 import { isGjcProcess } from "./gjc-runtime.ts";
 import { startShellAgent } from "./shell-agent.ts";
+import * as sdkGeneration from "./gjc-sdk-generation.ts";
 
 const home = realpathSync(mkdtempSync(join(tmpdir(), "herdr-gjc-binding-")));
 const agentDir = join(home, ".gjc", "agent");
@@ -15,6 +16,7 @@ const workspaces: string[] = [];
 const script = join(home, "gjc");
 const bin = join(home, "bin");
 const registry = join(home, "sdk-registry.json");
+let brokerClock = 0;
 const sdkCli = join(home, "gjc-sdk-fixture.js");
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -145,6 +147,8 @@ function sdkRow(pid: number, cwd: string, sessionId: string, overrides: Record<s
 
 function writeRegistry(rows: Record<string, unknown>[], paths: Record<string, string> = {}, kind?: string): void {
   writeFileSync(registry, JSON.stringify({ rows, paths, ...(kind ? { kind } : {}) }));
+  // Registry mutations represent the next native broker refresh, without fixed sleeps.
+  brokerClock += 10_000;
 }
 
 async function withSdkFixture<T>(run: () => Promise<T>): Promise<T> {
@@ -155,9 +159,17 @@ async function withSdkFixture<T>(run: () => Promise<T>): Promise<T> {
   process.env["PATH"] = `${bin}${process.env["PATH"] ? `:${process.env["PATH"]}` : ""}`;
   process.env["GJC_TEST_REGISTRY"] = registry;
   process.env["GJC_TEST_AGENT_DIR"] = agentDir;
+  const clock = spyOn(performance, "now").mockImplementation(() => brokerClock);
+  // This fixture's live registry is the SDK's readonly generation authority.
+  const generation = spyOn(sdkGeneration, "gjcSdkGenerationCurrent").mockImplementation(async (_root, id, endpointGeneration) => {
+    const current = JSON.parse(readFileSync(registry, "utf8"));
+    return current.rows.some((row: Record<string, unknown>) => row.sessionId === id && row.endpointGeneration === endpointGeneration && row.live === true && row.terminal === false && row.ambiguous === false);
+  });
   try {
     return await run();
   } finally {
+    generation.mockRestore();
+    clock.mockRestore();
     for (const key of keys) {
       const value = previous.get(key);
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -176,6 +188,10 @@ async function expectConversation(id: string, answer: string): Promise<void> {
   expect(conversation.turns[0]!.parts[0]).toMatchObject({ kind: "text", text: answer });
 }
 
+async function expectTranscript(id: string, expected: string): Promise<void> {
+  expect(await gjcTranscriptPath(id, home, home)).toBe(expected);
+}
+
 it("SDK identity ignores a copied neighboring answer on the pane screen", async () => withSdkFixture(async () => {
   const a = join(dir, "sdk-answer-a.jsonl"), b = join(dir, "sdk-answer-b.jsonl");
   const otherAnswer = "This long neighboring response is deliberately unique so visible screen matching would choose this wrong transcript instead of the short SDK-owned answer.";
@@ -189,7 +205,7 @@ it("SDK identity ignores a copied neighboring answer on the pane screen", async 
   writeRegistry([sdkRow(pid, home, "sdk-answer-a")], { "sdk-answer-a": a });
 
   expect(heldPaths(pid)).not.toContain(a);
-  expect(await gjcTranscriptPath(id, home, home)).toBe(a);
+  await expectTranscript(id, a);
   await expectConversation(id, "OK");
 }));
 
@@ -210,8 +226,8 @@ it("SDK maps same-cwd panes by exact GJC PID despite identical answers, titles, 
     sdkRow(secondProcess.pid, home, "same-answer-b"),
   ], { "same-answer-a": a, "same-answer-b": b });
 
-  expect(await gjcTranscriptPath(first, home, home)).toBe(a);
-  expect(await gjcTranscriptPath(second, home, home)).toBe(b);
+  await expectTranscript(first, a);
+  await expectTranscript(second, b);
   await expectConversation(first, "same");
   await expectConversation(second, "same");
 }));
@@ -225,12 +241,12 @@ it("SDK follows /new or resume when the same GJC PID changes from A to B without
   const { pid } = await gjcProcess(id);
   await setAgent(id, "gjc");
   writeRegistry([sdkRow(pid, home, "resume-a")], { "resume-a": a, "resume-b": b });
-  expect(await gjcTranscriptPath(id, home, home)).toBe(a);
+  await expectTranscript(id, a);
 
   // The fixture SDK registry now reflects /new or resume; neither the PID nor the pane screen changes.
   writeRegistry([sdkRow(pid, home, "resume-b")], { "resume-a": a, "resume-b": b });
   expect((await paneRead({ paneId: id })).text).toContain("A");
-  expect(await gjcTranscriptPath(id, home, home)).toBe(b);
+  await expectTranscript(id, b);
   await expectConversation(id, "B");
 }));
 
@@ -244,7 +260,26 @@ it("SDK scopes discovery so unrelated retired history cannot exhaust the pane's 
   const retired = Array.from({ length: 801 }, (_, index) =>
     sdkRow(900_000 + index, otherCwd, `old-${index}`, { live: false }));
   writeRegistry([...retired, sdkRow(pid, home, "scoped-a")], { "scoped-a": a });
-  expect(await gjcTranscriptPath(id, home, home)).toBe(a);
+  await expectTranscript(id, a);
+}));
+
+it("SDK cached listings cannot authorize a generation retired by /new before cache expiry", async () => withSdkFixture(async () => {
+  const a = join(dir, "cached-generation-a.jsonl"), b = join(dir, "cached-generation-b.jsonl");
+  writeFileSync(a, record(home, "A", "cached-generation-a"));
+  writeFileSync(b, record(home, "B", "cached-generation-b"));
+  const id = await pane([dir], "A");
+  const { pid } = await gjcProcess(id);
+  await setAgent(id, "gjc");
+  const paths = { "cached-generation-a": a, "cached-generation-b": b };
+  writeRegistry([sdkRow(pid, home, "cached-generation-a")], paths);
+  await expectTranscript(id, a);
+  // Do not advance the cache clock: the two raw CLI answers still identify A.
+  writeFileSync(registry, JSON.stringify({ rows: [sdkRow(pid, home, "cached-generation-b")], paths }));
+  await expect(gjcTranscriptPath(id, home, home)).rejects.toThrow("no_session_path");
+  await expect(paneConversation(id)).rejects.toBeInstanceOf(ConversationUnavailable);
+  brokerClock += 10_000;
+  await expectTranscript(id, b);
+  await expectConversation(id, "B");
 }));
 
 it("SDK GJC identity overrides stale Codex session metadata", async () => withSdkFixture(async () => {

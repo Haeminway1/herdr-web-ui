@@ -10,6 +10,8 @@ import { MENU_SHORTCUT_KEYS, recordShortcut, shortcutMatchesQuery } from "../lib
 import { exactChordRisk, isReservedShortcutKey, parseExactChord } from "../lib/shortcutBindings.ts";
 import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTINGS, DIFF_STYLES, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN, TERMINAL_WHEEL_SPEED_MAX, TERMINAL_WHEEL_SPEED_MIN, DICTATION_LANGUAGES, VOICE_BUTTONS, useSettings, forgetPaneViews, uiFontSize, type DictationLanguage, type VoiceButton } from "../lib/settings.ts";
 import { pickTheme, rowFor, THEME_IDS, type Mode, type ThemeId } from "../lib/themes.ts";
+import { useResidents, updateResidents } from "../lib/residents.ts";
+import { residentName, type ResidentLaunch } from "../../shared/residents.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useLocale, useT } from "../lib/i18n.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { KeyBarSettings } from "./KeyBarSettings.tsx";
@@ -236,6 +238,7 @@ function shownBy(entry: SettingsLevel | null): { page: SettingsPage | null; keyB
 
 /** What each theme is called: the color words are translated, the brand names stay as their projects write them. */
 const THEME_NAMES: Record<ThemeId, string> = {
+  report: "Report",
   amber: "Amber",
   charcoal: "Charcoal",
   catppuccin: "Catppuccin",
@@ -308,6 +311,13 @@ function AppearancePage() {
       <SettingsRow label={t("Sidebar rows")} description={t("Name each workspace on one line, or show what its agent is doing with the workspace under it")} wide>
         <Segmented label={t("Sidebar rows")} value={settings.sidebarRows} onChange={(sidebarRows) => update({ sidebarRows })} options={[{ value: "one", label: t("One line") }, { value: "two", label: t("Two lines") }]} />
       </SettingsRow>
+      <SettingsRow label={t("Sidebar layout")} wide>
+        <Segmented label={t("Sidebar layout")} value={settings.sidebarLayout} onChange={(sidebarLayout) => update({ sidebarLayout })} options={[{ value: "classic", label: t("Classic") }, { value: "upstream", label: t("Workspaces") }]} />
+      </SettingsRow>
+      {settings.sidebarLayout === "classic" && <SettingsRow label={t("Group sessions by")} wide>
+        <Segmented label={t("Group sessions by")} value={settings.sidebarGrouping} onChange={(sidebarGrouping) => update({ sidebarGrouping })} options={[{ value: "repo", label: t("Repository") }, { value: "directory", label: t("Folder") }, { value: "workspace", label: t("Workspaces") }]} />
+      </SettingsRow>}
+      {settings.sidebarLayout === "classic" && settings.sidebarGrouping === "repo" && <ResidentSettings />}
       <SettingsRow label={t("Agents order")} description={t("Activity keeps a waiting agent on top, then the one that changed last; herdr's own order is not changed")} wide>
         <Segmented label={t("Agents order")} value={settings.agentOrder} onChange={(agentOrder) => update({ agentOrder })} options={[{ value: "workspace", label: t("Workspaces") }, { value: "activity", label: t("Activity") }]} />
       </SettingsRow>
@@ -326,6 +336,38 @@ function AppearancePage() {
     </SettingsGroup>
     </>
   );
+}
+
+function ResidentSettings() {
+  const t = useT();
+  const { residents } = useResidents();
+  const launch = (change: Partial<ResidentLaunch>) => void updateResidents((current) => ({ ...current, launch: { ...current.launch, ...change } }));
+  return <>
+    <SettingsRow label={t("Resident agents")} description={t("Pin a session in the sidebar to add its folder. Rename one here; On top stays above the Resident / Work toggle.")} wide>
+      <ul className="quick-replies-list">
+        {[...residents.top, ...residents.residents].map((folder) => {
+          const system = residents.system_pin?.folder === folder;
+          return <li key={folder} title={folder}>
+            <input className="input" aria-label={t("Name of {folder}", { folder })} defaultValue={residentName(residents, folder)} key={residentName(residents, folder)} onBlur={(event) => {
+              const name = event.target.value.trim();
+              if (name !== residentName(residents, folder)) void updateResidents((current) => ({ ...current, names: { ...current.names, [folder]: name } }));
+            }} />
+            <Toggle label={t("On top")} checked={residents.top.includes(folder)} disabled={system} onChange={(top) => void updateResidents((current) => ({ ...current, top: top ? [...current.top, folder] : current.top.filter((path) => path !== folder), residents: top ? current.residents.filter((path) => path !== folder) : [...current.residents, folder] }))} />
+            {system ? <span>{t("System pinned")}</span> : <button type="button" className="btn btn-ghost" onClick={() => void updateResidents((current) => ({ ...current, top: current.top.filter((path) => path !== folder), residents: current.residents.filter((path) => path !== folder) }))}>{t("Remove")}</button>}
+          </li>;
+        })}
+      </ul>
+    </SettingsRow>
+    <SettingsRow label={t("Start resident agents with")} description={t("A dim resident row starts this agent in its folder")} wide>
+      <Segmented label={t("Agent")} value={residents.launch.kind} onChange={(kind) => launch({ kind, model: kind === "claude" ? "claude-opus-5-5" : "" })} options={[{ value: "claude", label: "Claude Code" }, { value: "codex", label: "Codex" }]} />
+    </SettingsRow>
+    <SettingsRow label={t("Model")} description={t("Empty for the agent's own default")}>
+      <input className="input" aria-label={t("Model")} defaultValue={residents.launch.model} key={residents.launch.model} onBlur={(event) => launch({ model: event.target.value.trim() })} />
+    </SettingsRow>
+    <SettingsRow label={t("Reasoning")} wide>
+      <Segmented label={t("Reasoning")} value={residents.launch.effort} onChange={(effort) => launch({ effort })} options={[{ value: "", label: t("Default") }, { value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }, { value: "xhigh", label: "xHigh" }]} />
+    </SettingsRow>
+  </>;
 }
 
 function ChatPage() {

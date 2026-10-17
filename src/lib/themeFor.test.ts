@@ -16,7 +16,7 @@ describe("themeFor", () => {
     const settings = sanitizeSettings({ theme: "system", palette: "charcoal" });
     expect(settings.lightTheme).toBe("charcoal");
     expect(settings.darkTheme).toBe("charcoal");
-    expect(DEFAULT_SETTINGS.lightTheme).toBe("amber");
+    expect(DEFAULT_SETTINGS.lightTheme).toBe("report");
   });
 
   test("fixed mode ignores its stale active pair, preserving the other valid entry (c)", () => {
@@ -26,11 +26,11 @@ describe("themeFor", () => {
     expect(sanitizeSettings({ palette: "charcoal", paletteLight: "pink" }).lightTheme).toBe("charcoal");
   });
 
-  test("a removed palette in the System pair loads as amber (d)", () => {
+  test("removed fork palettes in the System pair load as Report (d)", () => {
     const settings = sanitizeSettings({ theme: "system", palette: "report", paletteLight: "lilac", paletteDark: "forest" });
-    expect(settings.palette).toBe("amber");
-    expect(settings.lightTheme).toBe("amber");
-    expect(settings.darkTheme).toBe("amber");
+    expect(settings.palette).toBe("report");
+    expect(settings.lightTheme).toBe("report");
+    expect(settings.darkTheme).toBe("report");
   });
 
   test("any side keeps a single-kind row's mode and terminal colors (k)", () => {
@@ -45,6 +45,6 @@ describe("themeFor", () => {
     const dracula = themeFor(sanitizeSettings({ theme: "light", lightTheme: "dracula" }), "light");
     expect(dracula).toBe(rowFor("dracula", "dark"));
     expect(terminalTheme(dracula.mode, dracula.id)).toEqual(rowFor("dracula", "dark").terminal);
-    expect(themeFor(sanitizeSettings({ theme: "light", lightTheme: "nope" }), "light")).toBe(rowFor("amber", "light"));
+    expect(themeFor(sanitizeSettings({ theme: "light", lightTheme: "nope" }), "light")).toBe(rowFor("report", "light"));
   });
 });

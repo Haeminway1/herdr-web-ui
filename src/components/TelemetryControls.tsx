@@ -32,7 +32,7 @@ export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen:
   const [status, setStatus] = useState<TelemetryStatus | null>(null);
   const allowed = status !== null && status.enabled && !status.blocked_by_env && status.notice_seen;
   useEffect(() => {
-    if (!enabled || !allowed || submittedSettingsSignature.current === settingsSignature) return;
+    if (!enabled || !allowed || settingsSnapshot === null || submittedSettingsSignature.current === settingsSignature) return;
     submittedSettingsSignature.current = settingsSignature;
     changeTelemetry({ settings: settingsSnapshot }).then(setStatus, (error: unknown) => {
       if (!(error instanceof ApiError && error.status === 404)) console.error("telemetry settings", error);
@@ -64,7 +64,7 @@ export function TelemetryNotice({ enabled, onOpen }: { enabled: boolean; onOpen:
       changeTelemetry({
         notice_seen: true,
         notice_version: NOTICE_VERSION,
-        settings: snapshot,
+        ...(snapshot === null ? {} : { settings: snapshot }),
       }).then((next) => { submittedSettingsSignature.current = JSON.stringify(snapshot); setStatus(next); },
         (error: unknown) => console.error("telemetry notice", error));
     };
@@ -109,7 +109,7 @@ export function TelemetryControls() {
       }
       // off, blocked or before the notice: the switch and the preview show the server's state, and the
       // snapshot stays in the browser
-      if (!current.enabled || current.blocked_by_env || !current.notice_seen) {
+      if (!current.enabled || current.blocked_by_env || !current.notice_seen || snapshot === null) {
         setStatus(current);
         return;
       }
@@ -136,7 +136,7 @@ export function TelemetryControls() {
     setSaving(true);
     setError(null);
     // turned on, the switch brings the snapshot the browser kept to itself while it was off
-    changeTelemetry(enabled ? { enabled, settings: settingsSnapshotRef.current } : { enabled }).then(
+    changeTelemetry(enabled && settingsSnapshotRef.current !== null ? { enabled, settings: settingsSnapshotRef.current } : { enabled }).then(
       (next) => { if (request === statusRequest.current) setStatus(next); },
       (failure: unknown) => { if (request === statusRequest.current) setError(failure instanceof Error ? failure.message : String(failure)); },
     ).finally(() => setSaving(false));

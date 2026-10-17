@@ -22,6 +22,8 @@ export type ResolvedTheme = "dark" | "light";
 export type Density = "compact" | "comfortable";
 /** One line names the workspace; two lines say what its pane is doing, with the workspace under it. */
 export type SidebarRows = "one" | "two";
+export type SidebarLayout = "classic" | "upstream";
+export type SidebarGrouping = "repo" | "directory" | "workspace";
 /** the Agents list's order: herdr's workspace order, or a waiting agent first and then the latest change */
 export type AgentOrder = "workspace" | "activity";
 /** how agent logos are drawn: in their brand colors, or without color: Claude's in the text color, the others in grey (data-marks on <html>) */
@@ -30,9 +32,7 @@ export type AgentMarks = "color" | "mono";
 export type UsageCount = "used" | "left";
 /** the limit a plan meter shows: the plan's week, or its short session (5 hours on Claude and Codex) */
 export type UsageGlance = "week" | "session";
-/** amber: the herdr look (the default); charcoal: neutral Ghostty-style dark;
- *  catppuccin: Catppuccin Mocha in dark, Latte in light. A record naming a palette that was removed
- *  (report, lilac, forest) loads as amber. */
+/** Report is the fork default; every current upstream theme stays selectable. */
 export type Palette = ThemeId;
 /** the chat lane's widest: the transcript, the composer column and the held list share it (--chat-w in src/styles.css).
  *  narrow: 820px; default: follows the pane, up to 60rem (chatLaneWidth); wide: 72rem; full: the pane, less the gutters */
@@ -69,6 +69,8 @@ export interface Settings {
   density: Density;
   /** How much a workspace row says: its name, or its pane's title over its place. */
   sidebarRows: SidebarRows;
+  sidebarLayout: SidebarLayout;
+  sidebarGrouping: SidebarGrouping;
   /** The Agents list's order. Activity is display-only: herdr's own order never changes. */
   agentOrder: AgentOrder;
   /** Agent logos: brand colors, or without color, so a list of one agent is not a stripe of tiles */
@@ -167,7 +169,7 @@ export type DiffStyle = (typeof DIFF_STYLES)[number];
  * Settings field in the projection makes a new field require an explicit collection decision. */
 type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
-  | "quickReplies" | "usageOrder" | "usageHidden">;
+  | "quickReplies" | "usageOrder" | "usageHidden" | "sidebarLayout" | "sidebarGrouping" | "palette" | "paletteLight" | "paletteDark" | "darkTheme" | "lightTheme">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
@@ -175,7 +177,11 @@ function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
 }
 
 /** Full allowlisted snapshot. Text and account-key values are only used for safe summaries. */
-export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings & TelemetrySourceSettings {
+export function telemetrySettingsSnapshot(settings: Settings): (TelemetrySettings & TelemetrySourceSettings) | null {
+  // The deployed upstream receiver has no Report enum. Do not misreport it as another
+  // theme or require a telemetry deployment just to restore a local fork palette.
+  const { palette, paletteLight, paletteDark, darkTheme, lightTheme } = settings;
+  if (palette === "report" || paletteLight === "report" || paletteDark === "report" || darkTheme === "report" || lightTheme === "report") return null;
   return {
     terminalInputMode: settings.terminalInputMode,
     theme: settings.theme,
@@ -184,9 +190,9 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
     agentOrder: settings.agentOrder,
     agentMarks: settings.agentMarks,
     statusIndicators: settings.statusIndicators,
-    palette: settings.palette,
-    paletteLight: settings.paletteLight,
-    paletteDark: settings.paletteDark,
+    palette,
+    paletteLight,
+    paletteDark,
     terminalFontSize: settings.terminalFontSize,
     terminalWheelSpeed: settings.terminalWheelSpeed,
     paneClipboard: settings.paneClipboard,
@@ -226,8 +232,8 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
     quickReplyCount: settings.quickReplies.length,
     usageHiddenCount: settings.usageHidden.length,
     usageOrderCustom: settings.usageOrder.length > 0,
-    darkTheme: settings.darkTheme,
-    lightTheme: settings.lightTheme,
+    darkTheme,
+    lightTheme,
   };
 }
 
@@ -238,6 +244,7 @@ export function telemetrySettingsSnapshot(settings: Settings): TelemetrySettings
  */
 export const SETTING_SCOPE = {
   theme: "shared", palette: "shared", darkTheme: "shared", lightTheme: "shared", language: "shared", sidebarRows: "shared", agentOrder: "shared",
+  sidebarLayout: "device", sidebarGrouping: "device",
   agentMarks: "shared", autoSendQueued: "shared", showThinking: "shared", quickReplies: "shared",
   showQuickReplies: "shared", showUsage: "shared", usageCount: "shared",
   usageGlance: "shared", usageOrder: "shared", usageHidden: "shared", defaultView: "device", suggestionChip: "device",
@@ -265,14 +272,16 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "dark",
   density: "comfortable",
   sidebarRows: "one",
+  sidebarLayout: "classic",
+  sidebarGrouping: "repo",
   agentOrder: "workspace",
   agentMarks: "color",
   statusIndicators: "classic",
-  palette: "amber",
-  paletteLight: "amber",
-  paletteDark: "amber",
-  darkTheme: "amber",
-  lightTheme: "amber",
+  palette: "report",
+  paletteLight: "report",
+  paletteDark: "report",
+  darkTheme: "report",
+  lightTheme: "report",
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
@@ -416,14 +425,14 @@ export function chatLaneWidth(paneWidth: number, rootFontPx: number = ROOT_FONT_
 export function sanitizeSettings(raw: unknown): Settings {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   const theme = record["theme"] === "dark" || record["theme"] === "light" || record["theme"] === "system" ? record["theme"] : DEFAULT_SETTINGS.theme;
-  const palette = isThemeId(record["palette"]) ? record["palette"] : "amber";
-  // Absence migrates; an explicitly unknown id falls back to amber, not a stale pair.
+  const palette = isThemeId(record["palette"]) ? record["palette"] : DEFAULT_SETTINGS.palette;
+  // Absence migrates; an explicitly unknown id uses the default, not a stale pair.
   const darkTheme = "darkTheme" in record
-    ? (isThemeId(record["darkTheme"]) ? record["darkTheme"] : "amber")
-    : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? "amber" : palette;
+    ? (isThemeId(record["darkTheme"]) ? record["darkTheme"] : DEFAULT_SETTINGS.darkTheme)
+    : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? DEFAULT_SETTINGS.darkTheme : palette;
   const lightTheme = "lightTheme" in record
-    ? (isThemeId(record["lightTheme"]) ? record["lightTheme"] : "amber")
-    : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? "amber" : palette;
+    ? (isThemeId(record["lightTheme"]) ? record["lightTheme"] : DEFAULT_SETTINGS.lightTheme)
+    : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? DEFAULT_SETTINGS.lightTheme : palette;
   const density = record["density"];
   const font = record["terminalFontSize"];
   const chatFont = record["chatFontSize"];
@@ -439,6 +448,8 @@ export function sanitizeSettings(raw: unknown): Settings {
     theme: theme === "dark" || theme === "light" || theme === "system" ? theme : DEFAULT_SETTINGS.theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarRows: record["sidebarRows"] === "one" || record["sidebarRows"] === "two" ? record["sidebarRows"] : DEFAULT_SETTINGS.sidebarRows,
+    sidebarLayout: record["sidebarLayout"] === "upstream" ? "upstream" : "classic",
+    sidebarGrouping: record["sidebarGrouping"] === "directory" || record["sidebarGrouping"] === "workspace" ? record["sidebarGrouping"] : "repo",
     agentOrder: record["agentOrder"] === "workspace" || record["agentOrder"] === "activity" ? record["agentOrder"] : DEFAULT_SETTINGS.agentOrder,
     agentMarks: record["agentMarks"] === "color" || record["agentMarks"] === "mono" ? record["agentMarks"] : DEFAULT_SETTINGS.agentMarks,
     statusIndicators: record["statusIndicators"] === "classic" || record["statusIndicators"] === "dots" || record["statusIndicators"] === "symbols" ? record["statusIndicators"] : DEFAULT_SETTINGS.statusIndicators,
@@ -532,12 +543,12 @@ export function resolveTheme(setting: ThemeSetting): ResolvedTheme {
 
 type TerminalColors = { background: string; foreground: string; cursor: string; selectionBackground: string };
 
-export function terminalTheme(theme: ResolvedTheme, palette: Palette = "amber"): TerminalColors {
+export function terminalTheme(theme: ResolvedTheme, palette: Palette = "report"): TerminalColors {
   return { ...terminalColors(palette, theme) };
 }
 
 /** `<meta name="theme-color">` follows the panel surface so the PWA title bar matches. */
-export function themeColor(theme: ResolvedTheme, palette: Palette = "amber"): string {
+export function themeColor(theme: ResolvedTheme, palette: Palette = "report"): string {
   return themeTableColor(palette, theme);
 }
 

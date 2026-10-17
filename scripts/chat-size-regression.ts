@@ -78,7 +78,7 @@ async function openRecording(browser: Browser, contexts: BrowserContext[], origi
   const context = await browser.newContext({ locale: "en-US", ...options });
   contexts.push(context);
   await context.addInitScript((stored) => {
-    localStorage.setItem("herdr-web-ui:settings", JSON.stringify(stored));
+    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...stored, sidebarLayout: "upstream" }));
     // every frame this page's socket sends and receives, to wait on the server's answers
     const frames: { dir: "in" | "out"; type: string; keep_size?: boolean; pane_id?: string; cols?: number; rows?: number }[] = [];
     (window as unknown as { frames_: typeof frames }).frames_ = frames;

@@ -510,6 +510,7 @@ describe("telemetry API", () => {
     const headers = { "content-type": "application/json", "x-herdr-update": "1", origin: new URL(url).origin };
     const settings = telemetrySettingsSnapshot({
       ...DEFAULT_SETTINGS,
+      palette: "amber", paletteLight: "amber", paletteDark: "amber", darkTheme: "amber", lightTheme: "amber",
       theme: "light",
       terminalFontFamily: "private font name",
       quickReplies: ["private reply"],

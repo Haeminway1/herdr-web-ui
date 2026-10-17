@@ -5,9 +5,8 @@
  * mirror of this block and the two must not drift. Dark is the default theme and
  * `[data-theme="light"]` overrides the color group only (src/lib/settings.ts sets
  * the attribute); `[data-density="compact"]` overrides the type scale and row
- * heights. The base blocks are the amber palette, the default and the look before
- * settings load; `[data-palette]` blocks override them for the opt-in
- * charcoal and catppuccin palettes. These theme blocks are the single source of
+ * heights. The base blocks remain the upstream amber palette. Report is the fork's
+ * default; every current upstream theme remains selectable. These theme blocks are the single source of
  * theme colors: `bun run generate:themes` (scripts/generate-themes.ts) reads them
  * and writes src/lib/themes.generated.ts (xterm's --term-* colors and the panel
  * color), DESIGN.md's amber table, index.html's theme-color and the web manifest's
@@ -17,6 +16,114 @@
  * primitives (.icon-button, .btn, .pill, .badge, .segmented, .modal, .menu, .kbd)
  * that more than one component uses.
  */
+
+[data-theme="dark"][data-palette="report"] {
+  --notice: #f5b544;
+  --bg: #0a0d12;
+  --bg-panel: #0f1319;
+  --bg-elevated: #141922;
+  --bg-hover: #1a212c;
+  --bg-input: #0c1016;
+  --border: #1e2530;
+  --border-strong: #2a3340;
+  --text: #b4bdc9;
+  --text-dim: #8792a3;
+  --text-strong: #e8ecf2;
+  --accent: #4c9aff;
+  --accent-tint: rgba(76, 154, 255, 0.12);
+  --primary: #e8ecf2;
+  --primary-hover: #ffffff;
+  --primary-text: #0a0d12;
+  --primary-tint: rgba(232, 236, 242, 0.1);
+  --status-idle: #8792a3;
+  --status-working: #f5b544;
+  --status-blocked: #ff6b7a;
+  --status-done: #3ddc97;
+  --status-working-tint: rgba(245, 181, 68, 0.14);
+  --status-blocked-tint: rgba(255, 107, 122, 0.14);
+  --status-done-tint: rgba(61, 220, 151, 0.14);
+  --danger-tint: rgba(255, 107, 122, 0.12);
+  --danger-text: #ffd6db;
+  --scrim: rgba(4, 6, 10, 0.6);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0);
+  --shadow-drawer: 0 0 40px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border);
+  --line-number: var(--text-dim);
+  --syntax-function: var(--accent);
+  --bubble-border: transparent;
+  --term-bg: #0f1319;
+  --term-fg: #c9d1dc;
+  --term-cursor: #4c9aff;
+  --term-selection: #1f3a66;
+  --syntax-keyword: #f78c6c;
+  --syntax-string: #3ddc97;
+  --syntax-number: #f5b544;
+  --syntax-type: #7fd4ff;
+  --syntax-variable: #c9d1dc;
+  --syntax-meta: #b392f0;
+}
+
+[data-theme="light"][data-palette="report"] {
+  --notice: #8a5300;
+  --bg: #f2f2f0;
+  --bg-panel: #fafaf9;
+  --bg-elevated: #efefed;
+  --bg-hover: #e6e6e3;
+  --bg-input: #ffffff;
+  --border: #dcdcd8;
+  --border-strong: #c4c4bf;
+  --text: #242424;
+  --text-dim: #5f5b56;
+  --text-strong: #111111;
+  --accent: #1f5fcc;
+  --accent-tint: rgba(31, 95, 204, 0.1);
+  --primary: #242424;
+  --primary-hover: #3a3a3a;
+  --primary-text: #fafaf9;
+  --primary-tint: rgba(36, 36, 36, 0.1);
+  --status-idle: #685e52;
+  --status-working: #155a72;
+  --status-blocked: #a82323;
+  --status-done: #2f6317;
+  --status-working-tint: rgba(21, 90, 114, 0.12);
+  --status-blocked-tint: rgba(168, 35, 35, 0.12);
+  --status-done-tint: rgba(47, 99, 23, 0.12);
+  --danger-tint: rgba(168, 35, 35, 0.1);
+  --danger-text: var(--status-blocked);
+  --line-number: var(--text-dim);
+  --syntax-function: var(--accent);
+  --bubble-border: var(--border);
+  --scrim: rgba(20, 20, 20, 0.35);
+  --shadow-drawer: 0 0 40px rgba(20, 20, 20, 0.2);
+  --shadow-pop: 0 16px 48px rgba(20, 20, 20, 0.14), 0 0 0 1px var(--border);
+  --shadow-card: 0 4px 16px rgba(20, 20, 20, 0.06);
+  --term-bg: #fafaf9;
+  --term-fg: #242424;
+  --term-cursor: #1f5fcc;
+  --term-selection: #cfe0fb;
+  --term-black: #242424;
+  --term-red: #b3261e;
+  --term-green: #22743a;
+  --term-yellow: #8a5300;
+  --term-blue: #0b6e8a;
+  --term-magenta: #6f42c1;
+  --term-cyan: #0f6f74;
+  --term-white: #5f5b56;
+  --term-bright-black: #4e4b47;
+  --term-bright-red: #c92d24;
+  --term-bright-green: #277d3f;
+  --term-bright-yellow: #9f6100;
+  --term-bright-blue: #1a7391;
+  --term-bright-magenta: #7f52d1;
+  --term-bright-cyan: #13767e;
+  --term-bright-white: #111111;
+  --syntax-keyword: #b3261e;
+  --syntax-string: #22743a;
+  --syntax-number: #8a5300;
+  --syntax-type: #0b6e8a;
+  --syntax-variable: #3b3b3b;
+  --syntax-meta: #6f42c1;
+}
 
 :root {
   color-scheme: dark;

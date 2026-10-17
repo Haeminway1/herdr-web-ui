@@ -2,6 +2,7 @@ import { constants, fstatSync, closeSync, openSync, readdirSync, readFileSync, r
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { HerdrPane } from "../shared/protocol.ts";
 import { herdrRpc } from "./herdr/client.ts";
+import { resolveManagedSession, type ManagedSessionDeps, type ManagedSessionResolution } from "./managed-sessions.ts";
 import { recentProcessTable } from "./gjc-runtime.ts";
 import { processStartedAt } from "./process-start.ts";
 import { descendantProcesses, type ProcessRow } from "./windows-processes.ts";
@@ -472,8 +473,28 @@ function omoTranscriptsResolved(cwd: string, panes: readonly PaneResolution[], h
 }
 
 /** The sessions of `cwd`'s panes: each pane's runtime folder is resolved from its own processes first. */
+function hasManagedBinding(pane: HerdrPane): boolean {
+  const tokens = pane.tokens ?? {};
+  return pane.managed_session !== undefined || Object.hasOwn(tokens, "hm_managed_session") || Object.hasOwn(tokens, "hm_managed_generation");
+}
+
+function managedLookupPane(pane: HerdrPane): HerdrPane | null {
+  if (!hasManagedBinding(pane)) return null;
+  const tokens = pane.tokens ?? {};
+  if (Object.hasOwn(tokens, "hm_managed_session") || Object.hasOwn(tokens, "hm_managed_generation")) return pane;
+  const identity = pane.managed_session;
+  if (!identity || identity.id === null || identity.generation === null) return pane;
+  return { ...pane, tokens: { ...tokens, hm_managed_session: identity.id, hm_managed_generation: String(identity.generation) } };
+}
+
+async function managedResolution(pane: HerdrPane, deps: ManagedSessionDeps): Promise<ManagedSessionResolution | null> {
+  const lookup = managedLookupPane(pane);
+  return lookup === null ? null : resolveManagedSession(lookup, undefined, deps);
+}
+
 export function omoTranscriptsOfCwd(cwd: string, panes: HerdrPane[], infos: ReadonlyMap<string, ProcessInfo>, home: string, environOf: (pid: number) => readonly string[] | null = processEnviron): Map<string, { path: string | null; pending: string | null; startedAt: number | null }> {
-  return omoTranscriptsResolved(cwd, panes.map((pane) => resolvePaneRuntime(pane, infos.get(pane.pane_id) ?? null, home, environOf)), home);
+  const nativePanes = panes.filter((pane) => !hasManagedBinding(pane));
+  return omoTranscriptsResolved(cwd, nativePanes.map((pane) => resolvePaneRuntime(pane, infos.get(pane.pane_id) ?? null, home, environOf)), home);
 }
 
 /**
@@ -481,11 +502,19 @@ export function omoTranscriptsOfCwd(cwd: string, panes: HerdrPane[], infos: Read
  * but omo has not written yet (before its first message, or right after /new). The folder
  * is the pane's resolved runtime cwd, and its peers are the panes resolving to the same one.
  */
-export async function omoSessionForPane(paneId: string, cwd: string, panes: HerdrPane[], home = process.env["HOME"] ?? ""): Promise<{ path: string | null; pending: string | null }> {
+export async function omoSessionForPane(paneId: string, cwd: string, panes: HerdrPane[], home = process.env["HOME"] ?? "", managedDeps: ManagedSessionDeps = {}): Promise<{ path: string | null; pending: string | null }> {
   // A child model can change herdr's agent label: inspect each pane's processes once.
   const candidates = panes;
-  const infos = new Map(await Promise.all(candidates.map(async (pane) => [pane.pane_id, await processInfo(pane.pane_id)] as const)));
-  const resolved = candidates.map((pane) => resolvePaneRuntime(pane, infos.get(pane.pane_id) ?? null, home, processEnviron));
+  const managedPane = candidates.find((pane) => pane.pane_id === paneId);
+  if (managedPane && hasManagedBinding(managedPane)) {
+    const resolution = await managedResolution(managedPane, managedDeps);
+    return resolution?.identity.state === "ready" && resolution.identity.harness === "omo" && resolution.sessionFile !== null
+      ? { path: resolution.sessionFile, pending: null }
+      : { path: null, pending: null };
+  }
+  const nativeCandidates = candidates.filter((pane) => !hasManagedBinding(pane));
+  const infos = new Map(await Promise.all(nativeCandidates.map(async (pane) => [pane.pane_id, await processInfo(pane.pane_id)] as const)));
+  const resolved = nativeCandidates.map((pane) => resolvePaneRuntime(pane, infos.get(pane.pane_id) ?? null, home, processEnviron));
   const target = resolved.find((entry) => entry.pane.pane_id === paneId);
   // two holder-owning cwds fail closed: the pane cannot be bound to either
   if (target?.ambiguous) return { path: null, pending: null };
@@ -503,11 +532,17 @@ export async function omoTranscriptForPane(paneId: string, cwd: string, panes: H
  * pane, regardless of its child agent label, shared by all panes of a folder; the folder each
  * pane counts toward is the one its own processes resolve.
  */
-export async function omoPanes(panes: HerdrPane[], home = process.env["HOME"] ?? ""): Promise<Map<string, { path: string | null; startedAt: number | null }>> {
-  const candidates = panes;
+export async function omoPanes(panes: HerdrPane[], home = process.env["HOME"] ?? "", managedDeps: ManagedSessionDeps = {}): Promise<Map<string, { path: string | null; startedAt: number | null }>> {
+  const found = new Map<string, { path: string | null; startedAt: number | null }>();
+  const managed = await Promise.all(panes.filter(hasManagedBinding).map(async (pane) => ({ pane, resolution: await managedResolution(pane, managedDeps) })));
+  for (const { pane, resolution } of managed) {
+    if (resolution?.identity.state === "ready" && resolution.identity.harness === "omo" && resolution.sessionFile !== null) {
+      found.set(pane.pane_id, { path: resolution.sessionFile, startedAt: null });
+    }
+  }
+  const candidates = panes.filter((pane) => !hasManagedBinding(pane));
   const infos = new Map(await Promise.all(candidates.map(async (pane) => [pane.pane_id, await processInfo(pane.pane_id)] as const)));
   const resolved = candidates.map((pane) => resolvePaneRuntime(pane, infos.get(pane.pane_id) ?? null, home, processEnviron));
-  const found = new Map<string, { path: string | null; startedAt: number | null }>();
   const cwds = new Set(resolved.flatMap((entry) => entry.omos.length === 0 ? [] : entry.ambiguous ? entry.omos.map((omo) => omo.cwd) : [entry.cwd]));
   for (const cwd of cwds) {
     const transcripts = cwd ? omoTranscriptsResolved(cwd, resolved, home) : new Map<string, { path: string | null; pending: string | null; startedAt: number | null }>();

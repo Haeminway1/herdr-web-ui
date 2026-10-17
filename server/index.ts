@@ -33,6 +33,8 @@ import { BackgroundWait } from "./background-wait.ts";
 import { SessionPlans } from "./session-plan.ts";
 import { codexOpenRollout, paneCodexHome } from "./codex.ts";
 import { CompletionTracker, type OmoRest } from "./completion.ts";
+import { AttentionStore, answerPreview } from "./attention.ts";
+import { ResidentStore, handleResidentsRequest } from "./residents.ts";
 import { freeAgentName } from "./agent-name.ts";
 import { launchedAgents } from "./launched-agents.ts";
 import { SHELL_AGENTS, isShellAgentKind, shellAgentExecutable, startShellAgent } from "./shell-agent.ts";
@@ -449,6 +451,8 @@ export function createServer(
     token?: string;
     /** where VAPID keys and push subscriptions persist; tests pass a temp dir */
     stateDir?: string;
+    /** Ownership root for the verified Manager pin; isolated fixtures pass their own directory. */
+    protectedManagerFolder?: string;
     /** the PC's own Tailscale login, for the identity check; tests set it, otherwise `tailscale status` says */
     tailscaleOwner?: string | null;
     /** the operator declares `tailscale serve` as this install's only ingress; HERDR_WEB_TAILSCALE_SERVE_ONLY=1 says the same */
@@ -1134,6 +1138,8 @@ export function createServer(
 
   /** `done` for agents herdr loses track of (server/completion.ts), kept across restarts */
   const completions = new CompletionTracker(join(options.stateDir ?? defaultStateDir(), "completions.json"));
+  const attention = new AttentionStore(join(options.stateDir ?? defaultStateDir(), "attention.json"), undefined, options.statusNow);
+  const residents = new ResidentStore(join(options.stateDir ?? defaultStateDir(), "residents.json"), { snapshot: sessionSnapshot, managerFolder: options.protectedManagerFolder });
   /** OmO panes get their status from OmO's session files: herdr reports none for them (server/omo-status.ts) */
   const omo = new OmoStatus({
     discover: (panes) => omoPanes(panes),
@@ -1188,9 +1194,13 @@ export function createServer(
   const backgroundOf = (paneId: string): number => omo.backgroundOf(paneId) || claudeAgents.countOf(paneId);
   /** the snapshot clients get: finishes settled, OmO panes named, background tasks, waits and plan progress */
   const clientSnapshot = async (): Promise<SessionSnapshot> => {
+    const askedAt = (options.statusNow ?? Date.now)();
     const snapshot = await completions.readSnapshot(rawSnapshot);
-    if (!snapshot.panes.some((pane) => backgroundOf(pane.pane_id) > 0 || waits.waiting(pane.pane_id) || plans.summaryOf(pane.pane_id) !== null)) return snapshot;
-    return {
+    // A roster read may mark already-finished panes unread, but must not read every
+    // historical transcript. Fetch a preview only on a live completion transition.
+    attention.baseline(snapshot.panes, askedAt);
+    if (!snapshot.panes.some((pane) => backgroundOf(pane.pane_id) > 0 || waits.waiting(pane.pane_id) || plans.summaryOf(pane.pane_id) !== null)) return attention.decorate(snapshot);
+    return attention.decorate({
       ...snapshot,
       panes: snapshot.panes.map((pane) => {
         const background = backgroundOf(pane.pane_id);
@@ -1198,7 +1208,7 @@ export function createServer(
         const plan = plans.summaryOf(pane.pane_id);
         return background > 0 || waiting || plan !== null ? { ...pane, ...(background > 0 ? { background_tasks: background } : {}), ...(waiting ? { background_wait: true as const } : {}), ...(plan !== null ? { plan } : {}) } : pane;
       }),
-    };
+    });
   };
   /**
    * A browser visit for the daily active message: the call is made now so the visit's day is the
@@ -1219,8 +1229,10 @@ export function createServer(
       .catch((error) => console.error(`telemetry: the visit was not counted (${error instanceof Error ? error.message : String(error)})`));
   }
   /** A pane's status frame: every one says whether the pane waits on its turn's background work. */
-  const paneStatus = (paneId: string, status: AgentStatus, about: { background_tasks?: number; plan?: PlanSummary | null } = {}): ServerMessage =>
-    ({ type: "pane-status", pane_id: paneId, agent_status: status, ...about, ...(waits.waiting(paneId) ? { background_wait: true as const } : {}) });
+  const paneStatus = (paneId: string, status: AgentStatus, about: { background_tasks?: number; plan?: PlanSummary | null } = {}): ServerMessage => {
+    if (attention.observe(paneId, status)) void attentionFinished(paneId);
+    return { type: "pane-status", pane_id: paneId, agent_status: status, ...about, ...(waits.waiting(paneId) ? { background_wait: true as const } : {}) };
+  };
   const machines = options.machines === false ? null : new MachineManager(options.stateDir ?? defaultStateDir(), push, completions, clientSnapshot);
   if (machines && options.herdrProfiles) machines.watchHerdrProfiles(options.herdrProfiles);
   const bridgeToken = randomBytes(32).toString("hex");
@@ -1234,6 +1246,19 @@ export function createServer(
   function broadcastAll(message: ServerMessage): void {
     machines?.localMessage(message);
     for (const client of clients) send(client, message);
+  }
+
+  async function attentionFinished(paneId: string): Promise<void> {
+    const state = attention.get(paneId);
+    if (!state?.finished_at) return;
+    broadcastAll({ type: "pane-attention", pane_id: paneId, attention: state });
+    try {
+      const conversation = await paneConversation(paneId, options.codexHome);
+      if (attention.setPreview(paneId, state.finished_at, answerPreview(conversation.turns))) {
+        const updated = attention.get(paneId);
+        if (updated) broadcastAll({ type: "pane-attention", pane_id: paneId, attention: updated });
+      }
+    } catch { /* Blocked or unavailable transcripts never select a guessed source. */ }
   }
 
   async function terminalInfoFor(paneId: string, timeoutMs?: number): Promise<{ terminalId: string; rect: { width: number; height: number } | null }> {
@@ -2059,6 +2084,23 @@ export function createServer(
         }
       }
 
+      if (pathname === "/api/residents") return handleResidentsRequest(request, residents);
+
+      if (pathname === "/api/pane/seen") {
+        if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+        if (!sameOrigin(request) || request.headers.get("x-herdr-machine") !== "1") return jsonResponse({ error: { code: "invalid_origin", message: "Use pane controls from this app" } }, 403);
+        let payload: unknown;
+        try { payload = await request.json(); } catch { return badRequest("invalid_json", "request body must be JSON"); }
+        if (!isJsonObject(payload) || typeof payload["pane_id"] !== "string" || payload["pane_id"].trim() === "") return badRequest("missing_pane_id", "pane_id is required");
+        try {
+          const paneId = payload["pane_id"];
+          await paneGet(paneId);
+          const state = attention.markSeen(paneId);
+          if (state) broadcastAll({ type: "pane-attention", pane_id: paneId, attention: state });
+          return jsonResponse({ attention: state });
+        } catch (error) { return errorResponse(error); }
+      }
+
       if (pathname === "/api/agents") {
         if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
         try {
@@ -2720,7 +2762,7 @@ export function createServer(
           if (error instanceof HistoryChanged || error instanceof DevinHistoryChanged) return jsonResponse({ error: { code: "history_changed", message: error.message } }, 409);
           // an unrecognized pane is not an error: the client falls back to the
           // scrollback transcript, exactly like chatmux's terminal fallback
-          if (error instanceof ConversationUnavailable) return jsonResponse({ source: "scrollback", turns: [] });
+          if (error instanceof ConversationUnavailable) return jsonResponse({ source: "scrollback", turns: [], ...(error.managedSession ? { managed_session: error.managedSession } : {}) });
           return errorResponse(error);
         }
       }

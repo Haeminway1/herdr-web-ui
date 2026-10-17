@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import * as fs from "node:fs";
@@ -14,8 +14,10 @@ import * as agyStore from "./agy-store.ts";
 import * as herdr from "./herdr/client.ts";
 import { forgetHistoryChains } from "./codex.ts";
 import { DevinHistoryChanged } from "./devin.ts";
+import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
+import type { ManagedSessionDeps } from "./managed-sessions.ts";
 import * as omo from "./omo.ts";
-import { ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
+import { ConversationUnavailable, conversationForPane, conversationImage, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, resolveTranscript, toolOutput, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 
 describe("omo skill roots", () => {
   it("finds the bundled plugin from a Windows canonical launcher path", async () => {
@@ -1876,5 +1878,205 @@ describe("Agy native ledger through shared paging", () => {
         name: "ConversationUnavailable", message: "transcript_missing",
       });
     } finally { store.mockRestore(); rpc.mockRestore(); }
+  });
+});
+
+describe("managed conversation identity", () => {
+  const nonce = "0123456789abcdef0123456789abcdef";
+  const sessionId = "00000000-0000-4000-8000-000000000001";
+  const imageId = "12345678-1234-1234-1234-123456789abc";
+  let root: string;
+  let namespace: string;
+  let recordFile: string;
+  let sessionFile: string;
+  let pane: HerdrPane;
+  let record: Record<string, unknown>;
+  let oldNamespace: string | undefined;
+  let observed: { pid: number; starttime: string; boot: string; cwd: string } | null;
+  let live: GjcSdkSessionIdentity | null;
+  let nativeLookupCalls: number;
+  let restoreNativeLookup: (() => void) | undefined;
+
+  const save = (): void => { writeFileSync(recordFile, JSON.stringify(record), { mode: 0o600 }); };
+  const message = (role: string, text: string): string => JSON.stringify({ type: "message", message: { role, content: [{ type: "text", text }] } });
+  const managedDeps: ManagedSessionDeps = {
+    processIdentity: (pid) => observed?.pid === pid ? { ...observed } : null,
+    gjcSession: async () => live,
+  };
+
+  function writeHarness(harness: "gjc" | "omo" | "codex" | "claude", entries: string[] = []): string {
+    record.harness = harness;
+    record.launcher_harness = harness;
+    record.state = "ready";
+    record.desired_state = "running";
+    record.session_id = sessionId;
+    record.env = {};
+    if (harness === "gjc" || harness === "omo") {
+      const store = join(namespace, `${nonce}.sessions`);
+      mkdirSync(store, { recursive: true, mode: 0o700 });
+      record.session_dir = store;
+      sessionFile = join(store, "exact.jsonl");
+    } else {
+      delete record.session_dir;
+      const base = join(root, harness);
+      const store = join(base, harness === "codex" ? "sessions" : "projects");
+      mkdirSync(store, { recursive: true, mode: 0o700 });
+      record.env = { [harness === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]: base };
+      sessionFile = join(store, "exact.jsonl");
+    }
+    if (harness === "gjc") record.child = { pid: 42, starttime: "123", boot: "fixture-boot" };
+    else delete record.child;
+    const header = harness === "codex"
+      ? { type: "session_meta", payload: { id: sessionId, cwd: root } }
+      : harness === "claude" ? { type: "user", sessionId, cwd: root }
+      : { type: "session", id: sessionId, cwd: root };
+    writeFileSync(sessionFile, [JSON.stringify(header), ...entries].join("\n") + "\n", { mode: 0o600 });
+    const info = statSync(sessionFile);
+    record.session_file = sessionFile;
+    record.file_identity = { dev: info.dev, ino: info.ino };
+    save();
+    return sessionFile;
+  }
+
+  beforeEach(() => {
+    nativeLookupCalls = 0;
+    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => {
+      nativeLookupCalls++;
+      throw new Error(`unexpected native lookup: ${method}`);
+    });
+    restoreNativeLookup = () => rpc.mockRestore();
+    root = mkdtempSync(join(tmpdir(), "herdr-managed-conversation-"));
+    namespace = join(root, "managed-sessions");
+    mkdirSync(namespace, { mode: 0o700 });
+    recordFile = join(namespace, `${nonce}.json`);
+    observed = { pid: 42, starttime: "123", boot: "fixture-boot", cwd: root };
+    live = { sessionId, pid: 42, hostIncarnation: "linux:123", endpointGeneration: 1 };
+    pane = {
+      pane_id: "wFixture:p1", workspace_id: "wFixture", tab_id: "wFixture:t1", terminal_id: "term_fixture",
+      cwd: root, agent: "codex", agent_status: "unknown", revision: 1, focused: false,
+      agent_session: { agent: "codex", kind: "id", source: "herdr", value: "stale-provider-session" },
+      tokens: { hm_managed_session: nonce, hm_managed_generation: "1" },
+    } as HerdrPane;
+    record = {
+      schema: 2, nonce, harness: "gjc", launcher_harness: "gjc", cwd: root,
+      pane_id: pane.pane_id, workspace_id: pane.workspace_id, terminal_id: pane.terminal_id,
+      generation: 1, desired_state: "running", state: "ready", session_id: sessionId,
+      session_file: "", session_dir: join(namespace, `${nonce}.sessions`), file_identity: null,
+      child: { pid: 42, starttime: "123", boot: "fixture-boot" }, env: {},
+    };
+    oldNamespace = process.env.HERDR_MANAGED_NAMESPACE;
+    process.env.HERDR_MANAGED_NAMESPACE = namespace;
+  });
+
+  afterEach(() => {
+    restoreNativeLookup?.();
+    restoreNativeLookup = undefined;
+    if (oldNamespace === undefined) delete process.env.HERDR_MANAGED_NAMESPACE;
+    else process.env.HERDR_MANAGED_NAMESPACE = oldNamespace;
+    rmSync(root, { recursive: true, force: true });
+    expect(nativeLookupCalls).toBe(0);
+  });
+
+  it.each(["gjc", "omo", "codex", "claude"] as const)("resolves the exact %s managed transcript", async (harness) => {
+    const entries = harness === "gjc" || harness === "omo"
+      ? [message("user", "fixture question"), message("assistant", "exact managed answer")]
+      : [];
+    const path = writeHarness(harness, entries);
+    const resolved = await resolveTranscript(pane, root, undefined, undefined, undefined, undefined, undefined, managedDeps);
+    expect(resolved).toMatchObject({ source: `${harness}-transcript`, path });
+    const answer = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(answer).toMatchObject({ source: `${harness}-transcript`, managed_session: { harness, generation: 1, session_id: sessionId } });
+    if (harness === "gjc" || harness === "omo") {
+      expect(answer.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+    }
+  });
+
+  it("keeps a GJC transcript when herdr reports the provider child", async () => {
+    const path = writeHarness("gjc", [message("user", "parent prompt"), message("assistant", "parent answer")]);
+    const resolved = await resolveTranscript(pane, root, undefined, undefined, undefined, undefined, undefined, managedDeps);
+    expect(resolved).toMatchObject({ source: "gjc-transcript", path });
+    const answer = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(answer.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: "parent answer" });
+  });
+
+  it("routes a tagged pane without managed label metadata", async () => {
+    writeHarness("gjc", [message("user", "question"), message("assistant", "answer")]);
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    try {
+      const answer = await paneConversation(pane.pane_id, undefined, {}, undefined, undefined, undefined, undefined, managedDeps);
+      expect(answer).toMatchObject({ source: "gjc-transcript", managed_session: { state: "ready", harness: "gjc" } });
+      expect(nativeLookupCalls).toBe(0);
+    } finally { snapshot.mockRestore(); }
+  });
+
+  it.each([
+    ["identity_pending", "starting", "identity_pending"],
+    ["blocked", "blocked", "blocked_runtime_changed"],
+  ] as const)("does not guess a transcript from a tagged %s pane", async (_name, state, reason) => {
+    writeHarness("gjc");
+    record.state = state;
+    record.error = reason;
+    save();
+    await expect(resolveTranscript(pane, root, undefined, undefined, undefined, undefined, undefined, managedDeps))
+      .rejects.toMatchObject({ name: "ConversationUnavailable", message: reason, managedSession: { state: _name } });
+  });
+
+  it("rejects a generation change observed during GJC identity validation", async () => {
+    writeHarness("gjc", [message("user", "must not be returned"), message("assistant", "stale answer")]);
+    const racingDeps: ManagedSessionDeps = {
+      ...managedDeps,
+      gjcSession: async () => {
+        record.generation = 2;
+        save();
+        return live;
+      },
+    };
+    await expect(conversationForPane(pane, undefined, {}, racingDeps)).rejects.toMatchObject({
+      name: "ConversationUnavailable", message: "identity_pending", managedSession: { state: "identity_pending" },
+    });
+  });
+
+  it("rejects a replaced pinned transcript before returning a cached managed page", async () => {
+    writeHarness("omo", [message("user", "original"), message("assistant", "original answer")]);
+    expect((await conversationForPane(pane, undefined, {}, managedDeps)).source).toBe("omo-transcript");
+    const replacement = join(root, "replacement.jsonl");
+    writeFileSync(replacement, [JSON.stringify({ type: "session", id: sessionId, cwd: root }), message("assistant", "replacement answer")].join("\n") + "\n", { mode: 0o600 });
+    rmSync(sessionFile);
+    renameSync(replacement, sessionFile);
+    await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({
+      name: "ConversationUnavailable", message: "blocked_session_replaced", managedSession: { state: "blocked" },
+    });
+  });
+
+  it("rejects cursors from an earlier managed generation", async () => {
+    const entries = Array.from({ length: 500 }, (_, index) => [message("user", `question ${index}`), message("assistant", `answer ${index}`)]).flat();
+    writeHarness("gjc", entries);
+    const first = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(first.cursor).not.toBeNull();
+    record.generation = 2;
+    pane = { ...pane, tokens: { ...pane.tokens, hm_managed_generation: "2" } };
+    save();
+    await expect(conversationForPane(pane, undefined, { before: first.cursor ?? undefined }, managedDeps)).rejects.toBeInstanceOf(HistoryChanged);
+  });
+
+  it("uses the managed Claude record for prompt attachments and tool output", async () => {
+    const image = Buffer.from("managed image bytes").toString("base64");
+    const entries = [
+      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: image } }] } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "managed-tool", name: "Bash", input: { command: "fixture" } }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "managed-tool", content: "exact managed tool output" }] } }),
+    ];
+    writeHarness("claude", entries);
+    const decoy = join(root, "decoy.jsonl");
+    writeFileSync(decoy, JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "managed-tool", name: "Bash", input: {} }] } }) + "\n");
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    try {
+      expect(await toolOutput(pane.pane_id, "managed-tool", undefined, undefined, undefined, undefined, managedDeps)).toBe("exact managed tool output");
+      const attachment = await conversationImage(pane.pane_id, `${imageId}:0`, undefined, undefined, managedDeps);
+      expect(attachment?.bytes).toEqual(Buffer.from("managed image bytes"));
+      expect(nativeLookupCalls).toBe(0);
+    } finally {
+      snapshot.mockRestore();
+    }
   });
 });
