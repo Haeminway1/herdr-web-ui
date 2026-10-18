@@ -7,6 +7,15 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.1110] - 2026-10-18
+
+### Fixed
+- Restore the existing classic sidebar, residents, verified Manager pin, grouping and attention inbox instead of the withdrawn 0.4.1109 redesign.
+- Wheel scrolling over embedded classic rows moves the outer workspace list; standalone sidebar scrolling remains unchanged.
+- Isolate a managed GJC lookup failure to its own blocked pane without losing healthy panes or authorizing a provider-child conversation.
+- Preserve the intended audio upload filename with Bun's parsed File objects.
+- Keep automatic upstream sync candidate-only and require explicit admission before production release. Automatic installation remains disabled during stabilization.
+
 ## [0.4.12] - 2026-10-18
 
 ### Added
@@ -657,15 +666,6 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
   ([#1253](https://github.com/devswha/herdr-web-ui/pull/1253))
 - The remote-PC runtime is now version 31: every saved PC asks for **Update bridge…** once.
   ([#1330](https://github.com/devswha/herdr-web-ui/pull/1330))
-
-## [0.4.1110] - 2026-10-18
-
-### Fixed
-- Restore the existing classic sidebar, residents, verified Manager pin, grouping and attention inbox instead of the withdrawn 0.4.1109 redesign.
-- Wheel scrolling over embedded classic rows moves the outer workspace list; standalone sidebar scrolling remains unchanged.
-- Isolate a managed GJC lookup failure to its own blocked pane without losing healthy panes or authorizing a provider-child conversation.
-- Preserve the intended audio upload filename with Bun's parsed File objects.
-- Keep automatic upstream sync candidate-only and require explicit admission before production release. Automatic installation remains disabled during stabilization.
 
 ## [0.4.11] - 2026-10-16
 

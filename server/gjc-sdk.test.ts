@@ -465,7 +465,7 @@ describe("GJC SDK transcript identity binding", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("rejects malformed broker output and repeated or over-budget pagination", async () => {
+  it("rejects malformed broker output and repeated pagination", async () => {
     for (const output of ["not json", JSON.stringify({ type: "broker_response", ok: false, result: {} }), broker({ indexSeq: 1, sessions: {} })]) {
       const { runner } = fakeRunner([output]);
       await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
@@ -480,10 +480,13 @@ describe("GJC SDK transcript identity binding", () => {
       await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, malformed.runner)).resolves.toBeNull();
       expect(malformed.calls).toHaveLength(1);
     }
+  });
 
+  it("times out on infinite pagination after six subprocess starts", async () => {
     const pages = fakeRunner((_args, call) => page([], { continuationCursor: `cursor-${call}` }));
-    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, pages.runner)).resolves.toBeNull();
-    expect(pages.calls).toHaveLength(8);
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, pages.runner))
+      .rejects.toEqual(new GjcSdkLookupError("timeout"));
+    expect(pages.calls).toHaveLength(6);
   });
 
   it("keeps SDK execution bounded, non-interactive, and quiet on transport failure", async () => {

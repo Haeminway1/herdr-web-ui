@@ -488,7 +488,7 @@ it("rechecks independent generation authority before returning a cached transcri
     expect(await read()).toBeNull();
     expect(sdkCalls).toBe(1);
     expect(proofCalls).toBe(3);
-    expect(processReads).toBe(3);
+    expect(processReads).toBe(4);
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
