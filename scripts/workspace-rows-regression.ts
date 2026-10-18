@@ -121,7 +121,7 @@ try {
     if (!localStorage.getItem("herdr-web-ui:settings")) {
       // Two lines: the task row (pane title over its place) is what this script reads; One line,
       // the default, is ui-regression's sidebar-rows check
-      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertsOn: false, sidebarRows: "two" }));
+      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertsOn: false, sidebarLayout: "upstream", sidebarRows: "two" }));
       localStorage.setItem(legacyFoldKey, "1");
     }
     for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");

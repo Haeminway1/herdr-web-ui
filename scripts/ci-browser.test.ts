@@ -57,6 +57,7 @@ describe("browser lane", () => {
       { script: "scripts/ui-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/ui-contexts-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/workspace-rows-regression.ts", seconds: expect.any(Number), code: 0 },
+      { script: "scripts/classic-sidebar-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/pending-pane-switch-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/lan-exposure-notice-regression.ts", seconds: expect.any(Number), code: 0 },
       { script: "scripts/terminal-dispose-browser-qa.ts", seconds: expect.any(Number), code: 0 },
@@ -70,7 +71,8 @@ describe("browser lane", () => {
   it("summarizes every script and exits zero on success without enabling local evidence", async () => {
     const { text, code, evidence } = await lane();
     expect(code).toBe(0);
-    expect(rows(text)).toHaveLength(62);
+    expect(rows(text)).toHaveLength(63);
+    expect(rows(text).map((row) => row.script)).toContain("scripts/classic-sidebar-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/cliproxy-settings-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/gjc-status-browser-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/pane-input-focus-demo-regression.ts");
