@@ -1516,8 +1516,8 @@ export function createServer(
         // Herdr may name an OmO pane `claude`: use its resolved identity before looking up a plan.
         const seen: { pane?: HerdrPane } = {};
         await within(1000, (async () => {
-          const pane = seen.pane = omo.apply(await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
-          if (pane === undefined || plans.known(pane)) return;
+          const pane = seen.pane = (await clientSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
+          if (pane === undefined || pane.managed_session?.harness === "gjc" || plans.known(pane)) return;
           if (pane.agent === "claude") await claudeAgents.ensure(pane);
           await plans.ensure(pane, true);
         })());

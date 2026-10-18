@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { ConversationUnavailable, conversationForPane as readConversation, HistoryChanged, resolveTranscript as readTranscript } from "./conversation.ts";
 import { labelManagedPanes as projectPanes, resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
-import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
+import { GjcSdkLookupError, type GjcSdkSessionIdentity } from "./gjc-sdk.ts";
 import { createGjcStatus, gjcPanes as discoverGjc } from "./gjc-status.ts";
 import { omoPanes, omoSessionForPane } from "./omo.ts";
 
@@ -227,6 +227,16 @@ it("rejects process reuse and record changes during the native SDK lookup", asyn
   observed = { ...(record.child as NonNullable<typeof observed>) };
   const changed = await resolveManagedSession(pane, namespace, { ...deps, gjcSession: async () => { record.generation = 2; save(); return live; } });
   expect(changed?.identity.state).toBe("identity_pending");
+});
+
+it.each(["timeout", "unavailable"] as const)("keeps a managed pane pending on a typed SDK %s failure", async reason => {
+  // Given a managed GJC child whose identity lookup has a transient typed failure
+  const result = await resolveManagedSession(pane, namespace, {
+    ...deps,
+    gjcSession: async () => { throw new GjcSdkLookupError(reason); },
+  });
+  // Then the pane remains pending with no saved transcript path
+  expect(result).toMatchObject({ identity: { state: "identity_pending", reason: "identity_pending", harness: "gjc" }, sessionFile: null });
 });
 
 it("does not mistake record heartbeat updates for a session identity change", async () => {

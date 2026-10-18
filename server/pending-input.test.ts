@@ -3,6 +3,12 @@ import { MAX_PENDING_PER_OWNER, PendingInputs, samePendingIdentity, type Pending
 import { PendingMessageStore } from "../src/lib/pendingMessages.ts";
 
 describe("pending target identity", () => {
+  it("refuses a hookless Claude's session switched by /clear or /resume in the same process", () => {
+    expect(samePendingIdentity({ ...identity, claudeSession: "before-clear" }, { ...identity, claudeSession: "after-clear" })).toBe(false);
+    expect(samePendingIdentity({ ...identity, claudeSession: "same" }, { ...identity, claudeSession: "same" })).toBe(true);
+    expect(samePendingIdentity({ ...identity, claudeSession: null }, { ...identity, claudeSession: "learned" })).toBe(true);
+    expect(samePendingIdentity({ ...identity, claudeSession: "known" }, { ...identity, claudeSession: null })).toBe(true);
+  });
   const identity: PendingIdentity = { agent: "claude", terminalId: "t1", session: null, processPid: 12, processBirth: 100_000, omoSession: null };
 
   it("refuses known process, birth, native session and OmO session replacements (regression #540)", () => {

@@ -61,6 +61,11 @@ export interface GjcSdkBinding {
   guardSessionIds: string[];
 }
 
+interface GjcSdkResolvedBinding extends GjcSdkSessionIdentity {
+  readonly path: string | null;
+  readonly guardSessionIds: readonly string[];
+}
+
 const execFileAsync = promisify(execFile);
 
 const runGjcSdkCommand: GjcSdkCommandRunner = async (command, args, options) => {
@@ -404,13 +409,13 @@ async function resolveWorktreeRoot(
   }
 }
 
-async function resolveTranscript(
+async function resolveSessionBinding(
   pids: readonly number[],
   cwd: string,
   agentDir: string,
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver,
-): Promise<GjcSdkBinding | null> {
+): Promise<GjcSdkResolvedBinding | null> {
   try {
     if (!Array.isArray(pids) || pids.length === 0 || pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0)
       || typeof cwd !== "string" || cwd === ""
@@ -473,14 +478,15 @@ async function resolveTranscript(
       && !definitivelyRetired(row) && !directSessionFence(row, agentDir));
     if (samePidRows.length !== 1 || !sameBinding(samePidRows[0], expected, wantedPids, canonicalCwd, canonicalWorktreeRoot)) return null;
     if (!isRecord(samePidRows[0]) || samePidRows[0].sessionId !== expected.sessionId) return null;
-    if (!isRecord(exact.savedSession) || exact.savedSession.id !== expected.sessionId
-      || typeof exact.savedSession.path !== "string" || !nodePath.isAbsolute(exact.savedSession.path)) return null;
-
     guardSessionIds.add(expected.sessionId);
+    const path = isRecord(exact.savedSession) && exact.savedSession.id === expected.sessionId
+      && typeof exact.savedSession.path === "string" && nodePath.isAbsolute(exact.savedSession.path)
+      ? exact.savedSession.path
+      : null;
     return {
       sessionId: expected.sessionId,
       pid: expected.pid,
-      path: exact.savedSession.path,
+      path,
       hostIncarnation: expected.hostIncarnation,
       endpointGeneration: expected.endpointGeneration,
       guardSessionIds: [...guardSessionIds],
@@ -498,7 +504,7 @@ export function gjcSdkTranscript(
   cwd: string,
   agentDir: string,
 ): Promise<GjcSdkBinding | null> {
-  return resolveTranscript(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot);
+  return resolveSessionBinding(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot).then(transcriptBinding);
 }
 
 /** Fixture-injection entry point; production callers should use gjcSdkTranscript. */
@@ -509,10 +515,22 @@ export function gjcSdkTranscriptWithRunner(
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver = gitWorktreeRoot,
 ): Promise<GjcSdkBinding | null> {
-  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver);
+  return resolveSessionBinding(pids, cwd, agentDir, runner, worktreeRootResolver).then(transcriptBinding);
 }
 
-function currentIdentity(binding: GjcSdkBinding | null): GjcSdkSessionIdentity | null {
+function transcriptBinding(binding: GjcSdkResolvedBinding | null): GjcSdkBinding | null {
+  if (binding === null || binding.path === null) return null;
+  return {
+    sessionId: binding.sessionId,
+    pid: binding.pid,
+    path: binding.path,
+    hostIncarnation: binding.hostIncarnation,
+    endpointGeneration: binding.endpointGeneration,
+    guardSessionIds: [...binding.guardSessionIds],
+  };
+}
+
+function currentIdentity(binding: GjcSdkResolvedBinding | null): GjcSdkSessionIdentity | null {
   if (binding === null) return null;
   return {
     sessionId: binding.sessionId,
@@ -538,7 +556,7 @@ export function gjcSdkCurrentSessionWithRunner(
   worktreeRootResolver: GjcSdkWorktreeRootResolver = gitWorktreeRoot,
   generationCurrent: typeof gjcSdkGenerationCurrent = gjcSdkGenerationCurrent,
 ): Promise<GjcSdkSessionIdentity | null> {
-  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver).then(async (binding) => {
+  return resolveSessionBinding(pids, cwd, agentDir, runner, worktreeRootResolver).then(async (binding) => {
     if (binding === null || !await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration)) return null;
     return currentIdentity(binding);
   });

@@ -141,6 +141,12 @@ describe("GJC SDK transcript identity binding", () => {
     ]);
   });
 
+  it("does not resolve a transcript path before the broker has saved its session", async () => {
+    const fixture = fakeRunner([page([session()]), page([session()], { savedSession: null })]);
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toBeNull();
+    expect(fixture.calls).toHaveLength(2);
+  });
+
   it("paginates with the same limit and rejects conflicting page index sequences", async () => {
     const { calls, runner } = fakeRunner([
       page([session({ pid: 999 })], { continuationCursor: "next-page" }),
@@ -580,6 +586,20 @@ describe("GJC SDK session.list execution bounds", () => {
 });
 
 describe("GJC managed-session current identity", () => {
+  it("resolves a managed live identity before its saved transcript exists", async () => {
+    // Given the broker has a live session but has not written its transcript yet
+    const fixture = fakeRunner([page([session()]), page([session()], { savedSession: null })]);
+    const proofs: Array<[string, string, number]> = [];
+    // When managed identity resolution runs
+    await expect(sdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver, async (directory, sessionId, generation) => {
+      proofs.push([directory, sessionId, generation]);
+      return true;
+    })).resolves.toEqual({ sessionId: "session-1", pid: 321, hostIncarnation: "linux:12345", endpointGeneration: 4 });
+    // Then identity is available and generation authority was proved independently
+    expect(proofs).toEqual([[agentDir, "session-1", 4]]);
+    expect(fixture.calls).toHaveLength(2);
+  });
+
   it("requires the independent current-generation check before returning a binding", async () => {
     const fixture = fakeRunner([page([session()]), saved()]);
     const checks: Array<[string, string, number]> = [];

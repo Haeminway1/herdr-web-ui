@@ -8,6 +8,7 @@ import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readlinkSync
 import nodePath, { join, type PlatformPath } from "node:path";
 
 import { GjcSdkLookupError, gjcSdkTranscript } from "./gjc-sdk.ts";
+import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 import { captureGjcIndex, gjcIndexUnchanged, type GjcIndexStamp } from "./gjc-index.ts";
 import { herdrRpc } from "./herdr/client.ts";
 import { processStartedAt } from "./process-start.ts";
@@ -270,6 +271,7 @@ type GjcTranscriptOptions = {
   processInfo?: (paneId: string) => Promise<GjcPaneProcessInfo | null>;
   processBirth?: (pid: number) => number | null;
   sdkTranscript?: typeof gjcSdkTranscript;
+  generationCurrent?: typeof gjcSdkGenerationCurrent;
   readProcessTable?: () => Promise<ProcessRow[]>;
   now?: () => number;
 };
@@ -281,6 +283,7 @@ function sameLookupContext(a: GjcTranscriptOptions, b: GjcTranscriptOptions): bo
   return a.processInfo === b.processInfo
     && a.processBirth === b.processBirth
     && a.sdkTranscript === b.sdkTranscript
+    && a.generationCurrent === b.generationCurrent
     && a.readProcessTable === b.readProcessTable;
 }
 
@@ -348,6 +351,7 @@ async function lookupGjcTranscript(
     "pane.process_info", { pane_id: id },
   ).catch(() => null));
   const sdkTranscript = options.sdkTranscript ?? gjcSdkTranscript;
+  const generationCurrent = options.generationCurrent ?? gjcSdkGenerationCurrent;
   const readProcessTable = options.readProcessTable ?? windowsProcessTable;
   const processBirth = options.processBirth ?? processStartedAt;
   const now = options.now ?? Date.now;
@@ -406,6 +410,7 @@ async function lookupGjcTranscript(
         && gjcIndexUnchanged(agentDir, kept.indexStamp, indexStamp, kept.processes.map(({ pid }) => pid), guardSessionIds)) {
         const path = validateGjcSdkTranscript(kept.binding, cwd, agentDir);
         if (path) {
+          if (!await generationCurrent(agentDir, kept.binding.sessionId, kept.binding.endpointGeneration)) return forget();
           kept.indexStamp = indexStamp;
           return path;
         }
@@ -423,6 +428,7 @@ async function lookupGjcTranscript(
     if (!finalInfo) return null;
     const final = await processes(finalInfo, true);
     if (!final?.some((process) => process.pid === owner.pid && sameBirth(process.birth, owner.birth))) return null;
+    if (!await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration)) return null;
     if (indexStamp !== null) {
       for (const [other, entry] of transcriptBindings) if (checkedAt - entry.at >= BINDING_TTL_MS) transcriptBindings.delete(other);
       // aged from before the lookup, when the index stamp was read

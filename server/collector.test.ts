@@ -68,6 +68,69 @@ describe("parseFocusFrame", () => {
 });
 
 describe("lifecycle invalidations", () => {
+  it("reports a tracked pane missing when the first lifecycle subscription starts", async () => {
+    const herdr = fakeHerdr([]);
+    const { handlers } = recorder();
+    const ended: string[] = [];
+    handlers.onPaneEnded = (paneId) => ended.push(paneId);
+    const collector = startStatusCollector(handlers, herdr.deps);
+    try {
+      await collector.ready;
+      const tracked = Promise.withResolvers<void>();
+      handlers.onReconciled = () => tracked.resolve();
+      herdr.setPanes([paneOf("w1:p2", "idle")]);
+      collector.trackPane("w1:p2");
+      await tracked.promise;
+      const reconciled = Promise.withResolvers<void>();
+      handlers.onReconciled = () => reconciled.resolve();
+      herdr.setPanes([]);
+      herdr.lifecycle().start();
+      await reconciled.promise;
+      expect(ended).toEqual(["w1:p2"]);
+    } finally { collector.stop(); }
+  });
+
+  it("does not end a pane registered after a missing snapshot was requested", async () => {
+    const herdr = fakeHerdr([]);
+    const { handlers } = recorder();
+    const snapshot = Promise.withResolvers<{ panes: HerdrPane[] }>();
+    const reconciled = Promise.withResolvers<void>();
+    const ended: string[] = [];
+    handlers.onPaneEnded = (paneId) => ended.push(paneId);
+    handlers.onReconciled = (panes) => { if (panes.length > 0) reconciled.resolve(); };
+    let first = true;
+    const collector = startStatusCollector(handlers, {
+      ...herdr.deps,
+      snapshot: () => {
+        if (first) { first = false; return snapshot.promise; }
+        return Promise.resolve({ panes: [paneOf("w1:p2", "idle")] });
+      },
+    });
+    try {
+      collector.trackPane("w1:p2");
+      snapshot.resolve({ panes: [] });
+      await reconciled.promise;
+      expect(ended).toEqual([]);
+    } finally { collector.stop(); }
+  });
+
+  it("does not replay a tracked exit already delivered by the lifecycle stream", async () => {
+    const herdr = fakeHerdr([]);
+    const { handlers } = recorder();
+    const ended: string[] = [];
+    handlers.onPaneEnded = (paneId) => ended.push(paneId);
+    const collector = startStatusCollector(handlers, herdr.deps);
+    try {
+      await collector.ready;
+      const reconciled = Promise.withResolvers<void>();
+      handlers.onReconciled = () => reconciled.resolve();
+      collector.trackPane("w1:p2");
+      herdr.lifecycle().emit({ data: { type: "pane_exited", pane_id: "w1:p2" } });
+      await reconciled.promise;
+      expect(ended).toEqual(["w1:p2"]);
+    } finally { collector.stop(); }
+  });
+
   const types = [
     "workspace_created", "workspace_updated", "workspace_metadata_updated",
     "workspace_renamed", "workspace_moved", "workspace_reordered", "workspace_closed",
