@@ -69,7 +69,17 @@ function seen(telemetry: Telemetry) {
 }
 
 function settingsSnapshot(overrides: Partial<Settings> = {}): TelemetrySettings {
-  return telemetrySettingsSnapshot({ ...DEFAULT_SETTINGS, ...overrides });
+  const snapshot = telemetrySettingsSnapshot({
+    ...DEFAULT_SETTINGS,
+    palette: "codex",
+    paletteLight: "codex",
+    paletteDark: "codex",
+    darkTheme: "codex",
+    lightTheme: "codex",
+    ...overrides,
+  });
+  if (snapshot === null) throw new Error("expected a supported telemetry theme snapshot");
+  return snapshot;
 }
 
 describe("telemetry events", () => {

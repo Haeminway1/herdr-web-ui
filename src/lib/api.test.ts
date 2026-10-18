@@ -36,10 +36,16 @@ it("refuses a 40 MiB file in the browser with the 32 MB limit named, before uplo
 it("posts the full safe telemetry snapshot and current notice version", async () => {
   const settings = telemetrySettingsSnapshot({
     ...DEFAULT_SETTINGS,
+    palette: "codex",
+    paletteLight: "codex",
+    paletteDark: "codex",
+    darkTheme: "codex",
+    lightTheme: "codex",
     terminalFontFamily: "Private Font Name",
     chatFontFamily: "Private Chat Font",
     usageHidden: ["account-identifier"],
   });
+  if (settings === null) throw new Error("expected a supported telemetry theme snapshot");
   const change = { notice_seen: true as const, notice_version: NOTICE_VERSION, settings };
   let requestUrl = "";
   let requestInit: RequestInit | undefined;

@@ -185,8 +185,8 @@ function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
 
 /** Full allowlisted snapshot. Text and account-key values are only used for safe summaries. */
 export function telemetrySettingsSnapshot(settings: Settings): (TelemetrySettings & TelemetrySourceSettings) | null {
-  const palettes = [settings.palette, settings.paletteLight, settings.paletteDark, settings.darkTheme, settings.lightTheme];
-  if (palettes.includes("report")) return null;
+  const { palette, paletteLight, paletteDark, darkTheme, lightTheme } = settings;
+  if (palette === "report" || paletteLight === "report" || paletteDark === "report" || darkTheme === "report" || lightTheme === "report") return null;
   return {
     terminalInputMode: settings.terminalInputMode,
     theme: settings.theme,
@@ -195,9 +195,9 @@ export function telemetrySettingsSnapshot(settings: Settings): (TelemetrySetting
     agentOrder: settings.agentOrder,
     agentMarks: settings.agentMarks,
     statusIndicators: settings.statusIndicators,
-    palette: settings.palette,
-    paletteLight: settings.paletteLight,
-    paletteDark: settings.paletteDark,
+    palette,
+    paletteLight,
+    paletteDark,
     terminalFontSize: settings.terminalFontSize,
     terminalWheelSpeed: settings.terminalWheelSpeed,
     paneClipboard: settings.paneClipboard,
@@ -237,8 +237,8 @@ export function telemetrySettingsSnapshot(settings: Settings): (TelemetrySetting
     quickReplyCount: settings.quickReplies.length,
     usageHiddenCount: settings.usageHidden.length,
     usageOrderCustom: settings.usageOrder.length > 0,
-    darkTheme: settings.darkTheme,
-    lightTheme: settings.lightTheme,
+    darkTheme,
+    lightTheme,
   };
 }
 

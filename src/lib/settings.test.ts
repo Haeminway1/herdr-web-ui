@@ -689,8 +689,8 @@ describe("language", () => {
 });
 
 describe("palette", () => {
-  it("defaults to codex, and reads a record from before palettes as amber, the look it had", () => {
-    expect(DEFAULT_SETTINGS.palette).toBe("codex");
+  it("defaults to Report, and reads a record from before palettes as amber, the look it had", () => {
+    expect(DEFAULT_SETTINGS.palette).toBe("report");
     // settings stored before palettes existed carry no palette key
     expect(sanitizeSettings({ theme: "light" }).palette).toBe("amber");
     expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
@@ -698,8 +698,8 @@ describe("palette", () => {
     expect(sanitizeSettings({ palette: "pink" }).palette).toBe("amber");
   });
 
-  it("loads a removed palette (report, lilac, forest) as amber", () => {
-    for (const removed of ["report", "lilac", "forest"]) expect(sanitizeSettings({ palette: removed }).palette).toBe("amber");
+  it("loads removed palettes (lilac, forest) as amber", () => {
+    for (const removed of ["lilac", "forest"]) expect(sanitizeSettings({ palette: removed }).palette).toBe("amber");
   });
 
   it("preserves Catppuccin through a saved settings round-trip and unrelated edits", () => {
@@ -915,9 +915,10 @@ describe("palette", () => {
   it("paints amber before settings load: the base blocks are the default palette's", () => {
     const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
     const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
-    expect(root).toContain(`--term-bg: ${terminalTheme("dark").background};`);
-    expect(root).toContain(`--term-cursor: ${terminalTheme("dark").cursor};`);
-    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "amber"));
+    const amberBase = terminalTheme("dark", "amber");
+    expect(root).toContain(`--term-bg: ${amberBase.background};`);
+    expect(root).toContain(`--term-cursor: ${amberBase.cursor};`);
+    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "report"));
   });
 });
 

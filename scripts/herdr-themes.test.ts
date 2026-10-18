@@ -5,7 +5,7 @@ import { normalizeThemeValue, parseThemeBlocks, parseThemeValue } from "../src/l
 import { ROLES, SHADOW_GEOMETRY, siblingFor, SUPPORTED_ENTRIES } from "../src/lib/themes.ts";
 import { HERDR_SOURCE, KIND, mapTerminalAnsi, RAW, SOURCE, TOKENS } from "./herdr-themes.ts";
 import { deltaE, mapTheme, minimumContrast, proposeTheme, ROLE_DEFAULTS } from "./herdr-theme-proposal.ts";
-import { OVERRIDES, provenanceFailures } from "./herdr-theme-overrides.ts";
+import { APP_THEME_IDS, OVERRIDES, provenanceFailures } from "./herdr-theme-overrides.ts";
 import type { ThemeOverride } from "./herdr-theme-overrides.ts";
 
 const css = readFileSync(join(import.meta.dir, "../src/styles.css"), "utf8");
@@ -124,8 +124,8 @@ describe("executable provenance policy", () => {
   it("checks the fork-owned Report palette without claiming it came from herdr", () => {
     const report = SUPPORTED_ENTRIES.filter((entry) => entry.id === "report");
     expect(report.map((entry) => entry.mode).sort()).toEqual(["dark", "light"]);
+    expect(APP_THEME_IDS.has("report")).toBe(true);
     expect(SOURCE).not.toHaveProperty("report");
-    expect(OVERRIDES.some((item) => item.theme === "report")).toBe(false);
     for (const entry of report) {
       const declarations = parseThemeBlocks(css)[`report/${entry.mode}`]?.declared;
       expect(declarations?.["--bg"]).toBeDefined();

@@ -142,7 +142,7 @@ test("a status marker does not skip a target absent from the deploy and candidat
 });
 
 test("a stale started attempt resumes on its deterministic worktree", () => {
-  const { home, work, upstream, state, run, statusFile, launchCalls, workspaceCalls } = fixture();
+  const { home, upstream, state, run, statusFile, launchCalls, workspaceCalls } = fixture();
   const target = advanceUpstream(home, upstream);
   mkdirSync(state, { recursive: true });
   writeFileSync(statusFile(target), `state=started\ntarget=${target}\nattempt=1\nupdated_epoch=0\npane=\n`);
@@ -156,7 +156,7 @@ test("a stale started attempt resumes on its deterministic worktree", () => {
 });
 
 test("failed agent launch is visible and retries in the same worktree without another workspace", () => {
-  const { home, work, upstream, state, run, statusFile, workspaceCalls, launchCalls } = fixture();
+  const { home, upstream, run, statusFile, workspaceCalls, launchCalls } = fixture();
   const target = advanceUpstream(home, upstream);
   const first = run({ failLaunch: true, retryDelay: 0 });
   expect(first.status).toBe(1);

@@ -70,7 +70,7 @@ export function pickTheme(current: { readonly darkTheme: string; readonly lightT
   const other: Mode = side === "dark" ? "light" : "dark";
   const sibling = siblingFor(id, other);
   const otherTheme = current[SIDE_KEY[other]];
-  const untouched = otherTheme === DEFAULT_THEME || FORMER_DEFAULTS.includes(otherTheme as ThemeId) || otherTheme === siblingFor(current[SIDE_KEY[side]], other);
+  const untouched = otherTheme === DEFAULT_THEME || FORMER_DEFAULTS.some((formerDefault) => formerDefault === otherTheme) || otherTheme === siblingFor(current[SIDE_KEY[side]], other);
   return sibling !== undefined && untouched ? { [SIDE_KEY[side]]: id, [SIDE_KEY[other]]: sibling } : { [SIDE_KEY[side]]: id };
 }
 

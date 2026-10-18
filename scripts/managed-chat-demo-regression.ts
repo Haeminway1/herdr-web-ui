@@ -61,7 +61,7 @@ try {
           const page = await context.newPage();
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
-          const base = `http://127.0.0.1:${server.port}/herdr-web-ui/demo/app/?pane=${encodeURIComponent(panes.infra)}&view=chat`;
+          const base = `http://127.0.0.1:${server.port}/herdr-web-ui/demo/app/?pane=${encodeURIComponent(panes.api)}&view=chat`;
           await page.goto(`${base}&managed=identity_pending`);
           const pending = page.locator('.pane-frame.is-current .chat-frame [data-managed-state="identity_pending"]');
           await pending.waitFor();

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { herdrRpc, herdrSocketPath, sessionSnapshot, workspaceClose, workspaceCreate, paneRead } from "./herdr/client.ts";
 import { ConversationUnavailable, gjcTranscriptPath, paneConversation } from "./conversation.ts";
 import { isGjcProcess } from "./gjc-runtime.ts";
+import * as sdkGeneration from "./gjc-sdk-generation.ts";
 import { startShellAgent } from "./shell-agent.ts";
 import { createServer } from "./index.ts";
 
