@@ -330,9 +330,9 @@ async function waitForSessionListTurn(previous: Promise<void>, deadline: number)
   }
 }
 
-async function reserveSessionListStart(queue: SessionListQueue, deadline: number): Promise<void> {
+async function reserveSessionListStart(queue: SessionListQueue, deadline: number, budgetNow: () => number): Promise<void> {
   for (;;) {
-    const now = Date.now();
+    const now = budgetNow();
     queue.starts = queue.starts.filter((start) => start > now - SESSION_LIST_START_WINDOW_MS);
     if (queue.starts.length < SESSION_LIST_MAX_STARTS) {
       queue.starts.push(now);
@@ -350,6 +350,7 @@ async function runSerializedSessionList(
   runner: GjcSdkCommandRunner,
   args: string[],
   deadline: number,
+  budgetNow: () => number,
 ): Promise<string> {
   const queue = sessionListQueue(runner);
   const previous = queue.tail;
@@ -366,7 +367,7 @@ async function runSerializedSessionList(
   try {
     await waitForSessionListTurn(previous, deadline);
     acquired = true;
-    await reserveSessionListStart(queue, deadline);
+    await reserveSessionListStart(queue, deadline, budgetNow);
     runnerPending = true;
     return await runBounded(runner, args, deadline, () => {
       runnerPending = false;
@@ -415,6 +416,7 @@ async function resolveSessionBinding(
   agentDir: string,
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver,
+  budgetNow: () => number = Date.now,
 ): Promise<GjcSdkResolvedBinding | null> {
   try {
     if (!Array.isArray(pids) || pids.length === 0 || pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0)
@@ -440,7 +442,7 @@ async function resolveSessionBinding(
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const input = cursor === null ? { scope } : { scope, cursor };
-      const output = await runSerializedSessionList(runner, sdkArgs(agentDir, input), deadline);
+      const output = await runSerializedSessionList(runner, sdkArgs(agentDir, input), deadline, budgetNow);
       const response = parseBrokerPage(output);
       if (response === null || response.sessions.length > PAGE_LIMIT) return null;
       if (indexSeq !== null && response.indexSeq !== indexSeq) return null;
@@ -468,7 +470,7 @@ async function resolveSessionBinding(
     if (candidates.length !== 1) return null;
     const expected = candidates[0]!;
 
-    const lookup = await runSerializedSessionList(runner, sdkArgs(agentDir, { cwd: expected.locatorCwd, resolveSessionId: expected.sessionId }), deadline);
+    const lookup = await runSerializedSessionList(runner, sdkArgs(agentDir, { cwd: expected.locatorCwd, resolveSessionId: expected.sessionId }), deadline, budgetNow);
     const exact = parseBrokerPage(lookup);
     if (exact === null || exact.continuationCursor !== null || indexSeq === null || exact.indexSeq < indexSeq) return null;
 
@@ -514,8 +516,9 @@ export function gjcSdkTranscriptWithRunner(
   agentDir: string,
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver = gitWorktreeRoot,
+  budgetNow: () => number = Date.now,
 ): Promise<GjcSdkBinding | null> {
-  return resolveSessionBinding(pids, cwd, agentDir, runner, worktreeRootResolver).then(transcriptBinding);
+  return resolveSessionBinding(pids, cwd, agentDir, runner, worktreeRootResolver, budgetNow).then(transcriptBinding);
 }
 
 function transcriptBinding(binding: GjcSdkResolvedBinding | null): GjcSdkBinding | null {

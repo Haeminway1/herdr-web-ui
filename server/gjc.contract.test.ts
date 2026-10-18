@@ -1,10 +1,15 @@
-import { afterAll, expect, it } from "bun:test";
+import { afterAll, expect, it, spyOn } from "bun:test";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { herdrRpc, herdrSocketPath, sessionSnapshot, workspaceClose, workspaceCreate, paneRead } from "./herdr/client.ts";
 import { ConversationUnavailable, forgetTranscriptState, gjcTranscriptPath, paneConversation } from "./conversation.ts";
+import * as gjcSdk from "./gjc-sdk.ts";
+import type { GjcSdkCommandRunner } from "./gjc-sdk.ts";
+import * as gjcSdkGeneration from "./gjc-sdk-generation.ts";
 import { isGjcProcess } from "./gjc-runtime.ts";
 import { startShellAgent } from "./shell-agent.ts";
 import { createServer } from "./index.ts";
@@ -19,6 +24,7 @@ const bin = join(home, "bin");
 const registry = join(home, "sdk-registry.json");
 const sdkCli = join(home, "gjc-sdk-fixture.js");
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+const execFileAsync = promisify(execFile);
 
 // The stand-in is a Bun script named gjc; it holds only the requested store directory and prints the pane's fixed screen.
 writeFileSync(script, "if (process.env.GJC_TEST_CWD) process.chdir(process.env.GJC_TEST_CWD);\nfor (const path of process.argv.slice(2)) require('node:fs').openSync(path, 'r');\nconsole.log('GJC fixture ready'); console.log(process.env.GJC_TEST_SCREEN || ''); setInterval(() => {}, 1000);\n");
@@ -129,6 +135,10 @@ async function setAgent(id: string, agent: string): Promise<void> {
   throw new Error(`herdr did not report ${agent} for the fixture pane`);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function sdkRow(pid: number, cwd: string, sessionId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     sessionId,
@@ -159,9 +169,40 @@ async function withSdkFixture<T>(run: () => Promise<T>): Promise<T> {
   process.env["PATH"] = `${bin}${process.env["PATH"] ? `:${process.env["PATH"]}` : ""}`;
   process.env["GJC_TEST_REGISTRY"] = registry;
   process.env["GJC_TEST_AGENT_DIR"] = agentDir;
+  let budgetTime = 0;
+  let completeLookups = 0;
+  const budgetNow = () => budgetTime;
+  const runner: GjcSdkCommandRunner = async (command, args, options) => {
+    const execution = execFileAsync(command, args, options);
+    execution.child.stdin?.end();
+    const { stdout } = await execution;
+    return stdout;
+  };
+  const generationAuthority = spyOn(gjcSdkGeneration, "gjcSdkGenerationCurrent").mockImplementation(async (directory, sessionId, generation) => {
+    if (directory !== agentDir) return false;
+    let state: unknown;
+    try { state = JSON.parse(readFileSync(registry, "utf8")); }
+    catch { return false; }
+    if (!isRecord(state) || !Array.isArray(state.rows)) return false;
+    const rows: unknown[] = state.rows;
+    const current = rows.filter((row) => isRecord(row)
+      && row.sessionId === sessionId
+      && row.endpointGeneration === generation
+      && row.live === true
+      && row.deleted !== true
+      && !(row.terminal === true && row.terminalUncertain === false));
+    return current.length === 1;
+  });
+  const transcriptResolver = spyOn(gjcSdk, "gjcSdkTranscript").mockImplementation((pids, cwd, directory) => {
+    if (completeLookups > 0 && completeLookups % 2 === 0) budgetTime += 10_100;
+    completeLookups += 1;
+    return gjcSdk.gjcSdkTranscriptWithRunner(pids, cwd, directory, runner, undefined, budgetNow);
+  });
   try {
     return await run();
   } finally {
+    transcriptResolver.mockRestore();
+    generationAuthority.mockRestore();
     for (const key of keys) {
       const value = previous.get(key);
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
