@@ -80,7 +80,7 @@ try {
   browser = await chromium.launch({ executablePath: chromePath(), headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.addInitScript(({ pane }) => {
-    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
+    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
     localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
   }, { pane });
   const errors: string[] = [];

@@ -17,7 +17,7 @@ const store = join(root, ".gjc", "agent", "sessions", "v2-fixture");
 const script = join(root, "gjc");
 const oldPath = process.env.PATH;
 const sdkRows: Record<string, unknown>[] = [];
-const sdkRegistry = join(root, "sdk-fixture.json");
+const sdkRegistry = join(root, ".gjc", "agent", "sdk-fixture.json");
 const oldHome = process.env.HOME, oldSocket = process.env.HERDR_SOCKET;
 const evidenceDirectory = process.env.UI_EVIDENCE_DIR || process.env.CHECK_BROWSER_EVIDENCE_DIR;
 const workspaces: string[] = [], frames: ServerMessage[] = [];
@@ -140,6 +140,25 @@ try {
   const sdkBin = join(root, "bin");
   mkdirSync(sdkBin);
   const sdkCommand = join(sdkBin, "gjc");
+  const sdkPackage = join(sdkBin, "node_modules", "@gajae-code", "coding-agent");
+  mkdirSync(sdkPackage, { recursive: true });
+  writeFileSync(join(sdkPackage, "package.json"), JSON.stringify({ name: "@gajae-code/coding-agent", type: "module", exports: { "./sdk": "./sdk.mjs" } }));
+  writeFileSync(join(sdkPackage, "sdk.mjs"), `import { readFileSync } from "node:fs";
+import { join } from "node:path";
+export const router = { SessionRouter: class {
+  constructor(options) {
+    if (options.observer !== true) throw new Error("fixture generation observer must be read-only");
+    this.agentDir = options.agentDir;
+  }
+  async generationStatus(sessionId, generation) {
+    const rows = JSON.parse(readFileSync(join(this.agentDir, "sdk-fixture.json"), "utf8"));
+    const current = rows.some((row) => row.sessionId === sessionId && row.endpointGeneration === generation
+      && row.live === true && row.terminal === false && row.terminalUncertain === false
+      && row.ambiguous === false && row.deleted !== true);
+    return { status: current ? "current" : "unknown" };
+  }
+} };
+`);
   writeFileSync(sdkCommand, `#!${process.execPath}
 import { readFileSync } from "node:fs";
 const rows = JSON.parse(readFileSync(${JSON.stringify(sdkRegistry)}, "utf8"));

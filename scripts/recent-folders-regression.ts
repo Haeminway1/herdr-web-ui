@@ -53,7 +53,7 @@ try {
               if (this === localStorage && key === "herdr-web-ui:recent-directories:local"
                 && JSON.parse(value).includes(project)) console.info("RECENTS_SEEDED");
             };
-            localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ theme, language: "ko" }));
+            localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ theme, language: "ko", sidebarLayout: "upstream" }));
             localStorage.setItem("herdr-web-ui:new-session-agent", "codex");
             localStorage.setItem("herdr-web-ui:recent-directories:remote", '["/remote-only/project"]');
             // a folder kept from before: the two the snapshot's panes are in go behind it

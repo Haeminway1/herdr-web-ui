@@ -20,7 +20,7 @@ import { comboKey, LEGACY_COMBOS } from "./theme-baseline.ts";
 // HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-settings-demo-"));
 const PAGES = ["Appearance", "Chat", "Terminal", "Alerts", "Voice input", "Subscription usage", "Shortcuts", "Phone & devices", "Remote PCs", "Agent integrations", "About"];
-const SETTINGS = { language: "en", showUsage: true, voiceInput: true, showQuickReplies: true };
+const SETTINGS = { language: "en", showUsage: true, voiceInput: true, showQuickReplies: true, darkTheme: "amber", lightTheme: "amber", sidebarLayout: "upstream" };
 
 const dialogOf = (page: Page) => page.getByRole("dialog", { name: "Settings", exact: true });
 const openSettings = async (page: Page): Promise<void> => {
@@ -202,10 +202,11 @@ try {
               // a herdr pair: Tokyo Night on the dark side fills the untouched light side with Tokyo Night Day, each
               // side draws its own row with its xterm colors, and the look follows the mode toggle
               await themes.getByRole("button", { name: "Dark", exact: true }).tap();
-              await pickers.light.selectOption("amber");
+              await pickers.light.selectOption("report");
+              assert.equal(await pickers.light.inputValue(), "report", "the explicit Report default seeds theme pairing");
               await pickers.dark.selectOption("tokyo-night");
               await drawn("dark", "tokyo-night");
-              assert.deepEqual(await stored(), { palette: "tokyo-night", darkTheme: "tokyo-night", lightTheme: "tokyo-night-day", second: { darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" } }, "a paired dark theme fills the light side still at its default with its sibling");
+              assert.deepEqual(await stored(), { palette: "tokyo-night", darkTheme: "tokyo-night", lightTheme: "tokyo-night-day", second: { darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" } }, "a paired dark theme fills the Report default light side with its sibling");
               assert.equal(await pickers.light.inputValue(), "tokyo-night-day");
               assert.deepEqual(await drift(xtermTokens("dark", "tokyo-night")), [], "tokyo-night/dark: --term-* as the theme xterm is given");
               await themes.getByRole("button", { name: "Light", exact: true }).tap();
@@ -483,8 +484,8 @@ try {
         });
         await page.reload();
         await page.locator(".conn-live").waitFor({ state: "attached" });
-        await page.waitForFunction(() => document.documentElement.dataset.palette === "amber" && document.documentElement.dataset.theme === "light" && getComputedStyle(document.documentElement).colorScheme === "light");
-        if (process.env.UI_EVIDENCE_DIR) writeFileSync(join(process.env.UI_EVIDENCE_DIR, "any-side.txt"), "PASS Light mode with lightTheme=dracula draws data-theme=dark, data-palette=dracula, color-scheme=dark.\nPASS injected lightTheme=not-a-theme reloads amber light.\nPASS Dracula, Nord and Vesper do not pre-fill a sibling.\n");
+        await page.waitForFunction(() => document.documentElement.dataset.palette === "report" && document.documentElement.dataset.theme === "light" && getComputedStyle(document.documentElement).colorScheme === "light");
+        if (process.env.UI_EVIDENCE_DIR) writeFileSync(join(process.env.UI_EVIDENCE_DIR, "any-side.txt"), "PASS Light mode with lightTheme=dracula draws data-theme=dark, data-palette=dracula, color-scheme=dark.\nPASS injected lightTheme=not-a-theme reloads Report light.\nPASS Dracula, Nord and Vesper do not pre-fill a sibling.\n");
         console.log("PASS dark-only themes on either side, distinct borders, no siblings, and unknown-id reload");
         await openSettings(page);
         // beside the list, turning pages is one step however many are turned
