@@ -648,6 +648,27 @@ describe("the gjc process a pane's transcript and start are read from", () => {
     ({ pane_id: id, agent: "gjc", agent_status: "working", cwd: "/work", ...extra } as unknown as HerdrPane);
   const transcript = async (id: string, _cwd: string) => `/t/${id}.jsonl`;
 
+  it("isolates a failed managed identity and does not inspect its provider child", async () => {
+    const managed = gjcPane("managed", {
+      agent: "claude",
+      tokens: { hm_managed_session: "nonce", hm_managed_generation: "1" },
+    });
+    const inspected: string[] = [];
+    const panes = await gjcPanes([managed, gjcPane("healthy")], {
+      managedSession: async () => { throw new Error("managed identity unavailable"); },
+      processInfo: async (paneId) => {
+        inspected.push(paneId);
+        return { process_info: { foreground_processes: [{ pid: 11, argv: ["gjc"] }] } };
+      },
+      transcript,
+      startedAt: () => 1_000,
+      underShell: async () => null,
+    });
+    expect(inspected).toEqual(["healthy"]);
+    expect(panes.has("managed")).toBe(false);
+    expect(panes.get("healthy")).toEqual({ path: "/t/healthy.jsonl", startedAt: 1_000 });
+  });
+
   it("binds the pane's current runtime cwd, not where it started", async () => {
     const asked: string[] = [];
     const panes = await gjcPanes([gjcPane("p", { foreground_cwd: "/work/now" }), gjcPane("q")], {
