@@ -2,7 +2,7 @@
 
 `upstream/main` owns the UI, defaults, dependencies and runtime behavior. The retained fork differences
 are listed in [docs/fork-inventory.md](docs/fork-inventory.md): the separate plugin identity and
-port, Report colors, a compact skin over the native sidebar, exact Manager session binding, and the
+port, Report colors, the existing classic sidebar with its residents, grouping, Manager pin and attention inbox, exact Manager session binding, and the
 fork sync/release gates.
 
 ## Automatic sync
@@ -23,6 +23,11 @@ baseline, run the applicable local checks, record a validated candidate only aft
 Git containment, and stop before tagging, pushing or publishing.
 
 ## Release gate
+
+Keep the approved 0.4.1108 operating release and automatic installation disabled during stabilization.
+Local tests or a hidden browser are not operational acceptance: the user's actual notebook Aside must
+confirm the separate fake-data preview preserves the original sidebar, scrolling and navigation before
+the supervising user session admits another deployment. A conflict never authorizes removing a kept UI.
 
 Use `scripts/fork-release.sh X.Y.Z` only on a clean `deploy/haemin` checkout. The version in
 `package.json` and `herdr-plugin.toml` must match and be newer than every published fork tag. The
