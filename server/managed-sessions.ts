@@ -214,7 +214,10 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     const storeInfo = lstatSync(store);
     const transcriptDirectory = dirname(sessionFile);
     const transcriptDirectoryInfo = lstatSync(transcriptDirectory);
-    if (!storeInfo.isDirectory() || !owned(storeInfo) || !safeAncestors(transcriptDirectory, transcriptDirectoryInfo)
+    // A native Codex/Claude store is the user's own tree and is commonly 0775; it gets the same
+    // owner rule as other parents. The private GJC/OMO nonce store stays strict.
+    const storeSafe = identity.harness === "gjc" || identity.harness === "omo" ? owned(storeInfo) : safeAncestor(storeInfo);
+    if (!storeInfo.isDirectory() || !storeSafe || !safeAncestors(transcriptDirectory, transcriptDirectoryInfo)
       || realpathSync(store) !== store || realpathSync(sessionFile) !== sessionFile || !inside(store, sessionFile)
       || !sessionFile.endsWith(".jsonl")) return blocked("blocked_session_root");
     const info = lstatSync(sessionFile);

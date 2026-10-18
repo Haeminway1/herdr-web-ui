@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { ConversationUnavailable, conversationForPane as readConversation, HistoryChanged, resolveTranscript as readTranscript } from "./conversation.ts";
 import { labelManagedPanes as projectPanes, resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
@@ -371,6 +371,15 @@ describe.each(["gjc", "omo", "codex", "claude"] as const)("%s exact managed tran
     writeFileSync(sessionFile, JSON.stringify(meta) + "\n", { mode: 0o600 }); const info = statSync(sessionFile);
     record.session_file = sessionFile; record.file_identity = { dev: info.dev, ino: info.ino }; save();
     expect((await resolve()).identity.state).toBe("ready"); expect(await resolveTranscript(pane, root)).toMatchObject({ source: `${harness}-transcript`, path: sessionFile });
+  });
+
+  it("accepts a user-owned 0775 native store but never a world-writable one", async () => {
+    sizedNativeHeader(harness, 1024);
+    const store = harness === "codex" || harness === "claude" ? dirname(sessionFile) : String(record.session_dir);
+    chmodSync(store, 0o775);
+    expect((await resolve()).identity.state).toBe(harness === "codex" || harness === "claude" ? "ready" : "blocked");
+    chmodSync(store, 0o777);
+    expect((await resolve()).identity.state).toBe("blocked");
   });
 
   it("allows group-write only for a pinned OMO transcript", async () => {
