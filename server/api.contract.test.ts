@@ -511,10 +511,16 @@ describe("telemetry API", () => {
     const settings = telemetrySettingsSnapshot({
       ...DEFAULT_SETTINGS,
       theme: "light",
+      palette: "codex",
+      paletteLight: "codex",
+      paletteDark: "codex",
+      darkTheme: "codex",
+      lightTheme: "codex",
       terminalFontFamily: "private font name",
       quickReplies: ["private reply"],
       usageHidden: ["private-account-key"],
     });
+    if (settings === null) throw new Error("valid telemetry settings were omitted");
     try {
       const first = await fetch(url);
       expect(first.headers.get("cache-control")).toBe("no-store");
@@ -1128,12 +1134,13 @@ describe("workspace and discovery endpoints", () => {
   let workspaceId: string | null = null;
   let paneId: string | null = null;
   const label = `herdr-web-ui-test-${Math.random().toString(36).slice(2)}`;
+  const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-discovery-"));
   const fileName = `${label}-mention.txt`;
-  const filePath = join(tmpdir(), fileName);
+  const filePath = join(root, fileName);
 
   afterAll(async () => {
-    if (workspaceId) await herdrRpc("workspace.close", { workspace_id: workspaceId }).catch(() => undefined);
-    rmSync(filePath, { force: true });
+    if (workspaceId) await workspaceClose(workspaceId);
+    rmSync(root, { recursive: true, force: true });
   });
 
   it("lists agent kinds with required fallbacks sorted by display label", async () => {
@@ -1226,7 +1233,7 @@ describe("workspace and discovery endpoints", () => {
     const create = await fetch(`${base()}/api/workspace/create`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cwd: tmpdir(), label, agent: null }),
+      body: JSON.stringify({ cwd: root, label, agent: null }),
     });
     expect(create.status).toBe(200);
     const created = (await create.json()) as WorkspaceCreated;

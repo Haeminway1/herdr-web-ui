@@ -7,6 +7,17 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.1109] - 2026-10-18
+
+### Fixed
+- Restore sidebar wheel scrolling by using the upstream list as its only scroll owner.
+- Preserve displayed GJC history during temporary SDK timeouts and execution failures; identity changes still fail closed.
+- Resume incomplete upstream sync attempts instead of treating a start marker as completion.
+- Normalize parsed voice-upload filenames before forwarding them to the provider.
+
+### Changed
+- Integrate upstream through `f149138`, keep Report light/dark colors and a compact native sidebar skin, and retain exact Manager session binding without the duplicated classic sidebar.
+
 ## [0.4.11] - 2026-10-16
 
 ### Fixed

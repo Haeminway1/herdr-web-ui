@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { herdrRpc, herdrSocketPath, sessionSnapshot, workspaceClose, workspaceCreate, paneRead } from "./herdr/client.ts";
 import { ConversationUnavailable, gjcTranscriptPath, paneConversation } from "./conversation.ts";
 import { isGjcProcess } from "./gjc-runtime.ts";
+import { GjcSdkLookupError } from "./gjc-sdk.ts";
 import * as sdkGeneration from "./gjc-sdk-generation.ts";
 import { startShellAgent } from "./shell-agent.ts";
 import { createServer } from "./index.ts";
@@ -17,7 +18,6 @@ const workspaces: string[] = [];
 const script = join(home, "gjc");
 const bin = join(home, "bin");
 const registry = join(home, "sdk-registry.json");
-let brokerClock = 0;
 const sdkCli = join(home, "gjc-sdk-fixture.js");
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -149,8 +149,6 @@ function sdkRow(pid: number, cwd: string, sessionId: string, overrides: Record<s
 
 function writeRegistry(rows: Record<string, unknown>[], paths: Record<string, string> = {}, kind?: string): void {
   writeFileSync(registry, JSON.stringify({ rows, paths, ...(kind ? { kind } : {}) }));
-  // Registry mutations represent the next native broker refresh, without fixed sleeps.
-  brokerClock += 10_000;
 }
 
 async function withSdkFixture<T>(run: () => Promise<T>): Promise<T> {
@@ -161,7 +159,6 @@ async function withSdkFixture<T>(run: () => Promise<T>): Promise<T> {
   process.env["PATH"] = `${bin}${process.env["PATH"] ? `:${process.env["PATH"]}` : ""}`;
   process.env["GJC_TEST_REGISTRY"] = registry;
   process.env["GJC_TEST_AGENT_DIR"] = agentDir;
-  const clock = spyOn(performance, "now").mockImplementation(() => brokerClock);
   // This fixture's live registry is the SDK's readonly generation authority.
   const generation = spyOn(sdkGeneration, "gjcSdkGenerationCurrent").mockImplementation(async (_root, id, endpointGeneration) => {
     const current = JSON.parse(readFileSync(registry, "utf8"));
@@ -171,7 +168,6 @@ async function withSdkFixture<T>(run: () => Promise<T>): Promise<T> {
     return await run();
   } finally {
     generation.mockRestore();
-    clock.mockRestore();
     for (const key of keys) {
       const value = previous.get(key);
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -274,12 +270,11 @@ it("conversation API distinguishes a temporary SDK failure from a replaced or mi
     expect(timeout.status).toBe(504);
     expect(await timeout.json()).toMatchObject({ error: { code: "gjc_sdk_timeout" } });
 
-    // a gjc that fails outright (not installed, too old, broker down) does not clear by
-    // retrying: it keeps the terminal fallback it had before
     writeRegistry([row], paths, "unavailable");
     const unavailable = await fetch(url);
-    expect(unavailable.status).toBe(200);
-    expect(await unavailable.json()).toMatchObject({ source: "scrollback" });
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.headers.get("cache-control")).toBe("no-store");
+    expect(await unavailable.json()).toEqual({ error: { code: "gjc_sdk_unavailable", message: "GJC SDK lookup failed" } });
 
     writeRegistry([row], paths);
     const recovered = await fetch(url);
@@ -313,7 +308,7 @@ it("SDK scopes discovery so unrelated retired history cannot exhaust the pane's 
   await expectTranscript(id, a);
 }));
 
-it("SDK cached listings cannot authorize a generation retired by /new before cache expiry", async () => withSdkFixture(async () => {
+it("uses the current SDK listing immediately after /new retires the previous generation", async () => withSdkFixture(async () => {
   const a = join(dir, "cached-generation-a.jsonl"), b = join(dir, "cached-generation-b.jsonl");
   writeFileSync(a, record(home, "A", "cached-generation-a"));
   writeFileSync(b, record(home, "B", "cached-generation-b"));
@@ -323,11 +318,7 @@ it("SDK cached listings cannot authorize a generation retired by /new before cac
   const paths = { "cached-generation-a": a, "cached-generation-b": b };
   writeRegistry([sdkRow(pid, home, "cached-generation-a")], paths);
   await expectTranscript(id, a);
-  // Do not advance the cache clock: the two raw CLI answers still identify A.
-  writeFileSync(registry, JSON.stringify({ rows: [sdkRow(pid, home, "cached-generation-b")], paths }));
-  await expect(gjcTranscriptPath(id, home, home)).rejects.toThrow("no_session_path");
-  await expect(paneConversation(id)).rejects.toBeInstanceOf(ConversationUnavailable);
-  brokerClock += 10_000;
+  writeRegistry([sdkRow(pid, home, "cached-generation-b")], paths);
   await expectTranscript(id, b);
   await expectConversation(id, "B");
 }));
@@ -374,12 +365,20 @@ async function expectSdkFailure(scenario: string): Promise<void> {
     else if (scenario === "stale") writeRegistry([sdkRow(pid, home, `failure-${scenario}-a`, { live: false })], paths);
     else writeRegistry([target]);
 
-    await expect(paneConversation(id)).rejects.toBeInstanceOf(ConversationUnavailable);
+    const failure = await paneConversation(id).catch((error: unknown) => error);
+    if (scenario === "unavailable") {
+      expect(failure).toBeInstanceOf(GjcSdkLookupError);
+      expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(failure).not.toHaveProperty("cause");
+      expect(failure).not.toHaveProperty("stderr");
+    } else {
+      expect(failure).toBeInstanceOf(ConversationUnavailable);
+    }
   });
 }
 
 for (const scenario of ["unavailable", "malformed", "ambiguous", "stale", "omitted path"]) {
-  it(`SDK ${scenario} identity fails closed instead of guessing from the pane screen`, async () => expectSdkFailure(scenario));
+  it(`SDK ${scenario} lookup does not guess from the pane screen`, async () => expectSdkFailure(scenario));
 }
 
 it("pane routing honors an actual named non-GJC agent even when a GJC process is present", async () => withSdkFixture(async () => {

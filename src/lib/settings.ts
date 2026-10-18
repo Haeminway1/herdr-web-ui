@@ -438,10 +438,10 @@ export function sanitizeSettings(raw: unknown): Settings {
   // unknown id falls back to the default, not a stale pair.
   const darkTheme = "darkTheme" in record
     ? (isThemeId(record["darkTheme"]) ? record["darkTheme"] : DEFAULT_THEME)
-    : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? "amber" : palette;
+    : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? DEFAULT_THEME : palette;
   const lightTheme = "lightTheme" in record
     ? (isThemeId(record["lightTheme"]) ? record["lightTheme"] : DEFAULT_THEME)
-    : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? "amber" : palette;
+    : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? DEFAULT_THEME : palette;
   const density = record["density"];
   const font = record["terminalFontSize"];
   const chatFont = record["chatFontSize"];

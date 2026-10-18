@@ -6,7 +6,7 @@ export function ManagedSessionStatus({ identity, badge = false }: { identity: Ma
   const t = useT();
   const text = identity.state === "ready" ? t("Session identified")
     : identity.state === "identity_pending" ? t("Waiting for managed session identity")
-      : t("Managed session blocked");
+      : `${t("Managed session blocked")}${identity.reason === null ? "" : `: ${identity.reason}`}`;
   const short = identity.state === "ready" ? t("Session identified")
     : identity.state === "identity_pending" ? t("Waiting for identity") : t("Session blocked");
   return badge

@@ -116,6 +116,64 @@ try {
   const workspaceGroup = (workspaceId: string) => page.locator(`.workspace-group[data-workspace="${workspaceId}"]`);
   const workspaceHeader = (workspaceId: string) => workspaceGroup(workspaceId).locator(":scope > .workspace-header");
   const agentRow = (paneId: string) => page.locator(`.agents-sidebar .agent-item[data-machine="local"][data-pane="${paneId}"]`);
+  const checkMachineListWheel = async (target: Page, label: string, keyboardSelection: boolean): Promise<void> => {
+    const list = target.locator(".machine-list");
+    const original = await list.evaluate((element) => ({ flex: element.style.flex, height: element.style.height }));
+    await list.evaluate((element) => { element.style.flex = "0 0 72px"; });
+    try {
+      await until(async () => await list.evaluate((element) => element.scrollHeight > element.clientHeight), `${label} workspace rows overflow the machine list`);
+      const paneRow = target.locator(".workspace-group .pane-select").first();
+      await paneRow.scrollIntoViewIfNeeded();
+      await list.evaluate((element) => { element.scrollTop = 0; });
+      const scrollOwners = await paneRow.evaluate((node) => {
+        const owners: string[] = [];
+        for (let element = node.parentElement; element; element = element.parentElement) {
+          const overflow = getComputedStyle(element).overflowY;
+          if ((overflow === "auto" || overflow === "scroll") && element.scrollHeight > element.clientHeight) {
+            owners.push(element.classList.contains("machine-list") ? "machine-list" : "nested");
+          }
+        }
+        return owners;
+      });
+      assert.deepEqual(scrollOwners, ["machine-list"], `${label} pane rows have one scroll owner`);
+      const paneBounds = await paneRow.boundingBox();
+      const listBounds = await list.boundingBox();
+      if (!paneBounds || !listBounds) throw new Error(`${label} pane row or machine list is not visible`);
+      const left = Math.max(paneBounds.x, listBounds.x);
+      const right = Math.min(paneBounds.x + paneBounds.width, listBounds.x + listBounds.width);
+      const top = Math.max(paneBounds.y, listBounds.y);
+      const bottom = Math.min(paneBounds.y + paneBounds.height, listBounds.y + listBounds.height);
+      if (right <= left || bottom <= top) throw new Error(`${label} pane row does not intersect the machine list`);
+      const selected = target.locator(".workspace-group .pane-select[aria-current='true']");
+      const selectedPaneId = await selected.getAttribute("data-pane");
+      await target.mouse.move((left + right) / 2, (top + bottom) / 2);
+      await target.mouse.wheel(0, 160);
+      await until(async () => await list.evaluate((element) => element.scrollTop > 0), `${label} wheel over a pane row scrolls the machine list`);
+      assert.equal(await selected.getAttribute("data-pane"), selectedPaneId, `${label} wheel scrolling does not select a pane`);
+      const settings = target.locator('.sidebar-footer button[aria-label="Settings"]');
+      assert.equal(await settings.isVisible(), true, `${label} sidebar footer remains visible`);
+      await settings.click();
+      await target.locator(".settings-dialog").waitFor();
+      await target.getByRole("button", { name: "Close settings", exact: true }).click();
+      if (!keyboardSelection) {
+        await target.locator('button[aria-controls="workspace-drawer"]').click();
+        await target.locator("#workspace-drawer.is-open").waitFor();
+      }
+      if (keyboardSelection) {
+        const nextPane = target.locator(`.workspace-group .pane-select[data-pane="${paneB}"]`);
+        await nextPane.focus();
+        await target.keyboard.press("Enter");
+        await until(async () => await nextPane.getAttribute("aria-current") === "true", `${label} keyboard selection reaches the next pane row`);
+        assert.equal(await nextPane.getAttribute("data-pane"), paneB);
+        const firstOwnedPane = target.locator(`.workspace-group .pane-select[data-pane="${paneA}"]`);
+        await firstOwnedPane.focus();
+        await target.keyboard.press("Enter");
+        await until(async () => await firstOwnedPane.getAttribute("aria-current") === "true", `${label} keyboard selection returns to the first pane row`);
+      }
+    } finally {
+      await list.evaluate((element, size) => { element.style.flex = size.flex; element.style.height = size.height; element.scrollTop = 0; }, original);
+    }
+  };
   // the header under test is the app's own (server/static.ts), so this is where a broken
   // directive shows up: every page below loads through this same server
   csp.push(await watchCsp(page));
@@ -184,6 +242,8 @@ try {
     "Spaces has no tab or pane tree");
   assert.equal(await agentRow(paneA).count(), 0, "a plain shell is absent from Agents");
   assert.equal(await agentRow(paneB).count(), 0, "another plain shell is absent from Agents");
+  await checkMachineListWheel(page, "desktop", true);
+  console.log("PASS desktop wheel scrolling over a pane row keeps the upstream machine list as its sole scroller, with keyboard selection and footer actions usable");
 
   // The search owns arrow/Enter navigation. Tab still reaches real buttons: Enter on Close
   // must close without selecting the highlighted result, and Enter on a row runs that row.
@@ -1424,10 +1484,15 @@ try {
   assert.equal(await page.getByRole("alert").filter({ hasText: /the first \d+ of \d+ files/ }).count(), 0, "nothing was left out");
   limitedUploads.length = 0;
   // the first file is over the size limit: its error and the count left out both stay in the note
-  await page.locator('input[type="file"]').setInputFiles([
+  const boundaryPick = [
     { name: "huge.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(MAX_ATTACHMENT_BYTES + 1) },
     ...Array.from({ length: 100 }, (_, index) => ({ name: `many-${index}.png`, mimeType: "image/png", buffer: png })),
-  ]);
+  ].map(({ name, buffer }) => {
+    const path = join(root, name);
+    writeFileSync(path, buffer);
+    return path;
+  });
+  await page.locator('input[type="file"]').setInputFiles(boundaryPick);
   await until(async () => (await ready.count()) === readyBefore + 6 + 99, "the files within both limits uploaded");
   const note = page.getByRole("alert").filter({ hasText: "Too large to attach: huge.bin" });
   await note.waitFor();
@@ -2227,6 +2292,8 @@ try {
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).blur();
   await mobilePage.locator('button[aria-controls="workspace-drawer"]').click();
   assert.equal(await mobilePage.locator(".agents-sidebar .agent-section-toggle").getAttribute("aria-expanded"), "false", "a phone's drawer opens with Agents folded");
+  await checkMachineListWheel(mobilePage, "phone", false);
+  console.log("PASS phone wheel scrolling over a pane row keeps the footer usable");
   await mobilePage.locator(`.pane-select[title^="${paneB} —"]`).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).waitFor();
   console.log("PASS a pane picked on a phone waits for a tap before raising the keyboard");
