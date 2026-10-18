@@ -12,7 +12,15 @@ import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
 
 type Status = "idle" | "working" | "done" | "blocked";
 type NativeRecord = Readonly<Record<string, unknown>>;
-const root = mkdtempSync(join(tmpdir(), "herdr-gjc-status-browser-"));
+const inheritedRoot = process.env.HERDR_GJC_STATUS_FIXTURE_ROOT;
+const root = inheritedRoot ?? mkdtempSync(join(tmpdir(), "herdr-gjc-status-browser-"));
+if (!inheritedRoot) {
+  const child = Bun.spawn([process.execPath, import.meta.path], {
+    env: { ...process.env, HERDR_GJC_STATUS_FIXTURE_ROOT: root, HOME: root, PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}` },
+    stdin: "ignore", stdout: "inherit", stderr: "inherit",
+  });
+  process.exit(await child.exited);
+}
 const store = join(root, ".gjc", "agent", "sessions", "v2-fixture");
 const script = join(root, "gjc");
 const oldPath = process.env.PATH;
@@ -172,6 +180,8 @@ console.log(JSON.stringify({ type: "broker_response", ok: true, result: {
 `);
   chmodSync(sdkCommand, 0o755);
   process.env.PATH = `${sdkBin}:${oldPath ?? ""}`;
+  assert.equal(Bun.which("gjc"), sdkCommand, "the fixture must resolve its own GJC command");
+  assert.ok(Bun.resolveSync("@gajae-code/coding-agent/sdk", sdkBin).startsWith(sdkBin), "the fixture must resolve its own read-only SDK observer");
   mkdirSync(store, { recursive: true });
   if (evidenceDirectory) mkdirSync(evidenceDirectory, { recursive: true });
   writeFileSync(script, "import { openSync } from 'node:fs'; globalThis.held = openSync(process.argv[2], 'r'); console.log('Synthetic GJC fixture'); setInterval(() => {}, 1000);\n");

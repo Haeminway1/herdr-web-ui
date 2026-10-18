@@ -89,6 +89,7 @@ try {
           ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" }
           : { viewport: { width: 1280, height: 900 }, locale: "en-US" });
         try {
+          await detachedContext.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" })));
           const page = await detachedContext.newPage();
           const renderErrors: string[] = [];
           page.on("pageerror", (error) => renderErrors.push(error.message));
