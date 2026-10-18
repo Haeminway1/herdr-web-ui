@@ -196,9 +196,14 @@ fi
 prompt_file="$root/scripts/fork-sync-prompt.md"
 [ -f "$prompt_file" ] || fail 'fork-sync prompt is missing'
 prompt_text="$(<"$prompt_file")"
+route="${FORK_SYNC_ROUTE_BIN:-/home/haemin/dev/agents/builder/scripts/route}"
+model="$($route resolve sol --field model)" || fail 'cannot resolve Sol model'
+provider="$($route resolve sol --field provider)" || fail 'cannot resolve Sol provider'
+effort="$($route resolve sol --field effort)" || fail 'cannot resolve Sol effort'
+[[ "$model" =~ ^[a-zA-Z0-9._-]+$ && "$provider" =~ ^[a-zA-Z0-9._-]+$ && "$effort" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'invalid Sol route'
 printf -v quoted_prompt '%q' "$prompt_text"
-printf -v agent_command 'flock -n %q env FORK_SYNC_TARGET=%q FORK_SYNC_WORKTREE=%q FORK_SYNC_BRANCH=%q FORK_SYNC_STATE_FILE=%q FORK_SYNC_ATTEMPT=%q claude %s' \
-  "$agent_lock" "$target" "$tree" "$branch" "$status_file" "$attempt" "$quoted_prompt"
+printf -v agent_command 'flock -n %q env FORK_SYNC_TARGET=%q FORK_SYNC_WORKTREE=%q FORK_SYNC_BRANCH=%q FORK_SYNC_STATE_FILE=%q FORK_SYNC_ATTEMPT=%q gjc --model %q --thinking %q %s' \
+  "$agent_lock" "$target" "$tree" "$branch" "$status_file" "$attempt" "$provider/$model" "$effort" "$quoted_prompt"
 run_output="$(FORK_SYNC_AGENT_LOCK="$agent_lock" "$herdr" pane run "$pane" "$agent_command" 9>&- 2>&1)"
 run_result=$?
 if [ "$run_result" -ne 0 ]; then

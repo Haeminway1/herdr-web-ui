@@ -56,6 +56,11 @@ function fixture() {
   const mock = join(home, "herdr");
   const calls = join(home, "herdr.calls");
   const pids = join(home, "agent.pids");
+  const route = join(home, "route");
+  writeFileSync(route, `#!/bin/sh
+case "$4" in model) echo gpt-6.1-sol;; provider) echo openai-codex;; effort) echo high;; *) exit 2;; esac
+`);
+  chmodSync(route, 0o755);
   writeFileSync(mock, `#!/bin/sh
 printf '%s\\n' "$*" >> '${calls}'
 if [ "$1" = workspace ]; then printf '{"pane_id":"w1:p1"}\\n'; exit 0; fi
@@ -75,6 +80,7 @@ exit 0
       HOME: home,
       XDG_STATE_HOME: stateHome,
       HERDR_BIN_PATH: mock,
+      FORK_SYNC_ROUTE_BIN: route,
       HERDR_MOCK_LOG: calls,
       HERDR_MOCK_PID_FILE: pids,
       ...(options.failLaunch ? { HERDR_MOCK_FAIL_LAUNCH: "1" } : {}),
@@ -205,6 +211,9 @@ test("detects upstream main changes without waiting for a new release tag", () =
   expect(result.status).toBe(0);
   expect(launchCalls()).toBe(1);
   expect(readFileSync(statusFile(target), "utf8")).toContain("target=" + target);
+  const launch = readFileSync(join(home, "herdr.calls"), "utf8");
+  expect(launch).toContain("gjc --model openai-codex/gpt-6.1-sol --thinking high");
+  expect(launch).not.toContain(" claude ");
 });
 
 test("dirty and non-deploy checkouts do not refresh or start a sync", () => {
