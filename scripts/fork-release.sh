@@ -1,135 +1,94 @@
-#!/bin/bash
-# Fork release (deploy/haemin, DEPLOY-FORK.md): tags and pushes vX.Y.Z only after every check passes.
-#   scripts/fork-release.sh 0.3.4101
-# package.json and herdr-plugin.toml must already carry that version. One release runs at a time
-# (flock); its outcome is ~/.local/state/herdr-web-ui-fork-sync/release-<version>.status
-# (running / failed: … / released). Checks run with the calling
-# shell's HERDR_* variables removed (an agent shell inside a herdr pane carries its session's).
-#
-# typecheck must pass outright. A unit, integration or UI failure is accepted only when
-# the same check fails the same way on the upstream main this branch merged (a clean worktree of
-# it, run here), so a failure upstream already has on this PC cannot block a release, and a new
-# one always does:
-# - unit and integration: every failing test must also fail upstream (a second run first, for flakes);
-# - UI: the suite stops at its first failure, so the same failure upstream is not enough. The run
-#   is repeated with only that step taken out (KNOWN_UI_STEPS below), and must then pass whole.
+#!/usr/bin/env bash
 set -uo pipefail
+
 version="${1:?usage: fork-release.sh X.Y.Z}"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'fork-release: version must be X.Y.Z' >&2; exit 2; }
 root="$(cd "$(dirname "$0")/.." && pwd)"
-logs="$(mktemp -d)"
-# one release at a time on this PC (a hand release and an automatic sync must not overlap), and
-# its outcome in a file a waiting agent reads, instead of guessing from the process list
 state="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-web-ui-fork-sync"
-mkdir -p "$state"
+logs="$(mktemp -d)"
+status_file="$state/release-$version.status"
+head=""
+log() { echo "fork-release: $*"; }
+git() { command git -C "$root" "$@"; }
+
+mkdir -p "$state" || { log 'cannot create release state directory'; exit 1; }
 exec 9>"$state/release.lock"
-flock -n 9 || { echo "fork-release: another release is running (last started: $(cat "$state/release.current" 2>/dev/null)); nothing tagged" >&2; exit 1; }
-echo "$version $$ $(date -Is)" > "$state/release.current"
-echo "running $(date -Is)" > "$state/release-$version.status"
-fail() { echo "fork-release: $1 (logs in $logs); nothing tagged" >&2; echo "failed $(date -Is): $1 (logs in $logs)" > "$state/release-$version.status"; exit 1; }
-for v in $(env | grep -oE '^HERDR_[A-Z_]+'); do unset "$v"; done
-export CHROME_PATH="${CHROME_PATH:-/opt/google/chrome/chrome}"
-grep -q "\"version\": \"$version\"" "$root/package.json" || fail "package.json is not $version"
-grep -q "^version = \"$version\"" "$root/herdr-plugin.toml" || fail "herdr-plugin.toml is not $version"
-[ -z "$(git -C "$root" status --porcelain)" ] || fail "the checkout has uncommitted changes"
-cd "$root" || exit 1
+flock -n 9 || { log "another release is running; nothing tagged" >&2; exit 1; }
 
-# A UI step that can fail on a PC for reasons outside this repository, and the sed that takes it out.
-# Used only when upstream fails at exactly that step too.
-declare -A KNOWN_UI_STEPS=(
-  ["Timed out: Control+Shift+ArrowUp leaves the pane"]='s/for (const key of \["Control+Shift+ArrowDown", "Control+Shift+ArrowUp"\])/for (const key of ["Control+Shift+ArrowDown"])/'
-)
-
-base=""
-baseline() { # a clean worktree of the upstream main this branch merged, made once
-  if [ -z "$base" ]; then
-    git fetch -q upstream main 2>/dev/null || true
-    local commit
-    commit="$(git merge-base HEAD upstream/main)" || fail "no upstream/main to compare with"
-    base="$logs/upstream"
-    git worktree add -q --detach "$base" "$commit" || fail "could not check out upstream $commit"
-    (cd "$base" && bun install --frozen-lockfile > "$logs/upstream-install.log" 2>&1) || fail "bun install failed upstream"
-    echo "comparing with upstream ${commit:0:7}"
-  fi
+write_status() {
+  local state_name="$1" detail="${2:-}" temporary="$status_file.tmp.$$"
+  {
+    printf 'state=%s\n' "$state_name"
+    printf 'version=%s\n' "$version"
+    printf 'head=%s\n' "$head"
+    printf 'updated_at=%s\n' "$(date -Is)"
+    printf 'detail=%s\n' "$detail"
+    printf 'logs=%s\n' "$logs"
+  } > "$temporary" && mv "$temporary" "$status_file"
 }
-# Upstream's results are kept per upstream commit (UPSTREAM_CACHE): the same upstream is not
-# tested again for the next release, which halves a release's time. A missing one is run.
-UPSTREAM_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/herdr-web-ui-fork-gate"
-upstream_run() { # upstream_run <log name> <bun script>: that log of upstream, cached by commit
-  local commit cached
-  commit="$(git merge-base HEAD upstream/main)" || fail "no upstream/main to compare with"
-  cached="$UPSTREAM_CACHE/$commit/$1"
-  if [ -s "$cached" ]; then cp "$cached" "$logs/$1"; echo "upstream $1: cached for ${commit:0:7}"; return; fi
-  baseline
-  (cd "$base" && bun run "$2" > "$logs/$1" 2>&1)
-  mkdir -p "$UPSTREAM_CACHE/$commit" && cp "$logs/$1" "$cached"
+
+fail() {
+  local reason="$1"
+  write_status failed "$reason"
+  log "$reason (logs in $logs); nothing released" >&2
+  exit 1
 }
-cleanup() { [ -n "$base" ] && git worktree remove --force "$base" 2>/dev/null; }
-trap cleanup EXIT
-failing() { grep -E '^\(fail\)' "$1" | sed -E 's/ \[[0-9.]+ms\]$//' | sort -u; }
-first_error() { grep -m1 -E '^error: ' "$1" | sed 's/^error: //'; }
 
-bun install --frozen-lockfile > "$logs/install.log" 2>&1 || fail "bun install failed"
-bun run typecheck > "$logs/typecheck.log" 2>&1 || fail "typecheck failed"
-notes=""
-if ! bun run test:unit > "$logs/unit.log" 2>&1; then
-  bun run test:unit > "$logs/unit-2.log" 2>&1 && mv "$logs/unit-2.log" "$logs/unit.log"
-fi
-if grep -qE '^\(fail\)' "$logs/unit.log"; then
-  upstream_run upstream-unit.log test:unit
-  new="$(comm -23 <(failing "$logs/unit.log") <(failing "$logs/upstream-unit.log"))"
-  [ -z "$new" ] || fail "unit tests failed that pass upstream: $new"
-  notes="$notes; unit failures also upstream: $(failing "$logs/unit.log" | wc -l)"
-elif ! grep -qE '^ *[0-9]+ pass' "$logs/unit.log"; then
-  fail "unit tests did not run"
-fi
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+[ "$branch" = "deploy/haemin" ] || fail 'release is allowed only from deploy/haemin'
+[ -z "$(git status --porcelain)" ] || fail 'the checkout is not clean'
+head="$(git rev-parse HEAD)" || fail 'could not resolve HEAD'
+write_status running 'release gates started' || fail 'could not record release start'
 
-if ! bun run test:integration > "$logs/integration.log" 2>&1; then
-  bun run test:integration > "$logs/integration-2.log" 2>&1 && mv "$logs/integration-2.log" "$logs/integration.log"
-fi
-if grep -qE '^\(fail\)' "$logs/integration.log"; then
-  # upstream twice: a test that fails there one run in two is as known as one that always does
-  upstream_run upstream-integration.log test:integration
-  upstream_run upstream-integration-2.log test:integration
-  new="$(comm -23 <(failing "$logs/integration.log") <(cat <(failing "$logs/upstream-integration.log") <(failing "$logs/upstream-integration-2.log") | sort -u))"
-  # a test upstream passed twice may still be a flake of this machine (the Windows mirrored
-  # paste one is): each such test alone, up to three times upstream; one failure there clears it
-  if [ -n "$new" ]; then
-    baseline
-    still=""
-    while IFS= read -r line; do
-      name="$(printf '%s' "${line#(fail) }" | sed -E 's/.* > //; s/[][(){}.*+?^$|\\]/\\&/g')"
-      known=0
-      for _ in 1 2 3; do
-        (cd "$base" && HERDR_TEST_MODE=integration bun test --timeout 15000 -t "$name" $(git ls-files '*.contract.test.ts') > "$logs/upstream-alone.log" 2>&1) || { known=1; break; }
-      done
-      [ $known -eq 1 ] || still="$still$line"$'\n'
-    done <<< "$new"
-    new="${still%$'\n'}"
+package_version="$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)".*/\1/p' "$root/package.json" | head -1)"
+plugin_version="$(sed -n 's/^version = "\([0-9.]*\)"$/\1/p' "$root/herdr-plugin.toml" | head -1)"
+[ "$package_version" = "$version" ] || fail 'package.json version does not match the requested version'
+[ "$plugin_version" = "$version" ] || fail 'herdr-plugin.toml version does not match the requested version'
+
+published_tags="$(git ls-remote --tags --refs origin 'refs/tags/v*' 2>"$logs/tags.log")" || fail 'could not read published fork tags'
+latest="$(printf '%s\n' "$published_tags" | awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/ { sub(/^refs\/tags\/v/, "", $2); print $2 }' | sort -V | tail -1)"
+[ -z "$latest" ] || [ "$(printf '%s\n' "$latest" "$version" | sort -V | tail -1)" = "$version" ] || fail 'requested version is older than a published fork tag'
+[ -z "$latest" ] || [ "$latest" != "$version" ] || fail 'requested version is already published'
+[ -z "$(git ls-remote --tags --refs origin "refs/tags/v$version" 2>/dev/null)" ] || fail 'requested tag already exists on origin'
+
+cd "$root" || fail 'could not enter the repository'
+bun install --frozen-lockfile > "$logs/install.log" 2>&1 || fail 'locked dependency install failed'
+bun run check fast > "$logs/fast.log" 2>&1 || fail 'Fast checks failed'
+bun run check integration browser > "$logs/integration-browser.log" 2>&1 || fail 'Integration and browser checks failed'
+
+checks="$(gh api "repos/Haeminway1/herdr-web-ui/commits/$head/check-runs" --jq '.check_runs | sort_by(.completed_at) | reverse | .[] | [.name, .status, .conclusion] | @tsv' 2>"$logs/check-runs.log")" || fail 'could not read required checks for this commit'
+for gate in 'Fast checks' 'Integration and browser' 'Native Windows install'; do
+  result="$(printf '%s\n' "$checks" | awk -F '\t' -v gate="$gate" '$1 == gate { print $2 " " $3; exit }')"
+  [ "$result" = 'completed success' ] || fail "required check is not passing for $head: $gate"
+done
+
+[ -z "$(git status --porcelain)" ] || fail 'the checks left the checkout changed'
+head="$(git rev-parse HEAD)"
+tag="v$version"
+local_tag="$(git rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null || true)"
+if [ -n "$local_tag" ] && [ "$local_tag" != "$head" ]; then fail 'a local tag with this version points to a different commit'; fi
+if [ -z "$local_tag" ]; then git tag "$tag" "$head" || fail 'could not create the release tag'; fi
+git push --atomic origin HEAD:deploy/haemin "refs/tags/$tag" > "$logs/push.log" 2>&1 || fail 'atomic branch and tag push failed'
+
+for target_status in "$state"/main-*.status; do
+  [ -f "$target_status" ] || continue
+  target="$(sed -n 's/^target=//p' "$target_status" | head -1)"
+  [[ "$target" =~ ^[0-9a-f]{40,64}$ ]] || continue
+  if git cat-file -e "$target^{commit}" 2>/dev/null && git merge-base --is-ancestor "$target" "$head"; then
+    temporary="$target_status.tmp.$$"
+    awk -v tag="$tag" -v head="$head" '
+      BEGIN { state_written=0 }
+      /^state=/ { print "state=released"; state_written=1; next }
+      /^release_tag=/ || /^release_head=/ { next }
+      { print }
+      END {
+        if (!state_written) print "state=released"
+        print "release_tag=" tag
+        print "release_head=" head
+      }
+    ' "$target_status" > "$temporary" && mv "$temporary" "$target_status"
   fi
-  [ -z "$new" ] || fail "integration tests failed that pass upstream: $new"
-  notes="$notes; integration failures also upstream: $(failing "$logs/integration.log" | wc -l)"
-fi
+done
 
-ui_ok=1
-bun run test:ui > "$logs/ui.log" 2>&1 || { bun run test:ui > "$logs/ui.log" 2>&1 || ui_ok=0; }  # a second run first, for flakes
-if [ $ui_ok -eq 0 ]; then
-  step="$(first_error "$logs/ui.log")"
-  patch="${KNOWN_UI_STEPS[$step]:-}"
-  [ -n "$patch" ] || fail "UI regression failed: $step"
-  upstream_run upstream-ui.log test:ui
-  # upstream failing the same step, or this step known to fail on this PC either way (it passed
-  # upstream this time): the run without it must then pass whole
-  [ "$(first_error "$logs/upstream-ui.log")" = "$step" ] || echo "note: upstream passed '$step' this time; the step is known to fail here either way" >&2
-  cp scripts/ui-regression.ts "$logs/ui-regression.ts.orig"
-  sed -i "$patch" scripts/ui-regression.ts
-  bun run test:ui > "$logs/ui.log" 2>&1; status=$?
-  cp "$logs/ui-regression.ts.orig" scripts/ui-regression.ts
-  [ $status -eq 0 ] || fail "UI regression failed with the upstream-failing step taken out: $(first_error "$logs/ui.log")"
-  notes="$notes; UI step failing upstream too, taken out: $step"
-fi
-[ -z "$(git status --porcelain)" ] || fail "the checks left the checkout changed"
-
-echo "all checks passed: unit $(grep -oE '^ *[0-9]+ pass' "$logs/unit.log" | tail -1 | tr -d ' '), ui $(grep -c '^PASS' "$logs/ui.log") PASS, integration $(grep -oE '^ *[0-9]+ pass' "$logs/integration.log" | tail -1 | tr -d ' ')$notes"
-git tag "v$version" && git push -q origin HEAD:deploy/haemin "v$version" || fail "tag or push failed"
-echo "tagged and pushed v$version"
-echo "released $(date -Is)" > "$state/release-$version.status"
+write_status released "tag=$tag" || fail 'release was pushed but its outcome could not be recorded'
+log "released $tag at $head"

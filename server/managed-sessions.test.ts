@@ -77,6 +77,71 @@ it("projects both panes and agents without converting identity ready into engine
   expect(JSON.stringify(result.panes[0]?.managed_session)).not.toContain("session_file");
 });
 
+it.each([new Error("private GJC SDK exception"), "private GJC SDK rejection"] as const)("isolates a managed SDK rejection to its pane", async rejection => {
+  const failedNonce = "f".repeat(32);
+  const failedPane: HerdrPane = {
+    ...pane,
+    pane_id: "wFailed:p1",
+    workspace_id: "wFailed",
+    tab_id: "wFailed:t1",
+    terminal_id: "term_failed",
+    agent_session: { agent: "codex", kind: "id", source: "provider-child", value: "provider-child-session" },
+    tokens: { hm_managed_session: failedNonce, hm_managed_generation: "1" },
+  };
+  const failedDirectory = join(namespace, `${failedNonce}.sessions`);
+  mkdirSync(failedDirectory, { mode: 0o700 });
+  const failedSessionFile = join(failedDirectory, "exact.jsonl");
+  writeFileSync(failedSessionFile, JSON.stringify({ type: "session", id: sessionId, cwd: root }) + "\n", { mode: 0o600 });
+  const failedInfo = statSync(failedSessionFile);
+  const failedChild = { pid: 43, starttime: "456", boot: "fixture-boot", cwd: root };
+  writeFileSync(join(namespace, `${failedNonce}.json`), JSON.stringify({
+    ...record,
+    nonce: failedNonce,
+    pane_id: failedPane.pane_id,
+    workspace_id: failedPane.workspace_id,
+    terminal_id: failedPane.terminal_id,
+    session_file: failedSessionFile,
+    session_dir: failedDirectory,
+    file_identity: { dev: failedInfo.dev, ino: failedInfo.ino },
+    child: failedChild,
+  }), { mode: 0o600 });
+
+  const unmanagedPane: HerdrPane = {
+    ...pane,
+    pane_id: "wUnmanaged:p1",
+    workspace_id: "wUnmanaged",
+    terminal_id: "term_unmanaged",
+    agent_session: { agent: "codex", kind: "id", source: "provider-child", value: "unmanaged-provider-session" },
+    tokens: {},
+  };
+  const snapshot: SessionSnapshot = {
+    panes: [pane, failedPane, unmanagedPane],
+    agents: [pane, failedPane, unmanagedPane],
+    workspaces: [],
+    tabs: [],
+    layouts: [],
+    protocol: 22,
+    version: "fixture",
+  };
+  const failedDeps: ManagedSessionDeps = {
+    processIdentity: pid => pid === 42 ? observed : pid === failedChild.pid ? failedChild : null,
+    gjcSession: async pids => {
+      if (pids.includes(failedChild.pid)) return Promise.reject(rejection);
+      return live;
+    },
+  };
+
+  const projected = await projectPanes(snapshot, namespace, failedDeps);
+  const failed = projected.panes.find(entry => entry.pane_id === failedPane.pane_id);
+  expect(projected.panes[0]).toMatchObject({ managed_session: { state: "ready", session_id: sessionId }, agent_session: { source: "herdr-manager", value: sessionId } });
+  expect((await readConversation(pane, undefined, undefined, failedDeps)).turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+  expect(failed).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "blocked", reason: "blocked_managed_record_unavailable", session_id: null } });
+  expect(projected.panes[2]).toEqual(unmanagedPane);
+  expect(projected.agents[1]?.agent_session).toBeNull();
+  expect(projected.agents[2]?.agent_session).toEqual(unmanagedPane.agent_session);
+  expect(JSON.stringify(projected)).not.toContain("private GJC SDK");
+});
+
 it("leaves unmanaged snapshots untouched without reading unrelated agent projections", async () => {
   const direct = { panes: [{ ...pane, tokens: {} }] } as SessionSnapshot;
   expect(await labelManagedPanes(direct)).toBe(direct);

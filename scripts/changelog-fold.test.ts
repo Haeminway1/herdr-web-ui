@@ -16,6 +16,13 @@ const changelog = [
 const fragment = (name: string, text: string) => ({ name, sections: parseFragment(text, name) });
 
 describe("changelog fold", () => {
+  test("keeps new comparison links in the changelog's own fork", () => {
+    const text = changelog.replaceAll("github.com/devswha/herdr-web-ui/compare/", "github.com/Haeminway1/herdr-web-ui/compare/");
+    const folded = foldChangelog(text, [], "1.2.3", "2026-02-03");
+    expect(folded).toContain("[Unreleased]: https://github.com/Haeminway1/herdr-web-ui/compare/v1.2.3...HEAD");
+    expect(folded).toContain("[1.2.3]: https://github.com/Haeminway1/herdr-web-ui/compare/v1.2.2...v1.2.3");
+  });
+
   test("old Unreleased entries come first, then fragments in the order given, sections in release order", () => {
     const folded = foldChangelog(changelog, [
       fragment("a.md", "### Changed\n- Tweak.\n\n### Fixed\n- New fix.\n  Wrapped.\n"),

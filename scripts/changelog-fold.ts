@@ -105,11 +105,12 @@ export function foldChangelog(changelog: string, fragments: { name: string; sect
   const order = [...SECTIONS.filter((name) => merged.has(name)), ...[...merged.keys()].filter((name) => !(SECTIONS as readonly string[]).includes(name))];
   const notes = order.flatMap((name) => ["", `### ${name}`, ...merged.get(name)!]);
 
-  const unreleasedLink = `[Unreleased]: ${REPO}/compare/v${previous}...HEAD`;
-  const link = lines.indexOf(unreleasedLink);
+  const link = lines.findIndex((line) => /^\[Unreleased\]: https:\/\/github\.com\/[^/]+\/[^/]+\/compare\//.test(line) && line.endsWith(`/compare/v${previous}...HEAD`));
+  const repository = link < 0 ? REPO : lines[link]!.slice("[Unreleased]: ".length).split("/compare/")[0]!;
+  const unreleasedLink = `[Unreleased]: ${repository}/compare/v${previous}...HEAD`;
   if (link < end) throw new Error(`CHANGELOG.md must end its links with "${unreleasedLink}"`);
   const tail = lines.slice(end);
-  tail.splice(link - end, 1, `[Unreleased]: ${REPO}/compare/v${version}...HEAD`, `[${version}]: ${REPO}/compare/v${previous}...v${version}`);
+  tail.splice(link - end, 1, `[Unreleased]: ${repository}/compare/v${version}...HEAD`, `[${version}]: ${repository}/compare/v${previous}...v${version}`);
   return [...lines.slice(0, start), UNRELEASED, "", `## [${version}] - ${date}`, ...notes, "", ...tail].join("\n");
 }
 

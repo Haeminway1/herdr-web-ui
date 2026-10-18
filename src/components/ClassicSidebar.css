@@ -46,6 +46,11 @@
   padding: var(--space-2) var(--space-3);
 }
 
+.machine-workspaces > .cl-sidebar-list {
+  overflow-y: visible;
+  overscroll-behavior: auto;
+}
+
 .cl-tree-state {
   margin: 0;
   padding: var(--space-2);

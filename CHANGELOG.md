@@ -7,6 +7,15 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.1110] - 2026-10-18
+
+### Fixed
+- Restore the existing classic sidebar, residents, verified Manager pin, grouping and attention inbox instead of the withdrawn 0.4.1109 redesign.
+- Wheel scrolling over embedded classic rows moves the outer workspace list; standalone sidebar scrolling remains unchanged.
+- Isolate a managed GJC lookup failure to its own blocked pane without losing healthy panes or authorizing a provider-child conversation.
+- Preserve the intended audio upload filename with Bun's parsed File objects.
+- Keep automatic upstream sync candidate-only and require explicit admission before production release. Automatic installation remains disabled during stabilization.
+
 ## [0.4.11] - 2026-10-16
 
 ### Fixed
@@ -4108,7 +4117,8 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/devswha/herdr-web-ui/compare/v0.4.11...HEAD
+[Unreleased]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1110...HEAD
+[0.4.1110]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1108...v0.4.1110
 [0.4.11]: https://github.com/devswha/herdr-web-ui/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/devswha/herdr-web-ui/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/devswha/herdr-web-ui/compare/v0.4.8...v0.4.9

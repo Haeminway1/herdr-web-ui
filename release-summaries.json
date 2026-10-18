@@ -1,4 +1,10 @@
 {
+  "0.4.1110": {
+    "en": { "fixed": ["Restore the existing classic sidebar, residents, Manager pin and attention inbox.", "Fix wheel scrolling without changing the sidebar design.", "Keep other panes available when a managed GJC lookup fails.", "Fix the audio upload filename; automatic sync prepares candidates only."] },
+    "ko": { "fixed": ["기존 사이드바, 상주 에이전트, Manager 고정과 주의 목록을 복구했습니다.", "사이드바 디자인을 바꾸지 않고 휠 스크롤을 수정했습니다.", "관리 GJC 조회가 실패해도 다른 창 목록은 유지합니다.", "음성 업로드 파일명을 수정하고 자동 동기화는 후보 작성까지만 허용합니다."] },
+    "ja": { "fixed": ["従来のサイドバー、常駐エージェント、Manager 固定と注意一覧を復元しました。", "サイドバーのデザインを変えずにホイールスクロールを修正しました。", "管理 GJC の取得に失敗しても他のペイン一覧を維持します。", "音声アップロードのファイル名を修正し、自動同期を候補の作成に限定しました。"] },
+    "zh": { "fixed": ["恢复原有侧栏、常驻代理、Manager 固定项和关注列表。", "在不改变侧栏设计的情况下修复滚轮滚动。", "托管 GJC 查询失败时保留其他窗格列表。", "修复语音上传文件名，自动同步仅生成候选版本。"] }
+  },
   "0.4.11": {
     "en": {
       "fixed": [

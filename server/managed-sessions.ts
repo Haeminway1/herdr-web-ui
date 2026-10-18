@@ -261,9 +261,8 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     identity.state = "ready";
     identity.session_id = sessionId;
     return { identity, sessionFile };
-  } catch (error) {
-    if (error instanceof Error) return blocked("blocked_managed_record_unavailable");
-    throw error;
+  } catch {
+    return blocked("blocked_managed_record_unavailable");
   }
 }
 
