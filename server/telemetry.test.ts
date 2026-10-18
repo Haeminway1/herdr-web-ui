@@ -69,7 +69,7 @@ function seen(telemetry: Telemetry) {
 }
 
 function settingsSnapshot(overrides: Partial<Settings> = {}): TelemetrySettings {
-  return telemetrySettingsSnapshot({ ...DEFAULT_SETTINGS, palette: "amber", paletteLight: "amber", paletteDark: "amber", darkTheme: "amber", lightTheme: "amber", ...overrides })!;
+  return telemetrySettingsSnapshot({ ...DEFAULT_SETTINGS, ...overrides });
 }
 
 describe("telemetry events", () => {

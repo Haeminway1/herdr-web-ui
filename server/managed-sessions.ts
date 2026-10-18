@@ -2,12 +2,31 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, rea
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
-import { gjcSdkCurrentSession } from "./gjc-sdk.ts";
+import { gjcSdkTranscript, GjcSdkLookupError } from "./gjc-sdk.ts";
+import { GjcSdkGenerationError, gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 
 interface ProcessIdentity { readonly pid: number; readonly starttime: string; readonly boot: string; readonly cwd: string }
+export interface ManagedGjcSessionProof {
+  readonly sessionId: string;
+  readonly pid: number;
+  readonly hostIncarnation: string;
+  readonly endpointGeneration: number;
+}
+type GjcSessionLookup = (pids: readonly number[], cwd: string, agentDir: string) => Promise<ManagedGjcSessionProof | null>;
 export interface ManagedSessionDeps {
-  gjcSession?: typeof gjcSdkCurrentSession;
+  gjcSession?: GjcSessionLookup;
+  gjcGeneration?: typeof gjcSdkGenerationCurrent;
   processIdentity?: (pid: number) => ProcessIdentity | null;
+}
+
+async function currentGjcSession(pids: readonly number[], cwd: string, agentDir: string): Promise<ManagedGjcSessionProof | null> {
+  const transcript = await gjcSdkTranscript(pids, cwd, agentDir);
+  return transcript === null ? null : {
+    sessionId: transcript.sessionId,
+    pid: transcript.pid,
+    hostIncarnation: transcript.hostIncarnation,
+    endpointGeneration: transcript.endpointGeneration,
+  };
 }
 
 function processIdentity(pid: number): ProcessIdentity | null {
@@ -234,15 +253,18 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       const readIdentity = deps.processIdentity ?? processIdentity;
       const before = readIdentity(child.pid);
       if (!before || before.starttime !== child.starttime || before.boot !== child.boot || before.cwd !== recordCwd) return blocked("blocked_runtime_identity");
-      const live = await (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
+      const agentDir = join(homedir(), ".gjc", "agent");
+      const live = await (deps.gjcSession ?? currentGjcSession)([before.pid], recordCwd, agentDir);
       const after = readIdentity(before.pid);
       if (!after || after.pid !== before.pid || after.starttime !== before.starttime || after.boot !== before.boot || after.cwd !== before.cwd) return blocked("blocked_runtime_identity");
       const rootAfter = lstatSync(namespace);
       if (!rootAfter.isDirectory() || !owned(rootAfter) || rootAfter.dev !== rootInfo.dev || rootAfter.ino !== rootInfo.ino || !safeAncestors(namespace, rootAfter)) return blocked("blocked_record_root");
       const recordAfter = recordAt(path);
       if (recordAfter.unsafe || bindingKey(recordAfter.record) !== bindingKey(record)) return pending("identity_pending");
-      if (!live) return pending("identity_pending");
+      if (!live) return blocked("blocked_gjc_session_absent");
       if (live.pid !== before.pid || live.hostIncarnation !== `linux:${before.starttime}` || live.sessionId !== sessionId) return blocked("blocked_gjc_session_mismatch");
+      const currentGeneration = await (deps.gjcGeneration ?? gjcSdkGenerationCurrent)(agentDir, live.sessionId, live.endpointGeneration);
+      if (!currentGeneration) return blocked("blocked_gjc_generation_changed");
     }
     const after = lstatSync(sessionFile);
     const finalTranscriptDirectoryInfo = lstatSync(transcriptDirectory);
@@ -262,6 +284,8 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     identity.session_id = sessionId;
     return { identity, sessionFile };
   } catch (error) {
+    if (error instanceof GjcSdkLookupError) throw error;
+    if (error instanceof GjcSdkGenerationError) throw new GjcSdkLookupError(error.reason);
     if (error instanceof Error) return blocked("blocked_managed_record_unavailable");
     throw error;
   }

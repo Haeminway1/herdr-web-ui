@@ -28,7 +28,7 @@ function git {
 function bun {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '--version') { $state.bunVersion }
-    elseif ($args[-1] -eq 'status') { 'running http://127.0.0.1:7317 (pid 1234)'; 'config: none' }
+    elseif ($args[-1] -eq 'status') { 'running http://127.0.0.1:7320 (pid 1234)'; 'config: none' }
     else { throw "Unexpected Bun command: $args" }
 }
 function herdr {
@@ -37,12 +37,12 @@ function herdr {
         '--version' { 'herdr 0.9.3' }
         'plugin list --json' {
             $plugins = @()
-            if ($state.installed) { $plugins = @(@{ plugin_id = 'devswha.herdr-web-ui'; plugin_root = $pluginRoot }) }
+            if ($state.installed) { $plugins = @(@{ plugin_id = 'haeminway1.herdr-web-ui'; plugin_root = $pluginRoot }) }
             @{ result = @{ plugins = $plugins } } | ConvertTo-Json -Depth 4 -Compress
         }
         'status server --json' { @{ running = $state.running } | ConvertTo-Json -Compress }
-        'plugin action invoke devswha.herdr-web-ui.start-windows' { $state.started = $true; '{}' }
-        'plugin uninstall devswha.herdr-web-ui' { $state.installed = $false; $state.uninstalls++; 'Uninstalled' }
+        'plugin action invoke haeminway1.herdr-web-ui.start-windows' { $state.started = $true; '{}' }
+        'plugin uninstall haeminway1.herdr-web-ui' { $state.installed = $false; $state.uninstalls++; 'Uninstalled' }
         default {
             if ($args[0] -eq 'plugin' -and $args[1] -eq 'install') {
                 if ($state.failInstall) { $global:LASTEXITCODE = 1; return }
@@ -167,8 +167,8 @@ exit /b 1
         Remove-Item Env:\CI, Env:\HERDR_WEB_NO_OPEN, Env:\SSH_CONNECTION -ErrorAction SilentlyContinue
         $state.installed = $false; $state.running = $true; $global:herdrInstallOpened = @()
         $freshOutput = & $installer -Ref 'test' 6>&1 | Out-String
-        Assert ($global:herdrInstallOpened.Count -eq 1 -and $global:herdrInstallOpened[0] -eq 'http://127.0.0.1:7317') 'A fresh install must open the loopback origin exactly once'
-        Assert ($freshOutput -match 'opened http://127\.0\.0\.1:7317.*click Install') 'A fresh install must explain where to click Install'
+        Assert ($global:herdrInstallOpened.Count -eq 1 -and $global:herdrInstallOpened[0] -eq 'http://127.0.0.1:7320') 'A fresh install must open the loopback origin exactly once'
+        Assert ($freshOutput -match 'opened http://127\.0\.0\.1:7320.*click Install') 'A fresh install must explain where to click Install'
 
         $global:herdrInstallOpened = @()
         $rerunOutput = & $installer -Ref 'test' 6>&1 | Out-String
@@ -180,7 +180,7 @@ exit /b 1
             $output = & $installer -Ref 'test' 6>&1 | Out-String
             Assert ($global:herdrInstallOpened.Count -eq 0) "$gate must prevent opening"
             if ($gate -eq 'SSH_CONNECTION') {
-                Assert ($output -match 'ssh -L 7317:127\.0\.0\.1:7317' -and $output -match 'Tailscale') 'SSH guidance must include the tunnel command and Tailscale pointer'
+                Assert ($output -match 'ssh -L 7320:127\.0\.0\.1:7320' -and $output -match 'Tailscale') 'SSH guidance must include the tunnel command and Tailscale pointer'
             }
             Remove-Item "Env:$gate" -ErrorAction SilentlyContinue
         }
@@ -260,7 +260,7 @@ exit /b 1
     $childFile = Join-Path $ghStandIn 'child.txt'
     Remove-Item -LiteralPath $childFile -Force -ErrorAction SilentlyContinue
     $clock = [Diagnostics.Stopwatch]::StartNew()
-    $answer = Invoke-GhApi 'user/starred/devswha/herdr-web-ui'
+    $answer = Invoke-GhApi 'user/starred/Haeminway1/herdr-web-ui'
     $elapsed = $clock.Elapsed.TotalSeconds
     $childPid = [int](Get-Content -LiteralPath $childFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     Assert ($childPid -gt 0) 'control: the lingering stand-in must have started its child and named its PID'
@@ -337,7 +337,7 @@ public static class ImmediateGh {
             try {
                 Invoke-Expression $case.source
                 $clock = [Diagnostics.Stopwatch]::StartNew()
-                $answer = Invoke-GhApi 'user/starred/devswha/herdr-web-ui'
+                $answer = Invoke-GhApi 'user/starred/Haeminway1/herdr-web-ui'
                 Assert ($null -eq $answer -and $clock.Elapsed.TotalSeconds -lt 15) 'regression: immediate child must not keep the call waiting past its deadline'
                 Assert ($ready.WaitOne(0)) 'control: the resumed shim must have started its child'
                 $childPid = [int](Get-Content -LiteralPath $env:HERDR_TEST_GH_CHILD)

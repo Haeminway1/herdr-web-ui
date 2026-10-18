@@ -19,8 +19,8 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-666666?labelColor=333333" alt="MIT license"></a>
-  <a href="https://github.com/devswha/herdr-web-ui/stargazers"><img src="https://img.shields.io/github/stars/devswha/herdr-web-ui?labelColor=333333&color=666666&logo=github" alt="GitHub stars"></a>
-  <a href="https://github.com/devswha/herdr-web-ui/releases/latest"><img src="https://img.shields.io/github/v/release/devswha/herdr-web-ui?label=release&labelColor=333333&color=666666" alt="Latest release"></a>
+  <a href="https://github.com/Haeminway1/herdr-web-ui/stargazers"><img src="https://img.shields.io/github/stars/Haeminway1/herdr-web-ui?labelColor=333333&color=666666&logo=github" alt="GitHub stars"></a>
+  <a href="https://github.com/Haeminway1/herdr-web-ui/releases/latest"><img src="https://img.shields.io/github/v/release/Haeminway1/herdr-web-ui?label=release&labelColor=333333&color=666666" alt="Latest release"></a>
   <a href="https://github.com/herdrdev/herdr"><img src="https://img.shields.io/badge/herdr-0.9.0%2B-666666?labelColor=333333" alt="herdr 0.9.0+"></a>
   <a href="docs/guide.md#on-your-phone"><img src="https://img.shields.io/badge/PWA-installable-666666?labelColor=333333" alt="Installable PWA"></a>
 </p>
@@ -108,10 +108,10 @@ Requires [Git for Windows](https://git-scm.com/download/win). Installs missing h
 Already have the prerequisites? Install just the plugin:
 
 ```bash
-herdr plugin install devswha/herdr-web-ui
+herdr plugin install Haeminway1/herdr-web-ui
 ```
 
-With herdr running, open **[127.0.0.1:7317](http://127.0.0.1:7317)**. On a new install on a PC with a desktop, the installer opens it in your browser for you; click **Install** in the address bar to add the app. The installed app belongs to that exact address, so keep using `http://127.0.0.1:7317` rather than `localhost`. Set `HERDR_WEB_NO_OPEN=1` before running the installer to skip opening the browser. Pick a pane or start an agent with **New workspace**. To use your phone, scan the installer's QR code and add the app to your home screen. [Quick start →](docs/guide.md#quick-start)
+With herdr running, open **[127.0.0.1:7320](http://127.0.0.1:7320)**. On a new install on a PC with a desktop, the installer opens it in your browser for you; click **Install** in the address bar to add the app. The installed app belongs to that exact address, so keep using `http://127.0.0.1:7320` rather than `localhost`. Set `HERDR_WEB_NO_OPEN=1` before running the installer to skip opening the browser. Pick a pane or start an agent with **New workspace**. To use your phone, scan the installer's QR code and add the app to your home screen. [Quick start →](docs/guide.md#quick-start)
 
 The server listens on `127.0.0.1` by default. For access from another device, see [phone setup](docs/guide.md#on-your-phone) and [access and safety](docs/guide.md#access-and-safety).
 
@@ -168,11 +168,11 @@ Helping someone install the app? Follow [INSTALL.md](INSTALL.md). For repository
 ## development
 
 ```bash
-git clone https://github.com/devswha/herdr-web-ui.git
+git clone https://github.com/Haeminway1/herdr-web-ui.git
 cd herdr-web-ui
 bun install
 
-bun run server      # API + WebSocket on :7317
+bun run server      # API + WebSocket on :7320
 bun run dev         # Vite on :5173; run in a second terminal
 ```
 

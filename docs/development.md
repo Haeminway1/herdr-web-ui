@@ -6,7 +6,7 @@ Run the server and Vite side by side:
 
 ```bash
 bun install
-bun run server   # API + WebSocket on :7317
+bun run server   # API + WebSocket on :7320
 bun run dev      # Vite on :5173, proxies /api and /ws
 ```
 
@@ -108,6 +108,7 @@ bun scripts/key-bar-customization-demo-regression.ts # mobile key layout, saved 
 bun scripts/key-bar-hold-repeat-regression.ts # phone touch key-bar taps, holds (arrows and editing keys), swipes and sticky Ctrl on demo fixtures
 bun scripts/settings-pages-demo-regression.ts # every Settings page on a 390px and a 320px phone, and Back stepping out of the dialog
 bun scripts/chat-browser-qa.ts  # chat lens end to end
+bun scripts/omo-plan-browser-regression.ts # OmO todo progress and plan panel on isolated native fixtures
 bun scripts/pane-input-focus-demo-regression.ts # the input focus shortcut against fictional panes
 bun scripts/shortcut-exact-modifiers-demo-regression.ts # recording exact-modifier chords: confirm, refusals, dispatch
 bun scripts/output-browser-qa.ts # terminal output flow control end to end
@@ -239,7 +240,7 @@ resolves through existing provider/process evidence, checks file identity, size 
 without parsing turns, and rechecks session resolution every 5 s (2 s while a transcript is
 missing). The last interested client, failed/ended attachment and server stop release it.
 
-Newest-page refreshes are single-flight. Push-triggered reads start at least 2 s apart using
+Newest-page refreshes are single-flight. Push-triggered reads start at least 1 s apart using
 monotonic elapsed time, with one trailing refresh at a fixed deadline: continuous writes cannot
 keep postponing it. A push after idle reads immediately. Initial display, explicit sends,
 status/history repairs, reconnect and visibility return bypass that delay but not serialization.
@@ -254,7 +255,7 @@ pane or machine switch.
 A Chat showing the scrollback stand-in (no native transcript yet, or none recognized) has no
 file for the monitor to watch. While it is visible, the pane's own `pty-data` (a mirror's screen
 frames on Windows) invalidates it through the same coordinator, so continuous output rereads
-at most every 2 s and a quiet pane is not read. A Chat showing a native transcript ignores
+at most every 1 s and a quiet pane is not read. A Chat showing a native transcript ignores
 terminal output.
 
 Conversation responses are gzipped like every other text answer (`server/compress.ts`), with
@@ -288,7 +289,7 @@ to about 11.2% of its identity response; real tool output and conversations will
 
 ### Visible-Chat subscription and bounded-refresh resource measurement
 
-The current policy was compared with upstream 2 s polling on macOS in headed Chrome,
+The push policy was compared with upstream 2 s polling on macOS in headed Chrome,
 using owned native Codex fixtures initially about 60 KB each. Each row is a paired
 20 s sample, excluding initial loading, with fresh bridge processes and the same
 16 owned workspaces present for both versions. Both versions retain the existing
@@ -326,13 +327,14 @@ retained the monitor; closing the last view removed all monitors, the monitor ti
 and owned PTY children. No browser errors occurred in these samples.
 
 These resource results do not remeasure the latency or compressed payload figures
-in the historical table above.
+in the historical table above. They were taken with a 2 s push-read bound; the bound is now
+1 s, so a pane written continuously gets up to twice the REST reads shown in the last rows.
 
 ## README media
 
 `bun run build && bun scripts/readme-media/capture.ts` regenerates the stills and demos in `docs/screenshots/` from a staged, fictional session in its own herdr session (`herdr-web-ui-demo`). Pass `shots` or `video` to redo only one of them. It needs ffmpeg.
 
-- `stage.ts` builds the session: five workspaces under `/tmp/herdr-demo`, curated chats served in place of transcripts, and the hostname rewritten.
+- `stage.ts` builds the session from `site/demo/fixtures.ts`: two git repositories under `/tmp/herdr-demo`, each with two agent worktrees herdr adds, a release shell tab, curated chats served in place of transcripts, and the hostname rewritten.
 - `record.ts` records a walkthrough at 2x (Chrome's screencast, with `--force-device-scale-factor=2`), logging pointer moves, clicks, taps and camera cues as it drives the page.
 - `compose.ts` draws every output frame on a canvas: a backdrop, a browser window or a phone, the frame under an eased camera, and a vector cursor with click ripples or touch rings. It writes `demo-*.mp4` (1920×1200 and 1080×1920, 30 fps) and a GIF of each. Stills get the same window or phone on a transparent background.
 

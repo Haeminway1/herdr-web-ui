@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { parseThemeBlocks, parseThemeValue, resolveEntry, ThemeValueError } from "./themeCss.ts";
 import { LIGHT_ANSI_ROLES } from "./themeRoles.ts";
 import baseline from "./themes.legacy-baseline.json";
-import { ROLES, SHADOW_GEOMETRY, SUPPORTED_ENTRIES, THEME_IDS, themeColor as tableThemeColor } from "./themes.ts";
+import { DEFAULT_THEME, ROLES, SHADOW_GEOMETRY, SUPPORTED_ENTRIES, THEME_IDS, themeColor as tableThemeColor } from "./themes.ts";
+import { DEFAULT_ID } from "../../scripts/generate-themes.ts";
 import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
 import { SHARED_SETTING_KEYS } from "../../shared/preferences.ts";
@@ -15,20 +16,16 @@ import { applyToDocument, loadSettings, saveSettings } from "./settings.ts";
 import { sanitizeSettings as oldSanitizeSettings, saveSettings as oldSaveSettings } from "./settings.legacy-fixture.ts";
 import { themeFor } from "./themeFor.ts";
 
-/** These schema tests use an upstream profile. Report's omitted snapshot is tested separately. */
 function telemetrySettingsSnapshot(settings: Parameters<typeof projectTelemetrySettings>[0]) {
-  const theme = (id: typeof settings.palette) => id === "report" ? "amber" : id;
-  return projectTelemetrySettings({ ...settings, palette: theme(settings.palette), paletteLight: theme(settings.paletteLight), paletteDark: theme(settings.paletteDark), darkTheme: theme(settings.darkTheme), lightTheme: theme(settings.lightTheme) })!;
+  const supported = sanitizeSettings({
+    ...settings,
+    darkTheme: settings.darkTheme === "report" ? "amber" : settings.darkTheme,
+    lightTheme: settings.lightTheme === "report" ? "amber" : settings.lightTheme,
+  });
+  const snapshot = projectTelemetrySettings(supported);
+  if (snapshot === null) throw new Error("Report telemetry settings are intentionally omitted");
+  return snapshot;
 }
-
-it("omits settings the deployed upstream telemetry schema cannot represent", () => {
-  expect(projectTelemetrySettings(DEFAULT_SETTINGS)).toBeNull();
-  const upstream = { ...DEFAULT_SETTINGS, palette: "amber", paletteLight: "amber", paletteDark: "amber", darkTheme: "amber", lightTheme: "amber" } as const;
-  expect(projectTelemetrySettings(upstream)).not.toBeNull();
-  for (const key of ["palette", "paletteLight", "paletteDark", "darkTheme", "lightTheme"] as const) {
-    expect(projectTelemetrySettings({ ...upstream, [key]: "report" })).toBeNull();
-  }
-});
 
 describe("saved theme migration", () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -131,6 +128,15 @@ describe("saved theme migration", () => {
     expect(root.style.colorScheme).toBe("dark");
     expect(meta).toBe(entry.bgPanel);
     expect(terminalTheme(entry.mode, entry.id)).toEqual(entry.terminal);
+  });
+});
+
+describe("Report telemetry settings", () => {
+  it("omits unsupported Report palettes instead of sending them under another theme id", () => {
+    expect(DEFAULT_SETTINGS.darkTheme).toBe("report");
+    expect(DEFAULT_SETTINGS.lightTheme).toBe("report");
+    expect(projectTelemetrySettings(DEFAULT_SETTINGS)).toBeNull();
+    expect(projectTelemetrySettings(sanitizeSettings({ darkTheme: "amber", lightTheme: "charcoal" }))).not.toBeNull();
   });
 });
 
@@ -314,9 +320,13 @@ describe("telemetry settings snapshot", () => {
 
   it("reports all supported ids on either side and rejects ids outside the schema", () => {
     for (const id of THEME_IDS) {
-      if (id === "report") continue; // fork-only settings deliberately have no upstream telemetry snapshot
       for (const side of ["darkTheme", "lightTheme"] as const) {
-        const snapshot = telemetrySettingsSnapshot(sanitizeSettings({ [side]: id }));
+        const settings = sanitizeSettings({ [side]: id });
+        if (id === "report") {
+          expect(projectTelemetrySettings(settings)).toBeNull();
+          continue;
+        }
+        const snapshot = telemetrySettingsSnapshot(settings);
         expect(snapshot[side]).toBe(id);
         expect(telemetrySettings(snapshot)).toEqual(snapshot);
         expect(telemetrySettings({ ...snapshot, [side]: "not-a-theme" })).toBeNull();
@@ -364,12 +374,6 @@ describe("clipboard from a pane", () => {
     expect(sanitizeSettings({ ...reloaded, theme: "dark" }).paneClipboard).toBe(false);
     expect(sanitizeSettings({ paneClipboard: "false" }).paneClipboard).toBe(true);
   });
-});
-
-it("keeps selected grouping and rejects unsupported sidebar choices", () => {
-  expect(sanitizeSettings({ sidebarGrouping: "directory" }).sidebarGrouping).toBe("directory");
-  expect(sanitizeSettings({ sidebarGrouping: "dashboard", sidebarLayout: "dashboard" })).toMatchObject({ sidebarGrouping: "repo", sidebarLayout: "classic" });
-  expect(sanitizeSettings({ sidebarLayout: "upstream" }).sidebarLayout).toBe("upstream");
 });
 
 describe("chat font size", () => {
@@ -665,12 +669,12 @@ describe("quick replies row", () => {
     expect(DEFAULT_SETTINGS.showUsage).toBe(false);
     expect(sanitizeSettings({ showUsage: true }).showUsage).toBe(true);
     expect(sanitizeSettings({ showUsage: 1 }).showUsage).toBe(false);
-    expect(DEFAULT_SETTINGS.usageCount).toBe("used");
-    expect(sanitizeSettings({ usageCount: "left" }).usageCount).toBe("left");
-    expect(sanitizeSettings({ usageCount: "half" }).usageCount).toBe("used");
-    expect(DEFAULT_SETTINGS.usageGlance).toBe("week");
-    expect(sanitizeSettings({ usageGlance: "session" }).usageGlance).toBe("session");
-    expect(sanitizeSettings({ usageGlance: "nearest" }).usageGlance).toBe("week");
+    expect(DEFAULT_SETTINGS.usageCount).toBe("left");
+    expect(sanitizeSettings({ usageCount: "used" }).usageCount).toBe("used");
+    expect(sanitizeSettings({ usageCount: "half" }).usageCount).toBe("left");
+    expect(DEFAULT_SETTINGS.usageGlance).toBe("session");
+    expect(sanitizeSettings({ usageGlance: "week" }).usageGlance).toBe("week");
+    expect(sanitizeSettings({ usageGlance: "nearest" }).usageGlance).toBe("session");
     expect(sanitizeSettings({ usageOrder: ["codex:a", 3, "codex:a", "", "claude:b"] }).usageOrder).toEqual(["codex:a", "claude:b"]);
     expect(sanitizeSettings({ usageHidden: Array.from({ length: 100 }, (_, index) => `k${index}`) }).usageHidden).toHaveLength(64);
     expect(sanitizeSettings({ usageHidden: "codex:a" }).usageHidden).toEqual([]);
@@ -685,18 +689,17 @@ describe("language", () => {
 });
 
 describe("palette", () => {
-  it("uses report for unconfigured devices and keeps every selectable upstream theme", () => {
-    expect(DEFAULT_SETTINGS.palette).toBe("report");
+  it("defaults to codex, and reads a record from before palettes as amber, the look it had", () => {
+    expect(DEFAULT_SETTINGS.palette).toBe("codex");
     // settings stored before palettes existed carry no palette key
-    expect(sanitizeSettings({ theme: "light" }).palette).toBe("report");
+    expect(sanitizeSettings({ theme: "light" }).palette).toBe("amber");
     expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
     expect(sanitizeSettings({ palette: "catppuccin" }).palette).toBe("catppuccin");
-    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("report");
+    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("amber");
   });
 
-  it("does not restore other fork palettes", () => {
-    for (const removed of ["lilac", "forest"]) expect(sanitizeSettings({ palette: removed }).palette).toBe("report");
-    expect(sanitizeSettings({ palette: "report" }).palette).toBe("report");
+  it("loads a removed palette (report, lilac, forest) as amber", () => {
+    for (const removed of ["report", "lilac", "forest"]) expect(sanitizeSettings({ palette: removed }).palette).toBe("amber");
   });
 
   it("preserves Catppuccin through a saved settings round-trip and unrelated edits", () => {
@@ -821,8 +824,9 @@ describe("palette", () => {
     expect(failures).toEqual([]);
   });
 
-  it("gives index.html and the web manifest Report dark's panel and page colors", () => {
-    const { resolved } = resolveEntry(css, "report", "dark");
+  it("gives index.html and the web manifest the default theme's dark panel and page colors", () => {
+    expect(DEFAULT_ID).toBe(DEFAULT_THEME);
+    const { resolved } = resolveEntry(css, DEFAULT_THEME, "dark");
     const metas: string[] = [];
     new HTMLRewriter().on('meta[name="theme-color"]', { element: (meta) => void metas.push(meta.getAttribute("content") ?? "") })
       .transform(readFileSync(join(import.meta.dir, "..", "..", "index.html"), "utf8"));
@@ -908,12 +912,12 @@ describe("palette", () => {
     expect(failures).toEqual([]);
   });
 
-  it("keeps upstream's amber base blocks while Report is the explicit fork default", () => {
+  it("paints amber before settings load: the base blocks are the default palette's", () => {
     const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
     const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
-    expect(root).toContain(`--term-bg: ${terminalTheme("dark", "amber").background};`);
-    expect(root).toContain(`--term-cursor: ${terminalTheme("dark", "amber").cursor};`);
-    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "report"));
+    expect(root).toContain(`--term-bg: ${terminalTheme("dark").background};`);
+    expect(root).toContain(`--term-cursor: ${terminalTheme("dark").cursor};`);
+    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "amber"));
   });
 });
 
@@ -979,6 +983,23 @@ it("keeps the Markdown preview's width to readable or full, readable by default"
   expect(DEFAULT_SETTINGS.markdownWidth).toBe("readable");
   for (const width of MARKDOWN_WIDTHS) expect(sanitizeSettings({ markdownWidth: width }).markdownWidth).toBe(width);
   for (const bad of ["narrow", "medium", "wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("readable");
+});
+
+it("keeps where web links open to a tab or the panel, a tab by default", () => {
+  expect(DEFAULT_SETTINGS.webLinks).toBe("tab");
+  expect(DEFAULT_SETTINGS.fileOpen).toBe("popup");
+  expect(sanitizeSettings({ fileOpen: "panel" }).fileOpen).toBe("panel");
+  for (const bad of ["tab", "", null, true]) expect(sanitizeSettings({ fileOpen: bad }).fileOpen).toBe("popup");
+  expect(sanitizeSettings({ webLinks: "panel" }).webLinks).toBe("panel");
+  for (const bad of ["popup", "", null, true]) expect(sanitizeSettings({ webLinks: bad }).webLinks).toBe("tab");
+  // an agent's start mode never widens by accident: anything unknown starts it with no flag
+  expect(DEFAULT_SETTINGS.claudeLaunchMode).toBe("default");
+  expect(DEFAULT_SETTINGS.codexLaunchMode).toBe("default");
+  expect(sanitizeSettings({ claudeLaunchMode: "plan", codexLaunchMode: "readOnly" })).toMatchObject({ claudeLaunchMode: "plan", codexLaunchMode: "readOnly" });
+  for (const bad of ["bypass", "BypassPermissions", "full-access", "", null, 1, ["auto"]]) {
+    expect(sanitizeSettings({ claudeLaunchMode: bad }).claudeLaunchMode).toBe("default");
+    expect(sanitizeSettings({ codexLaunchMode: bad }).codexLaunchMode).toBe("default");
+  }
 });
 
 describe("shared settings", () => {

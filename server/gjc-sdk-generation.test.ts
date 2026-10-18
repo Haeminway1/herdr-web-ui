@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { gjcSdkGenerationCurrent, type GjcSdkGenerationObserver } from "./gjc-sdk-generation.ts";
+import { GjcSdkGenerationError, gjcSdkGenerationCurrent, type GjcSdkGenerationObserver } from "./gjc-sdk-generation.ts";
 
 describe("SDK generation revocation", () => {
   it("rechecks the exact native generation on every read rather than caching a positive proof", async () => {
@@ -16,14 +16,14 @@ describe("SDK generation revocation", () => {
     expect(await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, { generationStatus: async () => ({ status }) })).toBe(false);
   });
 
-  it("fails closed when discovery or the readonly generation API rejects", async () => {
+  it("keeps execution failures distinct from a stale generation", async () => {
     const unavailable = Promise.reject<GjcSdkGenerationObserver>(new Error("SDK unavailable"));
-    expect(await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, unavailable)).toBe(false);
-    expect(await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, { generationStatus: async () => { throw new Error("index unavailable"); } })).toBe(false);
+    await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, unavailable)).rejects.toMatchObject({ name: "GjcSdkGenerationError", reason: "unavailable" });
+    await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, { generationStatus: async () => { throw new Error("index unavailable"); } })).rejects.toBeInstanceOf(GjcSdkGenerationError);
   });
 
   it("bounds a hung generation observation without accepting cached broker evidence", async () => {
     const observer: GjcSdkGenerationObserver = { generationStatus: () => new Promise(() => {}) };
-    expect(await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer)).toBe(false);
+    await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer)).rejects.toMatchObject({ name: "GjcSdkGenerationError", reason: "timeout" });
   });
 });

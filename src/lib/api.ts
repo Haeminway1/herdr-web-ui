@@ -23,7 +23,6 @@ import type {
   PairingCode,
   PaneDirection,
   PaneInfo,
-  PaneAttention,
   PanePlan,
   PaneReadResult,
   PaneResized,
@@ -503,10 +502,6 @@ export async function fetchPaneSelection(paneId: string, anchor: PaneTextPoint, 
  */
 export async function closePane(paneId: string, machineId = "local"): Promise<void> {
   await sendJson(machinePath(machineId, "pane/close"), "POST", { pane_id: paneId });
-}
-
-export async function markPaneSeen(paneId: string, machineId = "local"): Promise<PaneAttention | null> {
-  return ((await (await sendJson(machinePath(machineId, "pane/seen"), "POST", { pane_id: paneId })).json()) as { attention: PaneAttention | null }).attention;
 }
 
 /** POST /api/pane/focus: herdr brings this pane and its tab/workspace to the front. */

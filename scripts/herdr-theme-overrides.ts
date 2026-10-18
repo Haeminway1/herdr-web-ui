@@ -9,6 +9,9 @@ import type { AnsiRole, HerdrThemeId } from "./herdr-themes.ts";
 import { mapTheme } from "./herdr-theme-proposal.ts";
 import type { Role } from "./herdr-theme-proposal.ts";
 
+/** The app's own themes besides the legacy three: no herdr palette, so no mapping to check. */
+export const APP_THEME_IDS: ReadonlySet<string> = new Set(["codex", "report"]);
+
 export type ThemeOverride = {
   readonly theme: HerdrThemeId;
   readonly mode: Mode;
@@ -316,14 +319,8 @@ export function provenanceFailures(
   const legacy = new Set([...Object.keys(baseline.combos), "catppuccin-latte/light"]);
   for (const { id, mode } of entries) {
     const key = `${id}/${mode}`;
-    // Report is the fork's own palette (0ce93b2), not a claimed herdr RGB palette.
-    // Its complete declarations and contrast still pass the same UI role gates.
-    if (id === "report") {
-      for (const role of [...Object.keys(ROLES), ...(mode === "light" ? Object.values(LIGHT_ANSI_ROLES) : [])]) {
-        if (blocks[key]?.declared[`--${role}`] === undefined) failures.push(`${key} ${role}: missing fork palette declaration`);
-      }
-      continue;
-    }
+    // The app's own Codex theme copies the Codex app's export, not a herdr palette.
+    if (APP_THEME_IDS.has(id)) continue;
     // Legacy UI roles stay frozen, but Latte's newly added ANSI roles have provenance too.
     const legacyAnsi = key === "catppuccin-latte/light";
     if (legacy.has(key) && !legacyAnsi) continue;

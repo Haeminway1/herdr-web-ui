@@ -1,25 +1,36 @@
 # Fork deployment
 
-Upstream owns design, UX, defaults and dependencies except the kept Fork features below. [The inventory](docs/fork-inventory.md) records dropped and upstream-owned families. Sync starts from a current, clean `deploy/haemin` checkout using `scripts/fork-sync.sh`; its dry-run never writes refs, state or worktrees. A skipped or failed refresh never executes stale sync policy.
+`upstream/main` owns the UI, defaults, dependencies and runtime behavior. The retained fork differences
+are listed in [docs/fork-inventory.md](docs/fork-inventory.md): the separate plugin identity and
+port, Report colors, a compact skin over the native sidebar, exact Manager session binding, and the
+fork sync/release gates.
 
-## Fork features
+## Automatic sync
 
-- Separate `haeminway1.herdr-web-ui` identity, titles, version and config; loopback port 7320 and separate existing state, independent of the canonical plugin.
-- Exact Manager GJC/OMO/Codex/Claude identity, generation-scoped history, status and attachment resolution. Blocked or pending identities never select a provider child or nearby transcript. Recovery metadata alone cannot establish a live GJC session: process birth, boot, cwd, SDK identity, private path and native header must agree. Logical GJC choices remain bound to the current call, question and managed session. Codex headers are bounded to 1 MiB.
-- F6 pinned same-user 0664 OMO transcripts only inside the private nonce store; ownership, ID, cwd, inode and replacement checks remain mandatory.
-- F7 ten-second SDK listing cache, single-flight and serialized children. Cached rows are candidates only: the installed GJC CLI public `router.SessionRouter.generationStatus` must freshly prove the exact generation without spawning or attaching. Missing, retired or replaced authority fails closed. Strict namespace/record ownership and write checks, including root inode replacement, still apply despite ordinary 0775 project parents. The global queue permits at most six new SDK CLI starts per ten seconds and one concurrent child; a missed deadline remains unidentified.
-- Classic sidebar by default with upstream layout selectable, repository/folder/workspace grouping, hover rename/close and version footer; local resident agents, top folders, Resident/Work tabs, `/api/residents` settings and launch; server-verified Manager row pinned/locked without trusting client metadata.
-- Attention inbox with waiting, unread and working panes; persistent `/api/pane/seen` read state never changes Herdr focus or sends input. Report light/dark is the default while all upstream themes remain. Report telemetry settings are omitted rather than mislabeled; no receiver deployment.
-- Separate version, this policy and `scripts/fork-release.sh` gates. Automatic fork sync remains, but its old preserve-all-UX prompt is retired.
+`scripts/fork-sync.sh` runs only from a clean `deploy/haemin` checkout. It fast-forwards that branch
+from `origin/deploy/haemin`, fetches `upstream/main`, and compares the actual commit id. It does not
+wait for a release tag. Dry-run reads remote state but never changes refs, the worktree, or sync
+state. Each target revision has a dedicated worktree and explicit `started`, `failed`, `validated`,
+`contained`, or `released` status. A status file alone is not completion: the target commit must be
+contained in the candidate, and release completion also requires a fork tag that contains it.
 
-Do not restore Electron, dashboard, outbox, custom push policy, other fork palettes or plan-flow UI. Integrate kept modules through current upstream seams, never replace newer upstream files wholesale. If upstream changes conflict with a kept behavior, stop and ask Haemin in Korean with explicit choices instead of silently discarding either.
+Retries reuse the same branch and worktree. Active agent locks prevent duplicate launches. Existing
+merge state and edits are preserved; unsafe or divergent worktrees are recorded as failures rather
+than reset. The existing systemd timer and service remain unchanged.
 
-## Sync, verification and release
+The sync prompt preserves only the listed fork differences. It must use upstream files as the
+baseline, run the applicable local checks, record a validated candidate only after checking actual
+Git containment, and stop before tagging, pushing or publishing.
 
-For upstream X.Y.P, choose X.Y.(P*100+n) with positive n above every published fork tag, updating `package.json` and `herdr-plugin.toml` together. Typecheck and focused tests; verify kept UI with an isolated own-state/own-port bridge and headless desktop/phone light/dark screenshots. Never use live native sessions or production :7320 as fixtures. The release gate runs locked dependencies, typecheck, unit, integration and browser checks; report failures honestly.
+## Release gate
 
-Automatic upstream sync is preapproved to complete its gated release without further approval: merge the latest `origin/deploy/haemin` into the completed changes, fast-forward the clean deploy/haemin worktree, and run `scripts/fork-release.sh X.Y.Z` only there. Stop and ask Haemin in Korean with options on an impossible kept-feature conflict, failed gate or unsafe fast-forward. Never hand-tag, force-push, bypass gates or run a release from the sync worktree. Installed clients update through the updater: `server/updater.ts` permits installation only when the running revision is an ancestor of the target release; old tags never install and divergent history is blocked. Leave auto-updates disabled on failure; never restart Herdr phase1, panes or native sessions. Discover config with `herdr plugin config-dir haeminway1.herdr-web-ui`; never print or copy credentials.
+Use `scripts/fork-release.sh X.Y.Z` only on a clean `deploy/haemin` checkout. The version in
+`package.json` and `herdr-plugin.toml` must match and be newer than every published fork tag. The
+script runs the locked install, Fast checks, Integration and browser checks, and requires the
+`Native Windows install` check to pass for the exact commit. Any missing or failed gate stops the
+release; no test is edited out or accepted as an upstream exception. Only after every gate passes
+does the script create and push the fork tag and deployment branch, then mark contained targets as
+released.
 
-## Recovery
-
-Fix forward by default. **RETIRED:** `~/.config/herdr-web-ui-fork/updates/393da9f0cd9b4553/rollback-f7.sh` points to pre-realignment 0.4.1104 and is not a rollback route. Only on Haemin's explicit request, a manual previous *installed realigned* release may be selected by repointing the updater's `current.json` with a fork-bridge-only stop, supervisor-lock wait and restart. Verify the selected release and bridge health; do not touch native sessions or turn automatic updates on until acceptance passes.
+Do not deploy from a sync worktree, move an existing tag, force-push, or restart a Herdr/native
+session. The canonical plugin and its config remain independent of this fork.

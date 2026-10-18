@@ -37,17 +37,17 @@ describe("canBind", () => {
 
 describe("freePort", () => {
   it("takes the default first when a kept port stopped opening", async () => {
-    expect(await freePort(17317, 7317, async () => true)).toBe(7317);
+    expect(await freePort(17317, 7320, async () => true)).toBe(7320);
   });
 
   it("skips the port that failed and every port that does not open", async () => {
     const tried: number[] = [];
     const opens = async (port: number) => { tried.push(port); return port === FALLBACK_PORTS[1]; };
-    expect(await freePort(7317, 7317, opens)).toBe(FALLBACK_PORTS[1]!);
+    expect(await freePort(7320, 7320, opens)).toBe(FALLBACK_PORTS[1]!);
     expect(tried).toEqual([FALLBACK_PORTS[0]!, FALLBACK_PORTS[1]!]);
   });
 
   it("is null when none opens", async () => {
-    expect(await freePort(7317, 7317, async () => false)).toBeNull();
+    expect(await freePort(7320, 7320, async () => false)).toBeNull();
   });
 });

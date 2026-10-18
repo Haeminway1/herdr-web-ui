@@ -54,10 +54,10 @@ curl -fsSL https://herdrweb.dev/install.sh | sh
 It does, in order, only what is not done yet:
 
 - **What it runs on.** [herdr](https://github.com/herdrdev/herdr) 0.9.0+, [Bun](https://bun.sh) 1.4+ and Node 18+ (Node runs the terminal sidecar). A missing one is installed for your user only, without sudo: herdr and Bun by their own installers, into `~/.local/bin` and `~/.bun`, and Node 22 from nodejs.org, checked against its published SHA-256, into `~/.local/share/herdr-web-ui/node`. Nothing is compiled.
-- **The app**, as a herdr plugin at the latest release (set `HERDR_WEB_UI_REF` to install another branch or tag): herdr builds it and starts it along with itself, on `127.0.0.1:7317`, following the socket of the current herdr session. When herdr is already running, the app starts now.
+- **The app**, as a herdr plugin at the latest release (set `HERDR_WEB_UI_REF` to install another branch or tag): herdr builds it and starts it along with itself, on `127.0.0.1:7320`, following the socket of the current herdr session. When herdr is already running, the app starts now.
 - **The phone address.** When Tailscale runs on this PC, it serves the app to your tailnet (`tailscale serve`, see [On your phone](#on-your-phone)), tells you the command that undoes it, and prints the address as a QR code. Without Tailscale, it says what to set up.
 
-- **The app in your browser.** On a new install, on a PC with a desktop, it opens `http://127.0.0.1:7317` in your browser and says so: click **Install** in the address bar to add the app. It doesn't open anything in CI, over SSH, or when `HERDR_WEB_NO_OPEN=1` is set; then it prints the address instead. Over SSH it prints the tunnel to run from your own computer, `ssh -L 7317:127.0.0.1:7317 <this-pc>`, after which `http://127.0.0.1:7317` there opens the app and its **Install** button.
+- **The app in your browser.** On a new install, on a PC with a desktop, it opens `http://127.0.0.1:7320` in your browser and says so: click **Install** in the address bar to add the app. It doesn't open anything in CI, over SSH, or when `HERDR_WEB_NO_OPEN=1` is set; then it prints the address instead. Over SSH it prints the tunnel to run from your own computer, `ssh -L 7320:127.0.0.1:7320 <this-pc>`, after which `http://127.0.0.1:7320` there opens the app and its **Install** button.
 
 Run it again at any time, for example after setting up Tailscale: it keeps what is there and prints the address and QR code again.
 
@@ -76,13 +76,13 @@ On a first install it mentions a GitHub star, once, unless the account the [gh C
 the plugin's **Phone setup** action inside herdr to see the address, QR and a pairing code.
 
 ```bash
-herdr plugin install devswha/herdr-web-ui
+herdr plugin install Haeminway1/herdr-web-ui
 ```
 
 **From a checkout:**
 
 ```bash
-git clone https://github.com/devswha/herdr-web-ui.git
+git clone https://github.com/Haeminway1/herdr-web-ui.git
 cd herdr-web-ui
 bun install
 bun run start
@@ -92,7 +92,7 @@ bun run start
 
 </details>
 
-**2. Open it** at **http://127.0.0.1:7317**, the address the installer opened. The installed app belongs to that exact address: `localhost:7317` is another address to the browser, so a tab there still offers **Install**. Every workspace of your herdr session is a row in the sidebar, as in herdr's own, led by its project's favicon when its folder keeps one (`favicon.svg`, `.ico` or `.png`, directly in the folder or in its `public/`; the folder is the worktree checkout, or else the pane's working folder, so a pane that has `cd`'d into `src/` looks there) and a folder glyph otherwise (a repository row with worktrees under it keeps its fold button, and the worktree rows nested under it have no mark); its tabs are always shown in a strip, and the active tab shows all its split panes together. Pick one, start a new agent with **New workspace**, or add a tab to a workspace with **New tab** (the strip's `+`, a tab's right-click menu, or the command palette on a wider screen or with a keyboard). Right-click a tab to rename or close it; on a phone, tap the selected tab’s **⋯** for a trimmed menu with pane actions, Rename tab and Close tab. A focused tab also opens its menu with Shift+F10, and double-click still renames it.
+**2. Open it** at **http://127.0.0.1:7320**, the address the installer opened. The installed app belongs to that exact address: `localhost:7320` is another address to the browser, so a tab there still offers **Install**. Every workspace of your herdr session is a row in the sidebar, as in herdr's own, led by its project's icon when its folder keeps one (a favicon in the folder, `public/` or `static/`; else an app icon such as Next.js's `app/icon.*` or Electron's `build/icon.png`; else a logo such as `logo.svg` or `assets/logo.png`; the folder is the worktree checkout, or else the pane's working folder, so a pane that has `cd`'d into `src/` looks there) and a folder glyph otherwise (a repository row with worktrees under it is also its fold button: the folder opens and closes with it, and an icon turns into that folder under the pointer; the worktree rows nested under it have no mark); its tabs are always shown in a strip, and the active tab shows all its split panes together. Pick one, start a new agent with **New workspace**, or add a tab to a workspace with **New tab** (the strip's `+`, a tab's right-click menu, or the command palette on a wider screen or with a keyboard). Right-click a tab to rename or close it; on a phone, tap the selected tab’s **⋯** for a trimmed menu with pane actions, Rename tab and Close tab. A focused tab also opens its menu with Shift+F10, and double-click still renames it.
 
 Drag a tab to change its order within the workspace, or choose **Move tab left / right** from
 its menu (also on a phone). Alt+Shift+Left/Right moves a focused tab. Reordering keeps the
@@ -121,7 +121,7 @@ tab, and you type in whichever half is active; the other half shows that tab at 
 **A pairing code, on a PC with no browser of its own:**
 
 ```bash
-root=$(herdr plugin list --json | bun -e 'const d = JSON.parse(await Bun.stdin.text()); console.log(d.result.plugins.find((p) => p.plugin_id === "devswha.herdr-web-ui")?.plugin_root ?? "")')
+root=$(herdr plugin list --json | bun -e 'const d = JSON.parse(await Bun.stdin.text()); console.log(d.result.plugins.find((p) => p.plugin_id === "haeminway1.herdr-web-ui")?.plugin_root ?? "")')
 bun "$root/scripts/plugin.ts" pair   # plugin install
 bun scripts/plugin.ts pair           # from a checkout
 ```
@@ -129,19 +129,19 @@ bun scripts/plugin.ts pair           # from a checkout
 `pair` prints the code, the address the phone opens when Tailscale serves one, and that address as a QR code. Neither is a herdr action: herdr keeps an action's output in its log, and a pairing code belongs on the screen. The actions start, stop and report on the server:
 
 ```bash
-herdr plugin action invoke devswha.herdr-web-ui.start    # leaves a running server alone
-herdr plugin action invoke devswha.herdr-web-ui.status
-herdr plugin action invoke devswha.herdr-web-ui.phone    # visible phone setup pane
-herdr plugin action invoke devswha.herdr-web-ui.stop
+herdr plugin action invoke haeminway1.herdr-web-ui.start    # leaves a running server alone
+herdr plugin action invoke haeminway1.herdr-web-ui.status
+herdr plugin action invoke haeminway1.herdr-web-ui.phone    # visible phone setup pane
+herdr plugin action invoke haeminway1.herdr-web-ui.stop
 ```
 
-Its PID and log live under `HERDR_PLUGIN_STATE_DIR`. For persistent settings (see [Configuration](#configuration)), add `KEY=value` lines to the `env` file (no dot) in the directory that `herdr plugin config-dir devswha.herdr-web-ui` prints. A plugin checkout from 0.3.25 on also reads `.env` there, which wins where both set a key; an older one needs a plugin reinstall first, since in-app updates do not replace the checkout. The plugin's `status` prints the files it read. Protect that file if it holds a token.
+Its PID and log live under `HERDR_PLUGIN_STATE_DIR`. For persistent settings (see [Configuration](#configuration)), add `KEY=value` lines to the `env` file (no dot) in the directory that `herdr plugin config-dir haeminway1.herdr-web-ui` prints. A plugin checkout from 0.3.25 on also reads `.env` there, which wins where both set a key; an older one needs a plugin reinstall first, since in-app updates do not replace the checkout. The plugin's `status` prints the files it read. Protect that file if it holds a token.
 
 ### Uninstall
 
 ```bash
-herdr plugin action invoke devswha.herdr-web-ui.stop
-herdr plugin uninstall devswha.herdr-web-ui
+herdr plugin action invoke haeminway1.herdr-web-ui.stop
+herdr plugin uninstall haeminway1.herdr-web-ui
 tailscale serve --https=<port> off    # the port the installer printed, if it served the app
 ```
 
@@ -217,7 +217,7 @@ A pane's plan is the task list a Claude Code agent keeps (`TaskCreate` / `TaskUp
 | **See what changed** | **Browse files → Changes** lists what changed in the git repository the pane sits in: the **Working tree**, what is **Staged**, or two **Commits** you name, as a folder tree with git's status letter and the added and removed lines. A row opens its diff, **Unified** or **Split** (Settings → Chat → File viewer → Diff layout; a phone shows one column), with **Copy path**, **Copy patch** and **Open file**. The files a turn's edit tools changed, listed in its work block, open the same diff. It only reads; a remote PC's repository is read on that PC. |
 | **Manage sessions** | Start an agent in a folder you type or pick with **Browse**. In New workspace, Browse filters the currently loaded folders as you type (case-insensitive); opening a folder updates Directory, so **Start** uses that path even without **Use this folder** (which closes Browse), and a folder under home stays written as `~/…`. **New folder** (the folder-plus button in Browse's bar) makes a folder inside the one shown and opens it. It does not search subfolders or folders beyond the displayed 500. Add a tab to a workspace (as herdr's prefix+c), switch tabs from the strip over the pane, rename workspaces from their ⋯/right-click menu and panes from their own menu, reorder workspaces (drag a row, or on a phone long-press it and drag; Alt+Up/Down moves a focused row one step), and jump anywhere from the command palette. |
 | **Speak instead of typing** | A mic beside Attach in the composer and beside Send in the terminal input line. Hold to talk or tap twice; the words land at the caret and are never sent by themselves. See [Voice input](#voice-input). |
-| **Watch your plan limits** | Beside Settings, how much of each AI subscription signed in on the PC is used, or what is left: the week's or the session's limit per account, and every limit with its reset time on a tap. See [Subscription usage](#subscription-usage). |
+| **Watch your plan limits** | Beside the Settings gear, how much of each AI subscription signed in on the PC is left, or used: the session's or the week's limit per account, and every limit with its reset time on a tap. See [Subscription usage](#subscription-usage). |
 | **Make it yours** | English, Korean, Japanese or Simplified Chinese, following the browser or chosen in Settings. Dark, light or system mode, with a dark theme and a light theme picked from Amber, Charcoal, Catppuccin and herdr's built-in themes, compact density, interface size, terminal and chat fonts and sizes (Chromium lists the installed fonts to pick from), a resizable composer, Enter behavior and thinking visibility. |
 
 Every agent has the same chat controls on desktop and phones: Stop while it works with an empty
@@ -242,7 +242,7 @@ names that account and the reset times. Details stay in the strip beside Setting
 remote panes do not show this compact reference; failed or unavailable limits are omitted.
 
 
-The strip beside **Settings** shows the plan limits of the AI tools signed in on the PC the app's server runs on: for each account its provider's logo and one limit, the plan's week or its 5-hour session as chosen in Settings (red from 80%). A plan with neither shows its limit closest to running out. Tap it for every limit (5-hour session, week, month, per model where a plan has them) and when each starts over. It is off until you turn it on in **Settings → Subscription usage**: turning it on sends the sign-ins on the server's PC to each provider's usage endpoint.
+The strip beside the **Settings** gear shows the plan limits of the AI tools signed in on the PC the app's server runs on: for each account its provider's logo and one limit, what is left of its 5-hour session by default, or its week, or the share used, as chosen in Settings (red from 80% used). As many accounts show as the row has room for, the rest as `+N`; hovering the strip also names a limit near its end that a chip does not show. A plan with neither shows its limit closest to running out. Tap it for every limit (5-hour session, week, month, per model where a plan has them) and when each starts over. It is off until you turn it on in **Settings → Subscription usage**: turning it on sends the sign-ins on the server's PC to each provider's usage endpoint.
 
 | Provider | Sign-in it reads |
 | --- | --- |
@@ -281,7 +281,7 @@ Turn it on in **Settings → Voice input**, then hold the mic beside Attach (cha
 Serve the app over **HTTPS** to install it and receive push alerts. The simplest way is Tailscale: keep the server on `127.0.0.1` and let Tailscale add the HTTPS address.
 
 ```bash
-tailscale serve --bg --https=443 http://127.0.0.1:7317
+tailscale serve --bg --https=443 http://127.0.0.1:7320
 ```
 
 The one-line installer runs this for you when Tailscale runs on the PC and does not serve the app yet, on the first free port of 443, 8443, 7317 and 17317, and prints the command that undoes it. On Linux, `tailscale serve` needs root or `sudo tailscale set --operator=$USER` once; the installer says so when Tailscale refuses.
@@ -320,7 +320,7 @@ On a phone:
   pane is open. It is off by default, releases when the app is hidden, and resumes when
   you return. It needs HTTPS or localhost and browser support; power-saving mode may refuse it.
 
-On a computer, install the app from `http://127.0.0.1:7317`. When the app runs on a PC you reach over SSH, tunnel to it first with `ssh -L 7317:127.0.0.1:7317 <this-pc>` and open that address on your own computer; the installer prints this line when you install over SSH.
+On a computer, install the app from `http://127.0.0.1:7320`. When the app runs on a PC you reach over SSH, tunnel to it first with `ssh -L 7320:127.0.0.1:7320 <this-pc>` and open that address on your own computer; the installer prints this line when you install over SSH.
 
 A plain HTTP LAN address also works in the browser, but it can't install the app or receive push.
 
@@ -350,13 +350,13 @@ Anyone who can reach the server can type into your terminals, so what matters is
 | How you reach it | What gets you in |
 | --- | --- |
 | This computer only (default) | Nothing needed. With a token set, the token |
-| SSH tunnel (`ssh -L 7317:127.0.0.1:7317 host`) | Nothing needed. With a token set, the token |
+| SSH tunnel (`ssh -L 7320:127.0.0.1:7320 host`) | Nothing needed. With a token set, the token |
 | `tailscale serve`, your own devices | Nothing needed: your login. With `HERDR_WEB_TAILSCALE_SERVE_ONLY=1` on a one-login tailnet, the owner's phone needs nothing either. With a token set, the token, once per device |
 | `tailscale serve` on a tailnet you share with others | Your devices: your login (with a token set, the token once). Theirs: refused unless you pair them |
 | Your LAN (`HOST=0.0.0.0` or a LAN address) | Pair each device, or set a token |
 | A public domain, reverse proxy or Portal | Set a token, with HTTPS, and set the proxy up as in [Behind a reverse proxy](#behind-a-reverse-proxy). Never `tailscale funnel` it |
 
-Until the first device is paired, and with no token set, a LAN or proxied address is open to anyone who reaches it, as it always was: the server warns on startup. The exception is a proxy on this PC while its Tailscale login is known, as with `tailscale serve`: a request that carries no login there needs pairing from the start, unless `HERDR_WEB_TAILSCALE_SERVE_ONLY=1` is set and that tailnet has one login and no tagged node, where such a request is the owner's own device. With that setting off, which is the default, every such request pairs. The first pairing closes access only after the browser returns its new device cookie. If the cookie is blocked or the pairing response is lost, the unconfirmed pairing does not restrict access; retry after checking browser and proxy cookie settings. Once confirmed, the gate stays closed: revoking every device does not reopen it. This app-level restriction also applies behind a proxy with its own authentication; other browsers need their own pairing or the app's token. Without a token, this computer itself stays in whatever happens, so you can never lock yourself out: revoke everything and pair again from `http://localhost:7317`. With a token set, this computer signs in with the token.
+Until the first device is paired, and with no token set, a LAN or proxied address is open to anyone who reaches it, as it always was: the server warns on startup. The exception is a proxy on this PC while its Tailscale login is known, as with `tailscale serve`: a request that carries no login there needs pairing from the start, unless `HERDR_WEB_TAILSCALE_SERVE_ONLY=1` is set and that tailnet has one login and no tagged node, where such a request is the owner's own device. With that setting off, which is the default, every such request pairs. The first pairing closes access only after the browser returns its new device cookie. If the cookie is blocked or the pairing response is lost, the unconfirmed pairing does not restrict access; retry after checking browser and proxy cookie settings. Once confirmed, the gate stays closed: revoking every device does not reopen it. This app-level restriction also applies behind a proxy with its own authentication; other browsers need their own pairing or the app's token. Without a token, this computer itself stays in whatever happens, so you can never lock yourself out: revoke everything and pair again from `http://localhost:7320`. With a token set, this computer signs in with the token.
 
 A token is a credential on the wire as much as a cookie is: on plain `http://`, anyone on the network path reads it, and then every keystroke after it. Reach this PC over Tailscale, put it behind a TLS-terminating proxy, or keep it on loopback and tunnel in; the server says so on startup when it is bound to another address over http.
 
@@ -377,7 +377,7 @@ Caddy does all four by default, and gets the certificate itself:
 
 ```caddyfile
 herdr.example.com {
-	reverse_proxy 127.0.0.1:7317 {
+	reverse_proxy 127.0.0.1:7320 {
 		header_up -Tailscale-User-Login
 	}
 }
@@ -398,7 +398,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/herdr.example.com/privkey.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:7317;
+        proxy_pass http://127.0.0.1:7320;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -434,14 +434,14 @@ To check the app's gate, request its `/api/session` directly without a token: it
 If the proxy signs people in, also check that a signed-out visitor cannot reach the app through
 the public address.
 
-[Portal](https://github.com/gosuda/portal-tunnel) gives this PC a public HTTPS address with no account and no domain of your own. From v2.6.1, its `--http-route` does all four things and can drop a header a visitor sends; the plain `portal expose 7317` sends no `X-Forwarded-Proto`, so the app's own requests are refused (`invalid_origin`).
+[Portal](https://github.com/gosuda/portal-tunnel) gives this PC a public HTTPS address with no account and no domain of your own. From v2.6.1, its `--http-route` does all four things and can drop a header a visitor sends; the plain `portal expose 7320` sends no `X-Forwarded-Proto`, so the app's own requests are refused (`invalid_origin`).
 
 **On a PC that runs Tailscale, keep `--strip-request-header Tailscale-User-Login` in the command.** Without it Portal passes on a visitor's copy of that header, and with no token set the server trusts it, so a visitor who sends your Tailscale login gets in. Do not set `HERDR_WEB_TAILSCALE_SERVE_ONLY=1` while Portal runs either: it says `tailscale serve` is the only way into this port, and Portal is another (see [Configuration](#configuration)). `tailscale serve` is the simpler route on such a PC.
 
 Set `HERDR_WEB_TOKEN` to a long random value first (for example from `openssl rand -hex 32`; [In a terminal](#in-a-terminal) says where settings go), then start Portal:
 
 ```bash
-portal expose --http-route /=7317 \
+portal expose --http-route /=7320 \
   --strip-request-header Tailscale-User-Login \
   --name herdr-$(openssl rand -hex 8) \
   --identity-path ~/.config/portal/herdr.json \
@@ -475,7 +475,7 @@ Observe connections cannot take a pane, and a displaced bridge never takes it ba
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` or a LAN address only with `HERDR_WEB_TOKEN` set or once a device is paired: until then that address is open to anyone who reaches it (see [Access and safety](#access-and-safety)). |
-| `PORT` | `7317` | HTTP and WebSocket port. Left unset, the plugin takes the next of 17317, 27317, 37317 and 47317 when 7317 cannot be opened (another program has it, or Windows reserves it for Hyper-V, WSL2 or Docker), keeps that port for later starts, and the installer and the **herdr web ui status** action print the address. A port set here is never changed |
+| `PORT` | `7320` | HTTP and WebSocket port. Left unset, the plugin takes the next of 17317, 27317, 37317 and 47317 when 7320 cannot be opened (another program has it, or Windows reserves it for Hyper-V, WSL2 or Docker), keeps that port for later starts, and the installer and the **herdr web ui status** action print the address. A port set here is never changed |
 | `HERDR_SOCKET` | `~/.config/herdr/herdr.sock` | herdr socket for API calls and terminal attach. For a named session, use `~/.config/herdr/sessions/<name>/herdr.sock`. |
 | `HERDR_WEB_TOKEN` | unset | Shared token for scripts and proxies. Once set, every client that is not a paired device needs it, this computer and your own Tailscale login included |
 | `HERDR_WEB_CSP` | unset (enforced) | `report-only` sends the policy as `Content-Security-Policy-Report-Only`: the browser reports what it would block and the app keeps working. Used to measure the policy after a change |
@@ -491,6 +491,7 @@ Observe connections cannot take a pane, and a displaced bridge never takes it ba
 | `HERDR_WEB_HERDR_BIN` | `herdr` | herdr executable used for terminal attach |
 | `HERDR_WEB_APP_NAME` | unset (`herdr`) | The name the installed app has on a phone or computer, for example the PC's name. Each PC installs as an app of its own, and without it they are all called `herdr`. An app already installed takes the new name when the browser next updates it, usually within a day or two, without a reinstall. Keep it short: a home screen cuts a long label |
 | `HERDR_WEB_PASTE_DIR` | `<pane cwd>/.herdr-web-ui` | Where pasted and attached files are saved: an absolute path or `~/…`. Set it to keep them out of your projects; an agent may then ask before reading one. It covers the panes of this server's PC; a remote PC keeps the default |
+| `HERDR_WEB_MEDIA_ROOTS` | unset | Folders besides its own that a rendered HTML page may play a video or sound from, through a symlink beside it or a `../` link: absolute paths separated by `:` (`;` on Windows), for example a network share where recordings are kept. Any page can then find out which files exist there. Unset, a page plays its large videos only from its own folder, so a page that came with its own symlinks cannot find out which of this PC's files exist. A large video plays from an address made for that render: it works only from the device's network address that opened the page, for 30 minutes (reload the page after that), and stops when that device is revoked or signs out. The page's own script can read that address and share it, so for those 30 minutes anyone behind the same network address can play that file too |
 | `CODEX_HOME` | `~/.codex` | Where Codex sessions are read |
 
 ## Updates
@@ -502,10 +503,10 @@ An update is built and typechecked in a private checkout while the current serve
 After a herdr plugin reinstall, or a `git pull` and a build, in the checkout the app runs from, reloading the page cannot bring the update in: the server keeps running its old code. The page says so on its next status read, in place of the **Reload app** notice, and asks you to restart herdr web ui on the PC. The notice goes away once it restarts:
 
 ```sh
-herdr plugin action invoke devswha.herdr-web-ui.stop    # plugin install
-herdr plugin action invoke devswha.herdr-web-ui.start
-herdr plugin action invoke devswha.herdr-web-ui.stop-windows    # on Windows
-herdr plugin action invoke devswha.herdr-web-ui.start-windows
+herdr plugin action invoke haeminway1.herdr-web-ui.stop    # plugin install
+herdr plugin action invoke haeminway1.herdr-web-ui.start
+herdr plugin action invoke haeminway1.herdr-web-ui.stop-windows    # on Windows
+herdr plugin action invoke haeminway1.herdr-web-ui.start-windows
 ```
 
 From a checkout, stop `bun run start` and run it again.
@@ -654,7 +655,7 @@ No. Both attach to the same terminals at the same time. Use the TUI at your desk
 
 No, but a phone needs two things Tailscale gives at once: a way to reach the PC from outside your network, and HTTPS, which installing the app and push alerts both require. Without it:
 
-- **An SSH tunnel from the phone** (Termux, Blink): `ssh -L 7317:127.0.0.1:7317 <pc>`, then open `http://localhost:7317` on the phone. Browsers treat localhost as secure, so installing and alerts should work while the tunnel is up (not verified on iOS yet). The phone still has to reach the PC over SSH.
+- **An SSH tunnel from the phone** (Termux, Blink): `ssh -L 7320:127.0.0.1:7320 <pc>`, then open `http://localhost:7320` on the phone. Browsers treat localhost as secure, so installing and alerts should work while the tunnel is up (not verified on iOS yet). The phone still has to reach the PC over SSH.
 - **A VPN into your home** (WireGuard, ZeroTier, a router VPN): the LAN address works in the browser, but a plain `http://` address can neither install the app nor receive alerts.
 - **A reverse proxy with a real certificate** on a domain you own, with a token set and the proxy sending `X-Forwarded-For`: [Behind a reverse proxy](#behind-a-reverse-proxy) has Caddy and nginx examples to copy. This exposes the server to the internet, so read [Access and safety](#access-and-safety) first.
 - **A public address with Portal**, a tunnel with no account and no domain of your own, with a long random token set: [Behind a reverse proxy](#behind-a-reverse-proxy) has the command, and **Settings → Phone & devices → Portal** runs it for you. This exposes the server to the internet too.

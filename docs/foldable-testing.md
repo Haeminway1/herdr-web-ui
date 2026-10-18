@@ -57,8 +57,8 @@ sdkmanager "emulator" "platform-tools" "system-images;android-35;google_apis_pla
 avdmanager create avd -n fold -k "system-images;android-35;google_apis_playstore;x86_64" -d pixel_fold   # or "resizable"
 emulator -avd fold -no-window -gpu swiftshader_indirect -no-audio &
 adb wait-for-device
-adb reverse tcp:7317 tcp:7317                            # device localhost:7317 -> this server
-adb shell am start -a android.intent.action.VIEW -d http://localhost:7317 com.android.chrome
+adb reverse tcp:7320 tcp:7320                            # device localhost:7320 -> this server
+adb shell am start -a android.intent.action.VIEW -d http://localhost:7320 com.android.chrome
 adb forward tcp:9222 localabstract:chrome_devtools_remote  # CDP at http://localhost:9222
 adb emu fold; sleep 1; adb emu unfold                    # posture change with the page open
 adb emu posture 2                                        # postures 1-3 on Pixel Fold / Resizable

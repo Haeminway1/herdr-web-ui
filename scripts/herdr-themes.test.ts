@@ -124,9 +124,15 @@ describe("executable provenance policy", () => {
   it("checks the fork-owned Report palette without claiming it came from herdr", () => {
     const report = SUPPORTED_ENTRIES.filter((entry) => entry.id === "report");
     expect(report.map((entry) => entry.mode).sort()).toEqual(["dark", "light"]);
-    expect(provenanceFailures(css, report, [])).toHaveLength(0);
-    const changed = css.replace("--accent: #1f5fcc;", "");
-    expect(provenanceFailures(changed, report, []).join("\n")).toContain("report/light accent: missing fork palette declaration");
+    expect(SOURCE).not.toHaveProperty("report");
+    expect(OVERRIDES.some((item) => item.theme === "report")).toBe(false);
+    for (const entry of report) {
+      const declarations = parseThemeBlocks(css)[`report/${entry.mode}`]?.declared;
+      expect(declarations?.["--bg"]).toBeDefined();
+      expect(declarations?.["--accent"]).toBeDefined();
+    }
+    const changed = parseThemeBlocks(css.replace("--accent: #1f5fcc;", ""));
+    expect(changed["report/light"]?.declared["--accent"]).toBeUndefined();
   });
 
   it("accepts a matching explicit deviation with numeric distance and reason", () => {

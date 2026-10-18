@@ -1,7 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { isThemeId, pickTheme, rowFor, SUPPORTED_ENTRIES, terminalColors, THEME_IDS, themeColor } from "./themes.ts";
+import { DEFAULT_THEME, isThemeId, pickTheme, rowFor, SUPPORTED_ENTRIES, terminalColors, THEME_IDS, themeColor } from "./themes.ts";
 
 describe("theme lookups", () => {
+  it("uses Report as the default while keeping every upstream theme in the generated table", () => {
+    expect(DEFAULT_THEME).toBe("report");
+    expect(THEME_IDS).toContain("codex");
+    expect(THEME_IDS).toContain("report");
+  });
+
   it("knows the ids of the generated table and nothing else", () => {
     expect(THEME_IDS.every((id) => isThemeId(id))).toBe(true);
     expect([isThemeId("not-a-theme"), isThemeId(""), isThemeId(undefined), isThemeId(1)]).toEqual([false, false, false, false]);
@@ -14,9 +20,9 @@ describe("theme lookups", () => {
     }
   });
 
-  it("falls back to Report of the same side for an unknown id", () => {
+  it("falls back to the default theme of the same side for an unknown id", () => {
     for (const side of ["dark", "light"] as const) {
-      expect(rowFor("not-a-theme", side)).toBe(rowFor("report", side));
+      expect(rowFor("not-a-theme", side)).toBe(rowFor(DEFAULT_THEME, side));
       expect(rowFor("not-a-theme", side).mode).toBe(side);
     }
   });
@@ -33,7 +39,9 @@ describe("theme lookups", () => {
 
 describe("picking a theme", () => {
   it("fills the other side with the sibling while that side is the default or the previous pick's sibling", () => {
-    expect(pickTheme({ darkTheme: "report", lightTheme: "report" }, "dark", "tokyo-night")).toEqual({ darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" });
+    expect(pickTheme({ darkTheme: "amber", lightTheme: "amber" }, "dark", "tokyo-night")).toEqual({ darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" });
+    expect(pickTheme({ darkTheme: "codex", lightTheme: "codex" }, "dark", "tokyo-night")).toEqual({ darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" });
+    expect(pickTheme({ darkTheme: "codex", lightTheme: "amber" }, "light", "catppuccin-latte")).toEqual({ darkTheme: "catppuccin", lightTheme: "catppuccin-latte" });
     expect(pickTheme({ darkTheme: "tokyo-night", lightTheme: "tokyo-night-day" }, "dark", "gruvbox")).toEqual({ darkTheme: "gruvbox", lightTheme: "gruvbox-light" });
     expect(pickTheme({ darkTheme: "report", lightTheme: "report" }, "light", "catppuccin-latte")).toEqual({ darkTheme: "catppuccin", lightTheme: "catppuccin-latte" });
   });

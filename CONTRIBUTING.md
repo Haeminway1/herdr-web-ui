@@ -28,7 +28,7 @@ adapted from another project, with its license.
 
 ```bash
 bun install
-bun run server   # API + WebSocket on :7317
+bun run server   # API + WebSocket on :7320
 bun run dev      # Vite on :5173, proxies /api and /ws
 ```
 
@@ -96,7 +96,7 @@ running terminals: see [development](docs/development.md#checks).
   new ones. Every language has to translate each later string, so a PR that adds a language is
   closed.
 - **UI:** component CSS uses the tokens in `src/styles.css` (see [DESIGN.md](DESIGN.md)).
-- **Themes:** besides the app's own Amber, Charcoal and Catppuccin, a theme is added only when
+- **Themes:** besides the app's own Amber, Charcoal, Codex and Catppuccin, a theme is added only when
   herdr ships it as a built-in; a PR with any other theme is closed. Each theme is a complete block
   in `src/styles.css`, the one place its colors are written. Start from
   `bun scripts/herdr-theme-proposal.ts`, write the block by hand, and record every role whose value

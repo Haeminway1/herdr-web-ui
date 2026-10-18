@@ -19,8 +19,8 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-666666?labelColor=333333" alt="MIT ライセンス"></a>
-  <a href="https://github.com/devswha/herdr-web-ui/stargazers"><img src="https://img.shields.io/github/stars/devswha/herdr-web-ui?labelColor=333333&color=666666&logo=github" alt="GitHub スター数"></a>
-  <a href="https://github.com/devswha/herdr-web-ui/releases/latest"><img src="https://img.shields.io/github/v/release/devswha/herdr-web-ui?label=release&labelColor=333333&color=666666" alt="最新リリース"></a>
+  <a href="https://github.com/Haeminway1/herdr-web-ui/stargazers"><img src="https://img.shields.io/github/stars/Haeminway1/herdr-web-ui?labelColor=333333&color=666666&logo=github" alt="GitHub スター数"></a>
+  <a href="https://github.com/Haeminway1/herdr-web-ui/releases/latest"><img src="https://img.shields.io/github/v/release/Haeminway1/herdr-web-ui?label=release&labelColor=333333&color=666666" alt="最新リリース"></a>
   <a href="https://github.com/herdrdev/herdr"><img src="https://img.shields.io/badge/herdr-0.9.0%2B-666666?labelColor=333333" alt="herdr 0.9.0+"></a>
   <a href="docs/guide.md#on-your-phone"><img src="https://img.shields.io/badge/PWA-installable-666666?labelColor=333333" alt="インストール可能な PWA"></a>
 </p>
@@ -111,10 +111,10 @@ irm https://herdrweb.dev/install.ps1 | iex
 必要なソフトウェアがすでにそろっている場合は、プラグインだけをインストールできます。
 
 ```bash
-herdr plugin install devswha/herdr-web-ui
+herdr plugin install Haeminway1/herdr-web-ui
 ```
 
-herdr が起動した状態で **[localhost:7317](http://localhost:7317)** を開きます。ペインを選ぶか、**New workspace（新規ワークスペース）** からエージェントを起動してください。スマートフォンで使う場合は、インストーラーの QR コードを読み取り、アプリをホーム画面に追加します。[クイックスタート →](docs/guide.md#quick-start)
+herdr が起動した状態で **[localhost:7320](http://localhost:7320)** を開きます。ペインを選ぶか、**New workspace（新規ワークスペース）** からエージェントを起動してください。スマートフォンで使う場合は、インストーラーの QR コードを読み取り、アプリをホーム画面に追加します。[クイックスタート →](docs/guide.md#quick-start)
 
 サーバーのデフォルトの待ち受けアドレスは `127.0.0.1` です。別のデバイスからアクセスする場合は、[スマートフォンの設定](docs/guide.md#on-your-phone)と[アクセスと安全性](docs/guide.md#access-and-safety)を参照してください。
 
@@ -181,11 +181,11 @@ Claude Code、Codex、omp、omo、gjc、pi は、それぞれのセッション�
 ## 開発
 
 ```bash
-git clone https://github.com/devswha/herdr-web-ui.git
+git clone https://github.com/Haeminway1/herdr-web-ui.git
 cd herdr-web-ui
 bun install
 
-bun run server      # API + WebSocket on :7317
+bun run server      # API + WebSocket on :7320
 bun run dev         # Vite on :5173; run in a second terminal
 ```
 

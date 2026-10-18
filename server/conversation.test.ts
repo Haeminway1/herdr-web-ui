@@ -14,7 +14,7 @@ import * as agyStore from "./agy-store.ts";
 import * as herdr from "./herdr/client.ts";
 import { forgetHistoryChains } from "./codex.ts";
 import { DevinHistoryChanged } from "./devin.ts";
-import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
+import type { ManagedGjcSessionProof } from "./managed-sessions.ts";
 import type { ManagedSessionDeps } from "./managed-sessions.ts";
 import * as omo from "./omo.ts";
 import { ConversationUnavailable, conversationForPane, conversationImage, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, resolveTranscript, toolOutput, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
@@ -1893,7 +1893,7 @@ describe("managed conversation identity", () => {
   let record: Record<string, unknown>;
   let oldNamespace: string | undefined;
   let observed: { pid: number; starttime: string; boot: string; cwd: string } | null;
-  let live: GjcSdkSessionIdentity | null;
+  let live: ManagedGjcSessionProof | null;
   let nativeLookupCalls: number;
   let restoreNativeLookup: (() => void) | undefined;
 
@@ -1902,6 +1902,7 @@ describe("managed conversation identity", () => {
   const managedDeps: ManagedSessionDeps = {
     processIdentity: (pid) => observed?.pid === pid ? { ...observed } : null,
     gjcSession: async () => live,
+    gjcGeneration: async () => true,
   };
 
   function writeHarness(harness: "gjc" | "omo" | "codex" | "claude", entries: string[] = []): string {

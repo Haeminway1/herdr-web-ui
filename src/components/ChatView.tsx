@@ -11,7 +11,6 @@ import "./ChatView.css";
 import "./ChatTimeline.css";
 
 import { AgentMark } from "./AgentMark.tsx";
-import { ManagedSessionStatus } from "./ManagedSessionStatus.tsx";
 import { AnimatedHeight } from "./AnimatedHeight.tsx";
 import { Markdown, ReservedImage } from "./Markdown.tsx";
 import { ImageLightbox } from "./ImageLightbox.tsx";
@@ -19,6 +18,7 @@ import { PromptCard } from "./PromptCard.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { loadChatTimeline, loadedChatTimeline, useChatTimeline } from "./chatTimelineLoader.ts";
 import { ChatMinimap } from "./ChatMinimap.tsx";
+import { ManagedSessionStatus } from "./ManagedSessionStatus.tsx";
 import { minimapTurns } from "../lib/chatMinimap.ts";
 import type { LegendListRef } from "@legendapp/list/react";
 import { appendChatRowSlots, createChatRowSlots, prependChatRowSlots } from "../lib/chatRows.ts";
@@ -31,7 +31,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
-import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -40,7 +40,9 @@ import { PAGE_OVERLAP_ROWS, pageScrollDistance } from "../lib/pageScroll.ts";
 import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
+import { askedQuestions } from "../lib/askQuestions.ts";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
+import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useFacesArrived } from "../lib/fontFaces.ts";
@@ -70,7 +72,7 @@ const ChatHistoryContext = createContext("");
  */
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, ManagedSessionIdentity, OmoTaskResult } from "../../shared/protocol.ts";
+import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { useT } from "../lib/i18n.ts";
@@ -125,7 +127,7 @@ export interface ChatViewProps {
   visible?: boolean;
   pageScroll?: { current: ((direction: -1 | 1) => void) | null };
   refreshKey: number;
-  /** bumped by a conversation push; coalesced at the former 2s polling cadence */
+  /** bumped by a conversation push; coalesced to at most one read a second */
   invalidationKey?: number;
   /** only a mounted, visible chat asks the bridge to watch its native conversation */
   onConversationWatch?: (paneId: string, enabled: boolean) => void;
@@ -167,7 +169,7 @@ export interface ChatViewProps {
 
 interface ChatState {
   activity?: ConversationResponse["activity"];
-  managedSession?: ManagedSessionIdentity;
+  managedSession?: ConversationResponse["managed_session"];
   source: "conversation" | "scrollback";
   conversationSource?: string;
   turns: ConversationTurn[];
@@ -179,7 +181,7 @@ const EMPTY_STATE: ChatState = { source: "conversation", turns: [], messages: []
 
 /** The view of a structured (not scrollback) answer. */
 function conversationState(conversation: ConversationResponse): ChatState {
-  return { source: "conversation", conversationSource: conversation.source, managedSession: conversation.managed_session, turns: conversation.turns, messages: [], truncated: false, activity: conversation.activity };
+  return { source: "conversation", conversationSource: conversation.source, turns: conversation.turns, messages: [], truncated: false, activity: conversation.activity, managedSession: conversation.managed_session };
 }
 
 
@@ -301,6 +303,18 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   try { parsed = JSON.parse(part.input) as Record<string, unknown>; }
   catch { return <pre className="chat-tool-io">{part.input}</pre>; }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return <pre className="chat-tool-io">{part.input}</pre>;
+  // a question the agent asked: what it asked and offered, not its JSON (the answer is the output)
+  const asked = askedQuestions(part.name, parsed);
+  if (asked !== null) return <ol className="chat-ask-questions">{asked.map((question, index) => <li key={index} className="chat-ask-question">
+    {question.header !== null && <p className="chat-ask-header">{question.header}</p>}
+    <p className="chat-ask-text">{question.question}</p>
+    {question.multi && <p className="chat-ask-meta">{t("More than one could be picked")}</p>}
+    {question.options.length > 0 && <ol className="chat-ask-options">{question.options.map((option, at) => <li key={at}>
+      <p className="chat-ask-label">{option.label}{question.recommended === at && <> <span className="chat-ask-meta">({t("Recommended")})</span></>}</p>
+      {option.description !== null && <p className="chat-ask-description">{option.description}</p>}
+      {option.preview !== null && <pre className="chat-ask-preview">{option.preview}</pre>}
+    </li>)}</ol>}
+  </li>)}</ol>;
   // an OmO or omp `task` call: the tasks it starts, not its JSON or a checklist nobody ticks
   const spawned = part.name === "task" ? taskCallItems(parsed) : null;
   if (spawned !== null) return <ol className="chat-task-calls">{spawned.map((item, index) => <li key={index} className="chat-task-call">
@@ -443,15 +457,27 @@ function ThinkingRow({ text, stateKey }: { text: string; stateKey: string }) {
  * between them — under one header ("Worked for 7s · 1 edit"). Rows stay one line
  * each until opened; the narration between them is answer prose while the turn runs, dim after.
  */
-function WorkBlockView({ paneId, parts, duration, live, waiting, defaultOpen, showThinking }: { paneId: string; parts: ConversationPart[]; duration: string | null; live: boolean; waiting: boolean; defaultOpen: boolean; showThinking: boolean }) {
+/**
+ * A live work block's head with no rows yet, where the block will be: a turn that has written
+ * nothing the block draws (Claude Code's spinner, hidden thinking, or only words so far). The block
+ * the first row draws takes its place without a change of look; nothing to open yet, so its caret
+ * holds only the room.
+ */
+function PendingWorkHead({ title, className = "" }: { title: string; className?: string }) {
+  return <div className={`work-block is-live is-pending ${className}`} role="status">
+    <div className="work-block-head"><span className="work-row-caret" aria-hidden="true" /><span className="work-block-title">{title}</span></div>
+  </div>;
+}
+
+function WorkBlockView({ paneId, parts, duration, live, waiting, defaultOpen, showThinking, pendingHead }: { paneId: string; parts: ConversationPart[]; duration: string | null; live: boolean; waiting: boolean; defaultOpen: boolean; showThinking: boolean; pendingHead: boolean }) {
   const t = useT();
   const [chosenOpen, setOpen] = useChatRowToggle("work", null);
   const open = chosenOpen ?? defaultOpen;
   // reading or working inside the block is a choice to keep it: the fold at the end of the turn
   // must not take the rows from under the reader's focus or close the row they opened
   const keepOpen = () => { if (chosenOpen === null) setOpen(true); };
-  const visible = parts.filter((part) => part.kind !== "skill" && (showThinking || part.kind !== "thinking"));
-  if (visible.length === 0) return null;
+  const visible = visibleWorkParts(parts, showThinking);
+  if (visible.length === 0) return live && !waiting && pendingHead ? <PendingWorkHead title={t("Working…")} /> : null;
   const summary = workSummary(parts);
   const failed = workFailed(parts);
   // a blocked agent is not working: the open block takes the sidebar's words for it
@@ -628,6 +654,31 @@ function TaskResultRow({ task }: { task: OmoTaskResult }) {
   </ChatDetails>;
 }
 
+/** A Claude agent team's teammate reporting back: who, and what it said on request. Idle is that it
+ *  is free again, not a verdict on its task. */
+function TeammateMessageRow({ message, stateKey }: { message: TeammateMessage; stateKey: string }) {
+  const t = useT();
+  const [opened, setOpened] = useChatRowToggle(`teammate-loaded:${stateKey}`, false);
+  return <ChatDetails memoryKey={`teammate:${stateKey}`} className="chat-task-results chat-task-result chat-teammate-message" onToggle={(event) => { if (event.currentTarget.open) setOpened(true); }}>
+    <summary>
+      <Layers className="chat-task-result-icon" aria-hidden="true" />
+      <span className="chat-task-result-main">
+        <span className="chat-task-result-title">{message.name}</span>
+        {message.summary && <span className="chat-task-result-meta chat-teammate-preview">{message.summary}</span>}
+      </span>
+      <span className="chat-task-result-status">{message.status === "idle" ? t("Teammate idle") : t("Teammate message")}</span>
+      <ChevronDown className="chat-skill-caret" aria-hidden="true" />
+    </summary>
+    {opened && <div className="chat-task-result-body">
+      {message.text ? <Markdown>{message.text}</Markdown> : <p className="chat-task-result-note">{t("The teammate is available; no result was included")}</p>}
+      <ChatDetails memoryKey={`teammate-raw:${stateKey}`} className="chat-teammate-raw">
+        <summary>{t("Original delivery")}</summary>
+        <pre>{message.raw}</pre>
+      </ChatDetails>
+    </div>}
+  </ChatDetails>;
+}
+
 /** what a runtime notice was: a background result by name, anything else by its own first line */
 function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPart, { kind: "notice" }>): string {
   if (notice.source === undefined || notice.source === "async-result") return t("Background result delivered");
@@ -673,6 +724,15 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
   }
   if (turn.role === "user") {
     const text = turn.parts.filter((part): part is Extract<ConversationPart, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("\n\n");
+    // a teammate's delivery is recorded as a user prompt, but nobody typed it here
+    const teammateParts = teammateMessageParts(text);
+    if (teammateParts !== null) return <section className="chat-turn chat-teammate-messages" aria-label={t("Claude teammate messages")}>
+      {teammateParts.map((part, index) => part.kind === "teammate"
+        ? <TeammateMessageRow key={index} message={part} stateKey={String(index)} />
+        : <UserMessage key={index} text={part.text} skills={userSkills} />)}
+      <div className="chat-turn-meta">{time}<CopyButton text={text} label={t("Copy message")} onResult={copied} /></div>
+      {copyError}
+    </section>;
     return <article className="chat-turn chat-turn-user">
       <UserImages paneId={paneId} parts={turn.parts} text={text} />
       {/* one row: with a mouse the time and copy sit beside the bubble, on touch under it */}
@@ -691,7 +751,8 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
   return <article className="chat-turn chat-turn-agent">
     <SkillActivityList parts={turn.parts} />
     {goal !== null && <GoalActivity goal={goal} />}
-    {work.length > 0 && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} />}
+    {/* the pending head stands only above no answer: one above words would leave a gap when the turn ends */}
+    {(work.length > 0 || (live && answer.length === 0)) && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} pendingHead={answer.length === 0} />}
     {answer.map((part, index) => <Markdown key={index} skills={skills}>{part.text}</Markdown>)}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       {/* a mouse reads one copy glyph and the words "Plain text"; touch reads the two formats */}
@@ -993,11 +1054,8 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         showAnswerDetails(conversation);
         let next: ChatState;
         if (conversation.source !== "scrollback") next = conversationState(conversation);
-        else if (conversation.managed_session?.state === "identity_pending" || conversation.managed_session?.state === "blocked") {
-          // A managed identity refusal is not permission to read or infer terminal history.
-          next = { source: "scrollback", managedSession: conversation.managed_session, turns: [], messages: [], truncated: false };
-        }
-        else if (agent !== null) next = { source: "scrollback", managedSession: conversation.managed_session, turns: [], messages: [], truncated: false };
+        else if (conversation.managed_session !== undefined) next = { source: "scrollback", turns: [], messages: [], truncated: false, managedSession: conversation.managed_session };
+        else if (agent !== null) next = { source: "scrollback", turns: [], messages: [], truncated: false };
         else {
           // The reader has rejected this history. Hide it before the separate terminal
           // request, which may wait or fail; a transport error must not revive those turns.
@@ -1047,7 +1105,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   useEffect(() => { conversationRefresh.setPushes(conversationPushes); }, [conversationPushes, conversationRefresh]);
 
   // A scrollback stand-in has no native file for the server to watch. Its source is the
-  // pane's own screen, so terminal output is the invalidation, under the same 2s bound.
+  // pane's own screen, so terminal output is the invalidation, under the same 1s bound.
   useEffect(() => {
     if (state.source !== "scrollback" || !visible || onTerminalOutput === undefined) return;
     onTerminalOutput(() => conversationRefresh.invalidate());
@@ -1194,8 +1252,12 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         if (next !== lane) { lane = next; follow = true; }
       }
       if (follow && stickToBottom.current) {
+        // The list's scrollToEnd lands a frame later (see dropPendingListScroll), so the frame
+        // painted now would show the conversation's last lines under a composer that grew a line.
+        // This callback runs before that paint: put the view at the end here, then let the list
+        // settle its own scroll state.
+        node.scrollTop = node.scrollHeight;
         if (timeline.current) timeline.current.scrollToEnd({ animated: false });
-        else node.scrollTo({ top: node.scrollHeight, behavior: "instant" });
       }
     });
     observer.observe(node);
@@ -1306,9 +1368,13 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   }, [turns, restored]);
   heldPage.current = state.turns;
   const finishedBeforeSend = sentOver !== null && sentOver.page === state.turns ? sentOver.turn : null;
-  // the last turn is an open work block, whose head already says the agent works
   const lastShownTurn = state.source === "conversation" ? shownTurns.at(-1) : undefined;
-  const workBlockLive = lastShownTurn !== undefined && isLiveWorkTurn(lastShownTurn, true, workStatus, finishedBeforeSend);
+  const lastSplit = lastShownTurn !== undefined && isLiveWorkTurn(lastShownTurn, true, workStatus, finishedBeforeSend) ? splitTurn(lastShownTurn.parts) : null;
+  // the last turn runs and already says the agent works: its work block, or the head standing in
+  // for one while it has no answer yet
+  const workBlockLive = lastSplit !== null && (visibleWorkParts(lastSplit.work, settings.showThinking).length > 0 || lastSplit.answer.length === 0);
+  // a running turn with words and no work rows: the activity is a line under its words, as before
+  const answerOnlyLive = lastSplit !== null && !workBlockLive;
   const empty = state.source === "conversation" ? turns.length === 0 : agent === null && state.messages.length === 0;
   const blank = !ended && chatIsBlank({ loaded, failed: error !== null, transcript: state.source === "conversation", turns: turns.length, older: typeof olderCursor === "string", abandoned: abandoned?.count ?? 0, prompt: prompt !== null, agent });
   // the scrollback standing in says nothing of the conversation: it has no history to compare
@@ -1423,10 +1489,19 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         : <FailureLine action={t("Couldn't load the conversation")} failure={error} onRetry={retryRead} />)}
       {loaded && error === null && agent === "grok" && state.source !== "conversation" && <p className="chat-inline-state" role="status">{t("Grok chat is unavailable. Open Terminal to see activity and tool calls.")}</p>}
       {loaded && error === null && agent === "agy" && state.source !== "conversation" && <p className="chat-inline-state" role="status">{t("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.")}</p>}
-      {/* A native turn's activity, where no open work block says it: before the turn has an assistant
-          or tool row, and while it thinks (a work block's head says Working). One Working at a time. */}
-      {state.activity !== undefined && connected && !ended && activity !== "idle" && agentStatus !== "blocked" && prompt === null && (activity === "thinking" || !workBlockLive) && <p className="chat-activity" role="status"><CircleDot aria-hidden="true" />{activity === "thinking" ? t("Thinking…") : t("Working…")}</p>}
-      {loaded && empty && error === null && state.managedSession?.state !== "identity_pending" && state.managedSession?.state !== "blocked" && prompt === null && (state.activity === undefined || activity === "idle") && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
+      {/* The agent's activity, where no open work block says it: before the turn has an assistant or
+          tool row (Claude Code's spinner writes nothing to the transcript), and while a native turn
+          thinks (a work block's head says Working). Without native activity the pane status stands
+          in. One Working at a time. */}
+      {connected && !ended && activity !== "idle" && agentStatus !== "blocked" && prompt === null && (activity === "thinking" || !workBlockLive) && (workBlockLive
+        // under the running turn's own head, a second head would read as a second block
+        ? <p className="chat-activity chat-activity-line" role="status"><CircleDot aria-hidden="true" />{t("Thinking…")}</p>
+        // under a running turn's words: removing a line below them moves nothing when it ends
+        : answerOnlyLive
+          ? <p className="chat-activity chat-activity-line" role="status"><CircleDot aria-hidden="true" />{activity === "thinking" ? t("Thinking…") : t("Working…")}</p>
+          // before the turn has a row at all, where its work block will be drawn
+          : <PendingWorkHead className="chat-activity" title={activity === "thinking" ? t("Thinking…") : t("Working…")} />)}
+      {loaded && empty && error === null && prompt === null && activity === "idle" && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}
   </>;
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>
@@ -1458,7 +1533,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       renderRow={renderTurn}
     /> : <div className="chat-view" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={logLabel}>
       <div className="chat-transcript" data-conversation-source={state.conversationSource}>
-        {agent !== null && state.managedSession?.state !== "identity_pending" && state.managedSession?.state !== "blocked" ? <TerminalFallback key={paneId} paneId={paneId} visible={visible} />
+        {agent !== null && state.managedSession === undefined ? <TerminalFallback key={paneId} paneId={paneId} visible={visible} />
           : state.messages.map((message, index) => <FallbackTurn key={index} paneId={paneId} message={message} />)}
         {footer}
       </div>

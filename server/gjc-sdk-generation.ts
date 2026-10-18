@@ -5,6 +5,13 @@ export interface GjcSdkGenerationObserver {
   generationStatus(sessionId: string, generation: number): Promise<{ readonly status: string }>;
 }
 
+export class GjcSdkGenerationError extends Error {
+  constructor(readonly reason: "timeout" | "unavailable") {
+    super("GJC SDK generation lookup failed");
+    this.name = "GjcSdkGenerationError";
+  }
+}
+
 type ObserverConstructor = new (options: { agentDir: string; observer: true }) => GjcSdkGenerationObserver;
 const observers = new Map<string, Promise<GjcSdkGenerationObserver>>();
 
@@ -39,9 +46,12 @@ export async function gjcSdkGenerationCurrent(
   try {
     return await Promise.race([
       Promise.resolve(observer).then(async (current) => (await current.generationStatus(sessionId, generation)).status === "current"),
-      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 2_000); }),
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new GjcSdkGenerationError("timeout")), 2_000); }),
     ]);
+  } catch (error) {
+    if (error instanceof GjcSdkGenerationError) throw error;
+    const failure = typeof error === "object" && error !== null ? error as { code?: unknown; killed?: unknown; signal?: unknown } : null;
+    throw new GjcSdkGenerationError(failure?.killed === true || failure?.signal === "SIGKILL" || failure?.code === "ETIMEDOUT" ? "timeout" : "unavailable");
   }
-  catch { return false; }
   finally { if (timer !== undefined) clearTimeout(timer); }
 }

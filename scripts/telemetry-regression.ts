@@ -32,7 +32,6 @@ function fixtureSettings() {
   return {
     language: "en",
     palette: "catppuccin",
-    paletteLight: "catppuccin", paletteDark: "catppuccin", darkTheme: "catppuccin", lightTheme: "catppuccin-latte",
     terminalInputMode: "line",
     terminalFontSize: 17,
     chatFontSize: 19,

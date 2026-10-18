@@ -6,15 +6,16 @@ value. When a component needs a value that is not here, add it to both first.
 
 ## 1. Atmosphere & Identity
 
-A warm terminal: an amber-phosphor console on lamp-lit graphite (dark) or ledger paper (light),
-with chat-app clarity. Tonal surfaces and hairlines keep the chrome out of the way. There is ONE
-chrome color, amber: focus, the chosen lens, the terminal cursor and the user's own action (Send, primary
-buttons). Agent states carry the remaining saturated colors and none of them is amber. The user's
-chat turns are neutral raised cards, so a long thread never turns into a wall of color. Dark is the
-default, light follows the same hierarchy, and comfortable or compact density changes scale without
-changing information architecture. A neutral charcoal look, Catppuccin and herdr's built-in themes
-are opt-in (Settings → Appearance → Dark theme and Light theme); amber stays the default and the
-look before settings load.
+The herdr look (amber) is a warm terminal: an amber-phosphor console on lamp-lit graphite (dark) or ledger paper (light),
+with chat-app clarity. Tonal surfaces and hairlines keep the chrome out of the way. Each theme
+supplies its accent for focus, the chosen lens, the terminal cursor and the user's own action (Send,
+primary buttons). Agent states carry separate status colors. The user's chat turns are neutral raised
+cards, so a long thread never turns into a wall of color. Dark is the default, light follows the same
+hierarchy, and comfortable or compact density changes scale without changing information
+architecture. A new browser starts on the Report theme in both modes; its neutral surfaces and blue
+accent are available with all upstream themes in Settings → Appearance. Amber stays the base every
+theme block overrides and the look before settings load. Settings are saved on a user's first change,
+so a browser that never changed one moves to Report with everyone new.
 
 The sidebar is one grid: a leading cell that says who or what a row is (the coding agent's brand
 mark, else the place's own glyph), a title, and a trailing cell that says how it is. Workspaces
@@ -22,8 +23,8 @@ and Agents are independent lists, as in herdr's Spaces and Agents panels; tab an
 stays over the terminal and in the palette. Sections are parted by space and a dim head, never by
 a rule; the Agents list's workspace cards are an edge around rows, not a line between sections.
 Hover and selection are one neutral fill at two strengths. Brand marks are the only color
-there that is not a state, and a ready row draws no state at all. Amber connects focus, the chosen
-lens glyph and the terminal cursor.
+there that is not a state, and a ready row draws no state at all. The selected theme's accent connects
+focus, the chosen lens glyph and the terminal cursor.
 
 Messages say only what the person needs now, not everything the app knows:
 - Something to do: one sentence and the control that does it ("Couldn't attach [Try again]").
@@ -104,24 +105,24 @@ Only tokens overridden by `[data-theme="light"]` have a light value. Both column
 Each colour is at least 4.5:1 on its row's `--term-bg`. Dark rows use xterm's defaults.
 Normal and bright slots may share a colour to preserve the palette while keeping both readable.
 
-| ANSI | xterm key | report | amber | charcoal | catppuccin | catppuccin-latte | tokyo-night-day | gruvbox-light | one-light | solarized-light | kanagawa-lotus | rose-pine-dawn |
-|------|-----------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
-| 0 | `black` | `#242424` | `#2a251f` | `#242424` | `#4c4f69` | `#4c4f69` | `#3760bf` | `#3c3836` | `#383a42` | `#556a72` | `#545464` | `#464261` |
-| 1 | `red` | `#b3261e` | `#a82323` | `#b3261e` | `#ac0c2f` | `#ac0c2f` | `#90001b` | `#9d0006` | `#a51110` | `#b60006` | `#95002b` | `#873a52` |
-| 2 | `green` | `#22743a` | `#2f6317` | `#22743a` | `#28651b` | `#28651b` | `#405b1f` | `#676200` | `#287c2a` | `#5d6e00` | `#4a6228` | `#286983` |
-| 3 | `yellow` | `#8a5300` | `#8c5000` | `#8a5300` | `#8a5710` | `#8a5710` | `#6c4d1f` | `#8e5100` | `#995f00` | `#8a5f00` | `#625b2a` | `#9e5600` |
-| 4 | `blue` | `#0b6e8a` | `#155a72` | `#0b6e8a` | `#1750bf` | `#1750bf` | `#004db6` | `#076678` | `#2f64dd` | `#006baf` | `#4d699b` | `#286983` |
-| 5 | `magenta` | `#6f42c1` | `#8a3f7a` | `#6f42c1` | `#712fc6` | `#712fc6` | `#7847bd` | `#8f3f71` | `#a626a4` | `#c12073` | `#624c83` | `#755f8d` |
-| 6 | `cyan` | `#0f6f74` | `#0f6b6f` | `#0f6f74` | `#0e6b70` | `#0e6b70` | `#005f4a` | `#316b48` | `#0072a9` | `#00746d` | `#216276` | `#33717c` |
-| 7 | `white` | `#5f5b56` | `#685e52` | `#5f5b56` | `#5c5f77` | `#5c5f77` | `#41508a` | `#504945` | `#686b77` | `#5a6a6c` | `#43436c` | `#605b78` |
-| 8 | `brightBlack` | `#4e4b47` | `#5a5045` | `#4e4b47` | `#64677d` | `#64677d` | `#41508a` | `#504945` | `#686b77` | `#586e75` | `#43436c` | `#605b78` |
-| 9 | `brightRed` | `#c92d24` | `#c42b2b` | `#c92d24` | `#c41545` | `#c41545` | `#90001b` | `#9d0006` | `#a51110` | `#b60006` | `#95002b` | `#873a52` |
-| 10 | `brightGreen` | `#277d3f` | `#3b741c` | `#277d3f` | `#2f7620` | `#2f7620` | `#405b1f` | `#676200` | `#287c2a` | `#5d6e00` | `#4a6228` | `#286983` |
-| 11 | `brightYellow` | `#9f6100` | `#9d5a00` | `#9f6100` | `#905c13` | `#905c13` | `#6c4d1f` | `#8e5100` | `#995f00` | `#8a5f00` | `#625b2a` | `#9e5600` |
-| 12 | `brightBlue` | `#1a7391` | `#1d6f8c` | `#1a7391` | `#0b59f4` | `#0b59f4` | `#004db6` | `#076678` | `#2f64dd` | `#006baf` | `#4d699b` | `#286983` |
-| 13 | `brightMagenta` | `#7f52d1` | `#a24b90` | `#7f52d1` | `#8839ef` | `#8839ef` | `#7847bd` | `#8f3f71` | `#a626a4` | `#c12073` | `#624c83` | `#755f8d` |
-| 14 | `brightCyan` | `#13767e` | `#117676` | `#13767e` | `#13737a` | `#13737a` | `#005f4a` | `#316b48` | `#0072a9` | `#00746d` | `#216276` | `#33717c` |
-| 15 | `brightWhite` | `#111111` | `#16120d` | `#111111` | `#4c4f69` | `#4c4f69` | `#3760bf` | `#3c3836` | `#383a42` | `#556a72` | `#545464` | `#464261` |
+| ANSI | xterm key | report | amber | charcoal | codex | catppuccin | catppuccin-latte | tokyo-night-day | gruvbox-light | one-light | solarized-light | kanagawa-lotus | rose-pine-dawn |
+|------|-----------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
+| 0 | `black` | `#242424` | `#2a251f` | `#242424` | `#1a1c1f` | `#4c4f69` | `#4c4f69` | `#3760bf` | `#3c3836` | `#383a42` | `#556a72` | `#545464` | `#464261` |
+| 1 | `red` | `#b3261e` | `#a82323` | `#b3261e` | `#b3261e` | `#ac0c2f` | `#ac0c2f` | `#90001b` | `#9d0006` | `#a51110` | `#b60006` | `#95002b` | `#873a52` |
+| 2 | `green` | `#22743a` | `#2f6317` | `#22743a` | `#22743a` | `#28651b` | `#28651b` | `#405b1f` | `#676200` | `#287c2a` | `#5d6e00` | `#4a6228` | `#286983` |
+| 3 | `yellow` | `#8a5300` | `#8c5000` | `#8a5300` | `#8a5300` | `#8a5710` | `#8a5710` | `#6c4d1f` | `#8e5100` | `#995f00` | `#8a5f00` | `#625b2a` | `#9e5600` |
+| 4 | `blue` | `#0b6e8a` | `#155a72` | `#0b6e8a` | `#0b6e8a` | `#1750bf` | `#1750bf` | `#004db6` | `#076678` | `#2f64dd` | `#006baf` | `#4d699b` | `#286983` |
+| 5 | `magenta` | `#6f42c1` | `#8a3f7a` | `#6f42c1` | `#6f42c1` | `#712fc6` | `#712fc6` | `#7847bd` | `#8f3f71` | `#a626a4` | `#c12073` | `#624c83` | `#755f8d` |
+| 6 | `cyan` | `#0f6f74` | `#0f6b6f` | `#0f6f74` | `#0f6f74` | `#0e6b70` | `#0e6b70` | `#005f4a` | `#316b48` | `#0072a9` | `#00746d` | `#216276` | `#33717c` |
+| 7 | `white` | `#5f5b56` | `#685e52` | `#5f5b56` | `#5f5b56` | `#5c5f77` | `#5c5f77` | `#41508a` | `#504945` | `#686b77` | `#5a6a6c` | `#43436c` | `#605b78` |
+| 8 | `brightBlack` | `#4e4b47` | `#5a5045` | `#4e4b47` | `#4e4b47` | `#64677d` | `#64677d` | `#41508a` | `#504945` | `#686b77` | `#586e75` | `#43436c` | `#605b78` |
+| 9 | `brightRed` | `#c92d24` | `#c42b2b` | `#c92d24` | `#c92d24` | `#c41545` | `#c41545` | `#90001b` | `#9d0006` | `#a51110` | `#b60006` | `#95002b` | `#873a52` |
+| 10 | `brightGreen` | `#277d3f` | `#3b741c` | `#277d3f` | `#277d3f` | `#2f7620` | `#2f7620` | `#405b1f` | `#676200` | `#287c2a` | `#5d6e00` | `#4a6228` | `#286983` |
+| 11 | `brightYellow` | `#9f6100` | `#9d5a00` | `#9f6100` | `#9f6100` | `#905c13` | `#905c13` | `#6c4d1f` | `#8e5100` | `#995f00` | `#8a5f00` | `#625b2a` | `#9e5600` |
+| 12 | `brightBlue` | `#1a7391` | `#1d6f8c` | `#1a7391` | `#1a7391` | `#0b59f4` | `#0b59f4` | `#004db6` | `#076678` | `#2f64dd` | `#006baf` | `#4d699b` | `#286983` |
+| 13 | `brightMagenta` | `#7f52d1` | `#a24b90` | `#7f52d1` | `#7f52d1` | `#8839ef` | `#8839ef` | `#7847bd` | `#8f3f71` | `#a626a4` | `#c12073` | `#624c83` | `#755f8d` |
+| 14 | `brightCyan` | `#13767e` | `#117676` | `#13767e` | `#13767e` | `#13737a` | `#13737a` | `#005f4a` | `#316b48` | `#0072a9` | `#00746d` | `#216276` | `#33717c` |
+| 15 | `brightWhite` | `#111111` | `#16120d` | `#111111` | `#0d0d0d` | `#4c4f69` | `#4c4f69` | `#3760bf` | `#3c3836` | `#383a42` | `#556a72` | `#545464` | `#464261` |
 <!-- END GENERATED THEMES -->
 
 The glass tokens are expressions over the palette above, not colors of their own:
@@ -138,14 +139,14 @@ paper, not UI, and the viewer (`.file-viewer-pdf`) must not tint it for the them
 
 ### Themes
 
-`settings.darkTheme` and `settings.lightTheme` (both `amber` by default) name the theme each mode
+`settings.darkTheme` and `settings.lightTheme` (both `report` by default) name the theme each mode
 draws. The resolved entry is written as `data-theme` (its mode) and `data-palette` (its id). Any
 theme can be picked on either side. Picking one half of a herdr pair also sets the other side to
-its sibling, but only while that side still holds `amber` (the default, even if picked by hand) or
-the sibling of the previous pick; any other value is kept. A dark theme picked for light mode still
-draws dark.
-The themes are amber, charcoal and catppuccin plus herdr's built-ins; herdr's `terminal` theme is
-not offered. The tables above are amber, the base blocks; every other theme overrides them in a
+its sibling, but only while that side still holds `report`, an earlier default (`codex` or `amber`)
+or the sibling of the previous pick; any other value is kept. A
+dark theme picked for light mode still draws dark.
+The themes are Report, amber, charcoal, codex and catppuccin plus herdr's built-ins; herdr's
+`terminal` theme is not offered. The tables above are amber, the base blocks; every other theme overrides them in a
 `[data-theme][data-palette]` block of `src/styles.css`.
 
 The theme blocks of `src/styles.css` are the theme table and the one place a theme color is
@@ -170,6 +171,10 @@ all palettes) and dark Catppuccin, whose elevated surface is darker than its can
 - **Charcoal** is a neutral Ghostty-style dark: near-black canvas, a slightly lighter panel and
   terminal, a near-white accent and primary, and muted agent states. It keeps amber's rounded
   corners and card shadow. In light it's plain paper with an ink accent and cursor.
+- **Codex** copies the Codex desktop app's default theme export: surface `#ffffff` / `#181818`,
+  ink `#1a1c1f` / `#ffffff` and accent `#3a83f7`. The chrome sits one quiet step off the surface,
+  the primary control is ink as Codex's send button, and agent states and code take Codex's
+  diff and skill colors, moved in lightness only as far as AA needs.
 - **Catppuccin** follows [catppuccin.com/palette](https://catppuccin.com/palette/), its style guide
   and its Zed port: Mocha in dark, Latte in light. In both the content (chat canvas `--bg`,
   terminal) is Base, the chrome (`--bg-panel`: sidebar, the header over it and on a phone, tabs) and elevated surfaces Mantle,
@@ -513,8 +518,9 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
 
 ### Settings
 - `theme`: `dark`, `light`, or `system`; default `dark`.
-- `palette`: `amber`, `charcoal` or `catppuccin`; default `amber`. A removed palette (`report`,
-  `lilac`, `forest`) loads as `amber`.
+- `palette`: the legacy mirror of the drawn side's theme for older app versions; default `codex`.
+  A record with no palette (saved before palettes) or a removed one (`report`, `lilac`, `forest`)
+  loads as `amber`.
 - `density`: `comfortable` or `compact`; default `comfortable`.
 - `sidebarRows`: `one` or `two`; default `one`.
 - Terminal font size is independent: default `13px`, clamped to `10–22px`.
@@ -544,6 +550,11 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   `diffStyle`: `unified` (default) or `split` for a repository diff (a phone draws one column
   whatever it says, and the viewer says so).
   These layout choices stay on this device, like chat width.
+- New agents (Settings → Integrations): `claudeLaunchMode` (`--permission-mode`: `acceptEdits`,
+  `auto`, `plan`, `dontAsk`, `bypassPermissions`) and `codexLaunchMode` (`readOnly`, `auto`,
+  `fullAccess`, each a `--sandbox` and `--ask-for-approval` pair) become the `agent.args` the new
+  workspace, tab and worktree dialogs send (src/lib/agentLaunchMode.ts). `default` (the default)
+  adds nothing, so the agent's own configuration decides. Both are shared across devices.
   The viewer loads a Markdown file's first 256 KB through one bounded streaming reader, with abort
   on close or navigation and a 5 s deadline; any other text that fits 256 KB reads whole under the
   same budget, and a larger one reads up to 8 MB and 200 000 lines with a 30 s deadline
@@ -886,12 +897,14 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   Clicking its name opens the
   selected pane in that workspace, else the last viewed pane, else the pane herdr has focused,
   else its first pane. Tabs are selected from the tab strip; panes are selected on the canvas or from the command palette.
-- A top-level workspace row starts with a folder glyph in the grid's leading cell, under the
-  PC's monitor; the row's mark and name follow it. For a repository workspace with linked
-  worktree workspaces that folder is the group's fold, a button (`.workspace-toggle`) in
-  `--text`: open while the worktrees show, closed while they are folded, when a dim `+N` after
-  the name counts the checkouts put away. For any other workspace it is a dim glyph and no
-  control. Worktree rows have no folder: they sit one cell in, their marks under the parent's.
+- A top-level workspace row starts with its project's icon in the grid's leading cell, under the
+  PC's monitor, or a folder glyph when its folder keeps none; the row's mark and name follow it.
+  For a repository workspace with linked worktree workspaces that cell is the group's fold, a
+  button (`.workspace-toggle`) in `--text`: the folder (no icon) is open while the worktrees show
+  and closed while they are folded, when a dim `+N` after the name counts the checkouts put away;
+  a project icon stays until a pointer hovers the row or the button takes keyboard focus, when
+  that same open or closed folder takes its place. Where nothing hovers (touch) the folder always
+  shows. For any other workspace it is a dim glyph or the icon, and no control. Worktree rows have no folder: they sit one cell in, their marks under the parent's.
   Worktree folds are remembered at
   `herdr-web-ui:worktree-group-collapsed:<machineId>:<repo_key>`; a folded group keeps the selected
   child visible, and status snapshots preserve a deliberate fold.
@@ -924,10 +937,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   A disconnected PC's saved workspace and agent rows are dimmed, inert and draw no state until that PC reconnects.
 - The Agents list is flat and every row names its own place. Pinned agents (pinned from a row's
   menu) stand first, in the order they were pinned, in a card (a `--hairline` `--border` edge,
-  `--radius-lg`, `--space-1` padding, no fill, so hover and selection read inside it as elsewhere),
+  `--radius-lg`, no fill, so hover and selection read inside it as elsewhere),
   with no mark of their own (the card says so); the rest follow `--space-2` below in the
-  chosen order. The Agents head is the only head (the pinned list is labelled **Pinned** for screen
-  readers); without pins there is no card. Pins are shared with the other browsers of the server.
+  chosen order. The card's caption sits on its top edge, as a fieldset's legend does
+  (`.sidebar-pinned-label`: a pin and **PINNED**, centered, `--fs-2xs` semibold caps in
+  `--text-dim` on the `--bg-panel` it masks the edge with); it is hidden from screen readers,
+  where the list itself is labelled **Pinned**. Without pins there is no card and no caption. Pins are shared with the other browsers of the server.
 - Appearance's **Sidebar rows** is **One line** by default: a workspace row is its name, and an
   agent row is one line on a workspace row's height, its dim place after the title (the title keeps
   its width first, the place takes what is left with an ellipsis). Two lines draws the row as the
@@ -951,7 +966,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   On One line, as in herdr's own sidebar, a top-level git workspace (a repository, or a worktree
   whose repository is not open) says its branch under its name in `--text-dim` `--fs-xs`, on a
   two-line row's height (`--side-row-2`); an indented worktree, whose name already comes from its
-  branch, and a folder outside git stay one line. The branch is read with the worktree inventory
+  branch, a pinned workspace in its card (the branch stays in its tooltip and menu) and a folder
+  outside git stay one line. The branch is read with the worktree inventory
   (`useWorktreeBranches`), a repository without worktrees and a git workspace herdr has not marked
   included. As herdr draws its tree, each indented worktree hangs from its repository's folder on
   a `--hairline` `--border-strong` branch in the indent: a tee for each but the last, an elbow for
@@ -969,7 +985,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   next or previous group with its worktrees, and a worktree moves among its siblings only.
 - A workspace is pinned from its row menu (**Pin workspace** / **Unpin workspace**, first in the
   menu), as Paseo pins a chat: pinned workspaces leave their place and stand first in their PC's
-  list, in the order they were pinned, in the Agents list's card (`.sidebar-pinned`), with no mark
+  list, in the order they were pinned, in the Agents list's card (`.sidebar-pinned`, under the same **Pinned** caption), with no mark
   of their own either. A pinned repository's workspace stands alone in the card; its unpinned
   worktrees stay as standalone rows at the group's position, in their order. They are not dragged
   or moved away from their repository; unpinning the head restores the group. A pinned worktree
@@ -999,17 +1015,21 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Rows use only shared theme tokens in dark and light. Touch keeps row menus and folds visible,
   with `--touch-target` controls, and draws no hover fill; reduced motion removes row transitions
   and keeps the working dot's breath (opacity only).
-- Footer holds the contextual **Install app** action and Settings with the plan meters beside it,
+- Footer holds the contextual **Install app** action and Settings, its gear alone (named
+  **Settings** to screen readers and in its tooltip), with the plan meters filling the rest of its row,
   as rows on the same grid with no rule above.
   It carries no product name or version: the running versions are read in Settings.
 
 ### Plan meters (`.usage*`)
-- Beside Settings, one button holding up to four chips (three and `+N` past that), one per
-  account in the user's order: provider mark, mono `--fs-2xs` percent of the limit chosen in
-  Settings, the plan's week or its session (used, or left when Settings says so), and a 2px bar on a `--border-strong` track
+- Right of the Settings gear, one button holding as many chips as the row has room for (judged
+  by the widest chip drawn, so the count settles), the rest folded into `+N`, one per account in
+  the user's order: provider mark, mono `--fs-2xs` percent of the limit chosen in Settings, the
+  plan's session by default or its week (what is left by default, or what is used), and a 2px bar on a `--border-strong` track
   filled to that percent. From 80% used the percent and bar take `--status-blocked`; amber stays
   chrome. A chip whose numbers are stale or missing dims. An account hidden in Settings is
-  left out of the strip and the popover; with every account hidden, neither shows.
+  left out of the strip and the popover; with every account hidden, neither shows. The button's
+  name and tooltip add, per account, another of its limits from 80% used that the chip does not
+  show (`(Weekly 9% left)`); the chip itself does not mark it.
 - The button opens a popover above the footer (`--shadow-pop`, `--radius-lg`), as wide as the
   footer and scrolling when it outgrows the sidebar: per account its mark, name and plan pill with
   the email or login right-aligned and ellipsized, then one row per limit (label, reset time, right-aligned percent) over a 4px bar. A problem
@@ -1279,6 +1299,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   header is one row: the name cut inside its stem, Show source and Copy, a **More** (Ellipsis)
   menu holding new tab, raw and download, then Close; the size and folder are left out there unless
   a partial-view notice is among them. A reader page has no Close.
+  A file opens in the popup unless Settings → Chat → Open files is Beside the pane (`fileOpen`,
+  per device), which docks text and code from 980px; the header button moves the open file either way.
+  This differs from t3code's and paseo's docked file panels, whose look the docked viewer keeps: a
+  file read from the chat leaves the chat its width unless the user asks for the split.
   Docked beside the pane (from 980px, `aside.file-panel`) the viewer is a split of the workspace on
   `--bg` behind one `--border` hairline, not a raised card, and its chrome is two thin rows on
   hairlines (t3code's file surface subheader, paseo's file panel bar): a header of
@@ -1424,8 +1448,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   picked or typed, also when it asks the same question again. An answer that comes back after
   its card is gone (the next prompt is showing, or another pane is open) changes nothing on
   screen.
-- The composer keeps the resize grip's hit strip (`--composer-grip-h`) for itself under the card,
-  as it does under the held messages: the grip never lies over the card's last row.
+- A chevron at the header's end (`.prompt-card-fold`, after View plan) folds the card to its
+  header, to read the transcript under it, and opens it again (`aria-expanded`, Collapse question
+  / Expand question). The question still waits, so the card stays: a fold, never a dismiss. The
+  sending line and an error still show while folded, a typed pick's confirm row opens the card, and
+  the next prompt's card starts open. Follows T3 Code's pending-question panel, which folds per
+  question the same way; its dismiss without answering needs an answer herdr's prompts do not have.
 - A form of several questions (omo) shows a row of step chips (`.prompt-card-steps`) under the
   header: a chip per question, pill-shaped, mono number or a check once answered (`--accent`), the
   one asked now with an `--accent` border, `--accent-tint` fill and a `--primary` number. The title
@@ -1557,8 +1585,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   is no separate Queue button or send menu. The placeholder is `Message <agent>…`; message text
   uses `--fs-chat` scaled by `--chat-scale` on `--lh-code` with a fine pointer. Otherwise it
   uses that scaled size or `--fs-input`, whichever is larger, keeping the 16px floor that avoids
-  iOS zoom. Changing Chat font size or density resizes an automatic box around its existing
-  draft; a height chosen with the grip stays chosen.
+  iOS zoom. Changing Chat font size or density resizes the box around its existing draft. The
+  box's height is automatic only: it has no resize grip.
 - A local desktop composer shows the first visible account in Settings order for its agent's
   provider as a read-only usage reference inside the model pill. Plan-wide five-hour session is
   preferred, with weekly fallback; scoped, failed and unavailable limits do not substitute.
@@ -1591,11 +1619,6 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   starts, add and the round button keep their row, and the card grows by that row while the
   sentence shows. The primary control and add are disabled. With a draft, the reconnecting sentence is said instead of
   `Uploading file…`, never both: the attachment's own tile says it is uploading.
-- The resize grip is a short bar on the card's top edge. On a fine pointer (`(hover: hover) and
-  (pointer: fine) and (not (any-pointer: coarse))`) the bar is drawn while the card is hovered,
-  while it is dragged, on its own keyboard focus, and while a manual height is set; on any coarse
-  pointer it is always drawn. Its hit area lies above the card (`--composer-grip-h`), and the
-  composer keeps that strip free after the held-message list and after a prompt card.
 - The stack over the input card, on its column, is written once (PaneTerminal): held messages,
   then the prompt card (see Prompt card), then the input card. The notices are the input card's
   own: they stand inside the composer, over the card and its quick replies, so they move with it
@@ -1615,7 +1638,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the card, as t3code's composer banner stack orders them (`src/lib/composerNotices.ts`). A
   dismissal lasts while the notice stands and says the same thing; it is forgotten once the
   notice goes or changes its words, so the next one shows again, and another pane's dismissals
-  never carry over. The group keeps the grip's hit strip free under it. With no input card (view
+  never carry over. With no input card (view
   only, ended, a secret prompt) the pills stay where the terminal lens draws them, and a notice
   keeps a phone's card docked: it never floats over the transcript.
 - Held messages (`.composer-queue`) are quiet rows on the input card's column, above it: the
@@ -1671,7 +1694,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - On a touch screen, picking a pane (drawer, palette, notification) or switching its lens never
   raises the keyboard: the user reads first, and a tap on the message box or the grid raises it.
   A desktop's picked pane takes typing at once.
-- Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. On touch screens the same device setting is shown inverted as **Return inserts a new line**, with Send and hardware Mod+Enter explained below it. IME Enter is ignored. Stop sends Escape. While the agent works and a draft shows Send in Stop's place, Escape in the box is Stop; an open completion menu takes the first Escape. Working Send schedules a pending message; its Send now action submits that same message now.
+- Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. On touch screens the same device setting is shown inverted as **Return inserts a new line**, with Send and hardware Mod+Enter explained below it. IME Enter is ignored. Stop sends Escape. While the agent works and a draft shows Send in Stop's place, Escape in the box is Stop; an open completion menu takes the first Escape, and its X in the top corner (`.composer-menu-close`, Close suggestions, sticky over the rows it scrolls; the first row leaves it room) does the same for a pointer or a phone, which has no Escape, keeping the text and the focus in the box. T3 Code's command menu closes on Escape alone. Working Send schedules a pending message; its Send now action submits that same message now.
 
 ### Voice input
 - A mic button sits beside the add button in the composer and beside Send in the terminal input line; it

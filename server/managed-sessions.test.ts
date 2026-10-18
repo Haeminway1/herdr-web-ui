@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { ConversationUnavailable, conversationForPane as readConversation, HistoryChanged, resolveTranscript as readTranscript } from "./conversation.ts";
-import { labelManagedPanes as projectPanes, resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
-import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
+import { labelManagedPanes as projectPanes, resolveManagedSession, type ManagedGjcSessionProof, type ManagedSessionDeps } from "./managed-sessions.ts";
+import { GjcSdkLookupError } from "./gjc-sdk.ts";
+import { GjcSdkGenerationError } from "./gjc-sdk-generation.ts";
 import { createGjcStatus, gjcPanes as discoverGjc } from "./gjc-status.ts";
 import { omoPanes, omoSessionForPane } from "./omo.ts";
 
@@ -16,10 +17,11 @@ let pane: HerdrPane;
 let record: Record<string, unknown>;
 let oldNamespace: string | undefined;
 let observed: { pid: number; starttime: string; boot: string; cwd: string } | null;
-let live: GjcSdkSessionIdentity | null;
+let live: ManagedGjcSessionProof | null;
 const deps: ManagedSessionDeps = {
   processIdentity: pid => observed?.pid === pid ? { ...observed } : null,
   gjcSession: async () => live,
+  gjcGeneration: async () => true,
 };
 const message = (role: string, text: string) => JSON.stringify({ type: "message", message: { role, content: [{ type: "text", text }] } });
 const save = () => writeFileSync(recordFile, JSON.stringify(record), { mode: 0o600 });
@@ -145,10 +147,10 @@ it.each(["sessionId", "pid", "hostIncarnation"] as const)("rejects a live SDK %s
   await expect(conversationForPane(pane)).rejects.toThrow("blocked_gjc_session_mismatch");
 });
 
-it("waits when SDK authority is absent, even with a pinned inode", async () => {
+it("blocks when SDK authority is absent, even with a pinned inode", async () => {
   live = null;
-  expect(await resolve()).toMatchObject({ identity: { state: "identity_pending" }, sessionFile: null });
-  await expect(conversationForPane(pane)).rejects.toThrow("identity_pending");
+  expect(await resolve()).toMatchObject({ identity: { state: "blocked", reason: "blocked_gjc_session_absent" }, sessionFile: null });
+  await expect(conversationForPane(pane)).rejects.toThrow("blocked_gjc_session_absent");
 });
 
 it.each(["starttime", "boot", "cwd"] as const)("rejects a changed process %s", async field => {
@@ -189,6 +191,38 @@ it("rejects a symlink substitution during native identity lookup", async () => {
 it("rejects a native session switch across a transcript read", async () => {
   let calls = 0;
   await expect(readConversation(pane, undefined, {}, { ...deps, gjcSession: async () => ++calls === 1 ? live : { ...live!, sessionId: "switched" } })).rejects.toThrow("blocked_managed_identity_changed");
+});
+
+it("keeps an SDK timeout retryable during managed identity resolution", async () => {
+  await expect(resolveManagedSession(pane, namespace, { ...deps, gjcSession: async () => { throw new GjcSdkLookupError("timeout"); } }))
+    .rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "timeout" });
+});
+
+it("keeps an SDK timeout retryable during read-after-validation", async () => {
+  let calls = 0;
+  const timeoutDuringValidation: ManagedSessionDeps = {
+    ...deps,
+    gjcSession: async () => { calls++; if (calls > 1) throw new GjcSdkLookupError("timeout"); return live; },
+  };
+  await expect(readConversation(pane, undefined, {}, timeoutDuringValidation))
+    .rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "timeout" });
+  expect(calls).toBe(2);
+});
+
+it("keeps a generationStatus timeout retryable during read-after-validation", async () => {
+  let checks = 0;
+  const timeoutDuringGenerationProof: ManagedSessionDeps = {
+    ...deps,
+    gjcGeneration: async () => { checks++; if (checks > 1) throw new GjcSdkGenerationError("timeout"); return true; },
+  };
+  await expect(readConversation(pane, undefined, {}, timeoutDuringGenerationProof))
+    .rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "timeout" });
+  expect(checks).toBe(2);
+});
+
+it("blocks a managed GJC whose exact runtime generation is no longer current", async () => {
+  const result = await resolveManagedSession(pane, namespace, { ...deps, gjcGeneration: async () => false });
+  expect(result?.identity).toMatchObject({ state: "blocked", reason: "blocked_gjc_generation_changed" });
 });
 
 it.each([
@@ -358,6 +392,56 @@ it("rejects a replaced generation's cursors even when it keeps the same exact fi
   record.generation = 2; pane.tokens!.hm_managed_generation = "2"; save();
   await expect(conversationForPane(pane, undefined, { before: first.cursor! })).rejects.toBeInstanceOf(HistoryChanged);
   const second = await conversationForPane(pane); expect(second.history_id).not.toBe(first.history_id); expect(second.version).not.toBe(first.version);
+});
+
+it("rejects an old cursor after a new generation switches both session id and file", async () => {
+  const header = JSON.stringify({ type: "session", id: sessionId, cwd: root });
+  writeFileSync(sessionFile, [header, ...Array.from({ length: 500 }, (_, i) => [message("user", `old question ${i}`), message("assistant", `old answer ${i}`)]).flat()].join("\n") + "\n");
+  const first = await conversationForPane(pane);
+  expect(first.cursor).toBeString();
+  const nextId = "00000000-0000-4000-8000-000000000002";
+  const nextFile = join(dirname(sessionFile), "generation-two.jsonl");
+  writeFileSync(nextFile, [JSON.stringify({ type: "session", id: nextId, cwd: root }), message("user", "new question"), message("assistant", "generation two answer")].join("\n") + "\n", { mode: 0o600 });
+  const nextInfo = statSync(nextFile);
+  record.generation = 2;
+  record.session_id = nextId;
+  record.session_file = nextFile;
+  record.file_identity = { dev: nextInfo.dev, ino: nextInfo.ino };
+  pane.tokens!.hm_managed_generation = "2";
+  live = { ...live!, sessionId: nextId, endpointGeneration: 2 };
+  save();
+  await expect(conversationForPane(pane, undefined, { before: first.cursor! })).rejects.toBeInstanceOf(HistoryChanged);
+  const second = await conversationForPane(pane);
+  expect(second.managed_session).toMatchObject({ generation: 2, session_id: nextId });
+  expect(second.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: "generation two answer" });
+  expect(second.turns.flatMap((turn) => turn.parts).some((part) => part.kind === "text" && part.text.startsWith("old answer"))).toBe(false);
+});
+
+it("does not return an in-flight answer after the managed session switches files and generations", async () => {
+  const nextId = "00000000-0000-4000-8000-000000000003";
+  const nextFile = join(dirname(sessionFile), "inflight-generation-two.jsonl");
+  writeFileSync(nextFile, [JSON.stringify({ type: "session", id: nextId, cwd: root }), message("user", "new question"), message("assistant", "new generation answer")].join("\n") + "\n", { mode: 0o600 });
+  const nextInfo = statSync(nextFile);
+  let calls = 0;
+  const rollingDeps: ManagedSessionDeps = {
+    ...deps,
+    gjcSession: async () => {
+      calls++;
+      if (calls === 1) return live;
+      record.generation = 2;
+      record.session_id = nextId;
+      record.session_file = nextFile;
+      record.file_identity = { dev: nextInfo.dev, ino: nextInfo.ino };
+      pane.tokens!.hm_managed_generation = "2";
+      live = { ...live!, sessionId: nextId, endpointGeneration: 2 };
+      save();
+      return live;
+    },
+  };
+  await expect(readConversation(pane, undefined, {}, rollingDeps)).rejects.toMatchObject({
+    name: "ConversationUnavailable", message: "blocked_managed_identity_changed",
+  });
+  expect(calls).toBe(2);
 });
 
 describe.each(["gjc", "omo", "codex", "claude"] as const)("%s exact managed transcript", harness => {

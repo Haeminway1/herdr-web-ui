@@ -60,7 +60,7 @@ class Pc {
     const bin = join(this.scratch, "bin");
     mkdirSync(bin);
     mkdirSync(join(this.scratch, "plugin", "scripts"), { recursive: true });
-    writeFileSync(join(this.scratch, "plugin", "scripts", "plugin.ts"), `import { existsSync } from "node:fs";\nif (process.argv[2] === "phone") console.log("the phone step");\nif (process.argv[2] === "status" && existsSync(process.env.SCRATCH + "/running")) console.log("running http://127.0.0.1:7317 (pid 1234)");\n`);
+  writeFileSync(join(this.scratch, "plugin", "scripts", "plugin.ts"), `import { existsSync } from "node:fs";\nif (process.argv[2] === "phone") console.log("the phone step");\nif (process.argv[2] === "status" && existsSync(process.env.SCRATCH + "/running")) console.log("running http://127.0.0.1:7320 (pid 1234)");\n`);
     for (const tool of ["sh", "bash", "cat", "uname", "ldd", "grep", "curl", "git", "tar", "awk", "sed", "mktemp", "rm", "sleep", "perl", "mv"]) {
       if (tool === "perl" && options.perl === false) continue;
       const real = Bun.which(tool);
@@ -169,9 +169,9 @@ it("extracts only the URL from a PID-bearing Windows status line", () => {
   const pattern = /, '([^']+)'\)\.Groups\[1\]\.Value$/.exec(assignment ?? "")?.[1];
   if (pattern === undefined) throw new Error("Windows installer origin pattern not found");
 
-  const origin = new RegExp(pattern).exec("running http://127.0.0.1:7317 (pid 1234)")?.[1];
+  const origin = new RegExp(pattern).exec("running http://127.0.0.1:7320 (pid 1234)")?.[1];
 
-  expect(origin).toBe("http://127.0.0.1:7317");
+  expect(origin).toBe("http://127.0.0.1:7320");
 });
 
 // install.sh is the Linux and macOS installer: Windows has install.ps1 and scripts/windows-install.test.ps1
@@ -247,8 +247,8 @@ describe.skipIf(platform() === "win32")("install.sh and the browser", () => {
     const pc = new Pc().running();
     const { out, exitCode } = await pc.unattended({ DISPLAY: ":0" });
     expect(exitCode).toBe(0);
-    expect(out).toContain("opened http://127.0.0.1:7317 in your browser");
-    expect(await pc.opened(true)).toBe("http://127.0.0.1:7317");
+    expect(out).toContain("opened http://127.0.0.1:7320 in your browser");
+    expect(await pc.opened(true)).toBe("http://127.0.0.1:7320");
   });
 
   it.concurrent("does not open it again on a rerun", async () => {
@@ -263,7 +263,7 @@ describe.skipIf(platform() === "win32")("install.sh and the browser", () => {
     const pc = new Pc().running();
     const { out, exitCode } = await pc.unattended({ DISPLAY: ":0", SSH_CONNECTION: "10.0.0.2 50000 10.0.0.3 22" });
     expect(exitCode).toBe(0);
-    expect(out).toContain("ssh -L 7317:127.0.0.1:7317");
+    expect(out).toContain("ssh -L 7320:127.0.0.1:7320");
     expect(await pc.opened(false)).toBeNull();
   });
 
@@ -272,7 +272,7 @@ describe.skipIf(platform() === "win32")("install.sh and the browser", () => {
       const pc = new Pc().running();
       const { out, exitCode } = await pc.unattended({ DISPLAY: ":0", ...env });
       expect(exitCode).toBe(0);
-      expect(out).toContain("open http://127.0.0.1:7317 in your browser");
+      expect(out).toContain("open http://127.0.0.1:7320 in your browser");
       expect(await pc.opened(false)).toBeNull();
     });
   }
@@ -281,7 +281,7 @@ describe.skipIf(platform() === "win32")("install.sh and the browser", () => {
     const pc = new Pc().running();
     const { out, exitCode } = await pc.unattended();
     expect(exitCode).toBe(0);
-    expect(out).toContain("open http://127.0.0.1:7317 in your browser");
+      expect(out).toContain("open http://127.0.0.1:7320 in your browser");
     expect(await pc.opened(false)).toBeNull();
   });
 

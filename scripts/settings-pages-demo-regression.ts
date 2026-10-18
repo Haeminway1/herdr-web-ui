@@ -20,7 +20,7 @@ import { comboKey, LEGACY_COMBOS } from "./theme-baseline.ts";
 // HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-settings-demo-"));
 const PAGES = ["Appearance", "Chat", "Terminal", "Alerts", "Voice input", "Subscription usage", "Shortcuts", "Phone & devices", "Remote PCs", "Agent integrations", "About"];
-const SETTINGS = { language: "en", showUsage: true, voiceInput: true, showQuickReplies: true };
+const SETTINGS = { language: "en", showUsage: true, voiceInput: true, showQuickReplies: true, fileOpen: "panel" };
 
 const dialogOf = (page: Page) => page.getByRole("dialog", { name: "Settings", exact: true });
 const openSettings = async (page: Page): Promise<void> => {
@@ -129,6 +129,9 @@ try {
               const copyLabel = (target: string): string => label("Copy the command for {name}").replace("{name}", target);
               const missing = label("Not installed");
               assert.deepEqual(shown, [
+                // the launch modes for new Claude Code and Codex agents lead the page
+                { label: "Claude Code", description: label("Permission mode"), command: null, copy: null },
+                { label: "Codex", description: label("Sandbox and approvals"), command: null, copy: null },
                 { label: "pi", description: missing + install("pi"), command: install("pi"), copy: copyLabel("pi") },
                 { label: "claude", description: label("Installed"), command: null, copy: null },
                 { label: "codex", description: label("Installed, but older than this herdr: run this to update it") + install("codex"), command: install("codex"), copy: copyLabel("codex") },
@@ -138,7 +141,7 @@ try {
                 { label: "cursor", description: missing + install("cursor"), command: install("cursor"), copy: copyLabel("cursor") },
                 { label: "antigravity-cli", description: missing + install("antigravity-cli"), command: install("antigravity-cli"), copy: copyLabel("antigravity-cli") },
               ], "every fixture integration, with its state and install command");
-              assert.deepEqual(await body.locator("h3").allTextContents(), [label("Not found on this PC")]);
+              assert.deepEqual(await body.locator("h3").allTextContents(), [label("New agents"), label("Not found on this PC")]);
               const copy = body.getByRole("button", { name: copyLabel("codex"), exact: true });
               await copy.tap();
               await body.getByRole("button", { name: copyLabel("codex"), exact: true }).filter({ hasText: label("Copied") }).waitFor();
@@ -483,8 +486,8 @@ try {
         });
         await page.reload();
         await page.locator(".conn-live").waitFor({ state: "attached" });
-        await page.waitForFunction(() => document.documentElement.dataset.palette === "amber" && document.documentElement.dataset.theme === "light" && getComputedStyle(document.documentElement).colorScheme === "light");
-        if (process.env.UI_EVIDENCE_DIR) writeFileSync(join(process.env.UI_EVIDENCE_DIR, "any-side.txt"), "PASS Light mode with lightTheme=dracula draws data-theme=dark, data-palette=dracula, color-scheme=dark.\nPASS injected lightTheme=not-a-theme reloads amber light.\nPASS Dracula, Nord and Vesper do not pre-fill a sibling.\n");
+        await page.waitForFunction(() => document.documentElement.dataset.palette === "codex" && document.documentElement.dataset.theme === "light" && getComputedStyle(document.documentElement).colorScheme === "light");
+        if (process.env.UI_EVIDENCE_DIR) writeFileSync(join(process.env.UI_EVIDENCE_DIR, "any-side.txt"), "PASS Light mode with lightTheme=dracula draws data-theme=dark, data-palette=dracula, color-scheme=dark.\nPASS injected lightTheme=not-a-theme reloads codex light, the default.\nPASS Dracula, Nord and Vesper do not pre-fill a sibling.\n");
         console.log("PASS dark-only themes on either side, distinct borders, no siblings, and unknown-id reload");
         await openSettings(page);
         // beside the list, turning pages is one step however many are turned
@@ -530,7 +533,7 @@ try {
 
         // a link to a file and Settings opens the preview (a panel beside the pane at this width) under
         // Settings; a reload there closes Settings and keeps the file, and Back then steps out of both
-        const infra = panes.infra;
+        const infra = panes.omp;
         await page.goto(`${url}?ws=${infra.split(":")[0]}&pane=${encodeURIComponent(infra)}&file=README.md&settings=about`);
         await dialogOf(page).getByRole("tabpanel", { name: "About", exact: true }).waitFor();
         await page.locator("aside.file-panel .file-viewer").waitFor();

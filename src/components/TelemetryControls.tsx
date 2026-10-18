@@ -109,7 +109,11 @@ export function TelemetryControls() {
       }
       // off, blocked or before the notice: the switch and the preview show the server's state, and the
       // snapshot stays in the browser
-      if (!current.enabled || current.blocked_by_env || !current.notice_seen || snapshot === null) {
+      if (!current.enabled || current.blocked_by_env || !current.notice_seen) {
+        setStatus(current);
+        return;
+      }
+      if (snapshot === null) {
         setStatus(current);
         return;
       }
@@ -136,7 +140,8 @@ export function TelemetryControls() {
     setSaving(true);
     setError(null);
     // turned on, the switch brings the snapshot the browser kept to itself while it was off
-    changeTelemetry(enabled && settingsSnapshotRef.current !== null ? { enabled, settings: settingsSnapshotRef.current } : { enabled }).then(
+    const snapshot = settingsSnapshotRef.current;
+    changeTelemetry(enabled && snapshot !== null ? { enabled, settings: snapshot } : { enabled }).then(
       (next) => { if (request === statusRequest.current) setStatus(next); },
       (failure: unknown) => { if (request === statusRequest.current) setError(failure instanceof Error ? failure.message : String(failure)); },
     ).finally(() => setSaving(false));

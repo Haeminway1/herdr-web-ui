@@ -1,0 +1,26 @@
+.sidebar-shell {
+  --side-gutter: var(--space-2);
+  --side-box: var(--control-h);
+  --side-row: var(--row-h);
+  --side-row-2: calc(var(--row-h) + var(--space-2));
+  --side-action: var(--space-6);
+  --side-hover: color-mix(in srgb, var(--bg-hover) 72%, var(--bg-panel));
+  --side-selected: var(--bg-hover);
+}
+
+.machine-list {
+  padding-top: var(--space-1);
+  padding-inline: var(--space-2);
+}
+
+.machine-group + .machine-group { margin-top: var(--space-2); }
+
+.machine-header { padding-inline: var(--space-1); }
+
+.machine-state { padding-bottom: var(--space-1); }
+
+.workspace-copy,
+.agent-copy { gap: var(--space-1); }
+
+.workspace-name,
+.agent-title { font-size: var(--fs-sm); }

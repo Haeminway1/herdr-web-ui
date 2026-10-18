@@ -2,7 +2,7 @@ import { type CSSProperties, type DragEvent, type ReactNode, useCallback, useEff
 import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
-import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, markPaneSeen, pairDevice, routeMissing, sendTestPush, signOut, splitPane, zoomPane, type HealthInfo } from "./lib/api.ts";
+import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, routeMissing, sendTestPush, signOut, splitPane, zoomPane, type HealthInfo } from "./lib/api.ts";
 import { deviceLabel, takePairCode } from "./lib/phone.ts";
 import { alertPaneTitle, displayPaneTitle } from "./components/Sidebar.tsx";
 import { PaneCanvas } from "./components/PaneCanvas.tsx";
@@ -29,15 +29,14 @@ import { SidebarResizer } from "./components/SidebarResizer.tsx";
 import { storedSidebarWidth } from "./lib/sidebarWidth.ts";
 import { FilePanelResizer } from "./components/FilePanelResizer.tsx";
 import { FILE_PANEL_DOCK_QUERY, storedFilePanelWidth } from "./lib/filePanelWidth.ts";
-import { filePresentation, type FilePresentation } from "./lib/filePresentation.ts";
+import { openPresentation, type FilePresentation } from "./lib/filePresentation.ts";
 import { MachineDialog } from "./components/MachineDialog.tsx";
 import { RowMenu, type RowMenuItem } from "./components/RowMenu.tsx";
 import { focusWorkspaceListToggle } from "./lib/focus.ts";
 import { headerCrumb, showsChat } from "./lib/headerCrumb.ts";
-import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
+import { LOCAL_MACHINE, paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
-import { applyPaneAttention, isUnread } from "./lib/attention.ts";
 import { rosterPanes } from "./lib/dagPane.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
 import { alertPrefs, useSettings } from "./lib/settings.ts";
@@ -66,6 +65,8 @@ import { TelemetryNotice } from "./components/TelemetryControls.tsx";
 import { FilesDialog } from "./components/FilesDialog.tsx";
 import { folderQueryFor } from "./lib/paletteFolders.ts";
 import { FileViewer } from "./components/FileViewer.tsx";
+import { WebPanel } from "./components/WebPanel.tsx";
+import { panelUrl, WebPanelContext, wantsPanel } from "./lib/webPanel.ts";
 import { RepoDiffViewer } from "./components/RepoDiffViewer.tsx";
 import { OpenFileContext } from "./lib/filePaths.ts";
 import { useFileViewer } from "./lib/useFileViewer.ts";
@@ -428,11 +429,24 @@ export function App() {
   const { viewing, openFile, closeFile, setPresentation, releaseFile } = useFileViewer();
   // a repository diff from the Files dialog's Changes tab, an entry of its own like a file
   const { viewing: diffViewing, openDiff, closeDiff, releaseDiff } = useRepoDiffViewer();
-  const presentation = viewing?.presentation ?? filePresentation(viewing?.path ?? "");
+  const presentation = viewing?.presentation ?? openPresentation(viewing?.path ?? "", settings.fileOpen);
   const fileDocked = filePanelAvailable && presentation === "panel";
   useEffect(() => {
     if (viewing !== null && fileDocked) setFilesOpen(false);
   }, [viewing, fileDocked]);
+  // a page this PC serves, beside the pane in the file panel's place: a file docked there replaces it
+  const [webPage, setWebPage] = useState<string | null>(null);
+  useEffect(() => {
+    if (viewing !== null && fileDocked) setWebPage(null);
+  }, [viewing, fileDocked]);
+  const openWebPage = useCallback((uri: string, shiftKey: boolean, machineId: string) => {
+    if (machineId !== LOCAL_MACHINE || !wantsPanel(settings.webLinks, shiftKey)) return false;
+    const url = panelUrl(uri, window.location);
+    if (url === null) return false;
+    if (viewing !== null && fileDocked) closeFile();
+    setWebPage(url);
+    return true;
+  }, [settings.webLinks, viewing, fileDocked, closeFile]);
   // the panel is no dialog, so no trap gives the focus back when it closes: what opened the file
   // (a link in the chat, a row of Files) gets it, as it does from the popup
   useFocusReturn(viewing !== null && fileDocked);
@@ -456,17 +470,19 @@ export function App() {
       window.history.go(-2);
     } else setPresentation(next);
   }, [filePanelAvailable, diffViewing, viewing, releaseDiff, openFile, setPresentation]);
-  const reportFileKind = useCallback((presentation: FilePresentation) => {
-    if (viewing !== null && viewing.presentation === undefined && presentation !== filePresentation(viewing.path)) presentFile(presentation);
-  }, [viewing, presentFile]);
+  // the kind corrects a guess from the extension; with files set to open in the popup there is no guess to correct
+  const reportFileKind = useCallback((kind: FilePresentation) => {
+    const wanted = settings.fileOpen === "panel" ? kind : "popup";
+    if (viewing !== null && viewing.presentation === undefined && wanted !== openPresentation(viewing.path, settings.fileOpen)) presentFile(wanted);
+  }, [viewing, presentFile, settings.fileOpen]);
   const toggleFilePresentation = filePanelAvailable && viewing !== null
     ? () => presentFile(fileDocked ? "popup" : "panel")
     : undefined;
   const viewFile = useCallback((path: string) => {
     // the Files dialog would cover the docked panel the file opens in
-    if (filePanelAvailable && filePresentation(path) === "panel") setFilesOpen(false);
+    if (filePanelAvailable && openPresentation(path, settings.fileOpen) === "panel") setFilesOpen(false);
     openFile({ path, paneId: selectedPaneId, machineId: selectedMachineId });
-  }, [openFile, selectedPaneId, selectedMachineId, filePanelAvailable]);
+  }, [openFile, selectedPaneId, selectedMachineId, filePanelAvailable, settings.fileOpen]);
   // a link to Settings opens it on its page, for that first opening alone
   const [settingsOpen, setSettingsOpen] = useState(() => initialLink?.settings != null);
   const [settingsLinkPage, setSettingsLinkPage] = useState<string | null>(() => initialLink?.settings ?? null);
@@ -665,10 +681,6 @@ export function App() {
       const machine = machinesRef.current.find((m) => m.id === payload.machine_id);
       if (!machine) return;
       const message = payload.message;
-      if (message.type === "pane-attention") {
-        setMachines((list) => list.map((entry) => entry.id === machine.id && entry.snapshot
-          ? { ...entry, snapshot: applyPaneAttention(entry.snapshot, message.pane_id, message.attention) } : entry));
-      }
       if (message.type === "pane-status") {
         const key = paneStorageId(machine.id, message.pane_id);
         const previous = statusRef.current.get(key);
@@ -934,22 +946,6 @@ export function App() {
 
 
   const selectedPane = snapshot?.panes.find((pane) => pane.pane_id === selectedPaneId) ?? null;
-  useEffect(() => {
-    if (locked !== false || drawerOpen || !selectedPane || !isUnread(selectedPane)) return;
-    let disposed = false;
-    const paneId = selectedPane.pane_id;
-    const read = () => {
-      if (document.visibilityState !== "visible") return;
-      void markPaneSeen(paneId, selectedMachineId).then((attention) => {
-        if (disposed || !attention) return;
-        setMachines((list) => list.map((entry) => entry.id === selectedMachineId && entry.snapshot
-          ? { ...entry, snapshot: applyPaneAttention(entry.snapshot, paneId, attention) } : entry));
-      }).catch(() => undefined);
-    };
-    read();
-    document.addEventListener("visibilitychange", read);
-    return () => { disposed = true; document.removeEventListener("visibilitychange", read); };
-  }, [locked, drawerOpen, selectedMachineId, selectedPane?.pane_id, selectedPane?.attention?.finished_at, selectedPane?.attention?.seen_at, selectedPane?.agent_status]);
   useScreenWakeLock(settings.keepScreenOn && locked === false && selectedPane !== null);
   const selectedWorkspace = selectedPane
     ? (snapshot?.workspaces.find((workspace) => workspace.workspace_id === selectedPane.workspace_id) ?? null)
@@ -1639,6 +1635,7 @@ export function App() {
 
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
+        <WebPanelContext.Provider value={filePanelAvailable ? openWebPage : null}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
         {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
         <UpdateNotice updates={updates} onOpen={() => { setSettingsSection("updates"); setSettingsOpen(true); }} />
@@ -1672,6 +1669,24 @@ export function App() {
               const next = slotView === "chat" ? "terminal" : "chat";
               if (active) setView(next); else if (pane) pickView(machineId, pane.pane_id, next);
             };
+            // a half's own lens and close sit at the end of its tab strip. The row's free end is the
+            // half's grip: its pane, dropped on a half of the pane area, opens there too (dockSide)
+            const slotEnd = splitOn ? <div className="pane-slot-grip" draggable={paneId !== null}
+              onDragStart={(event) => {
+                if (paneId === null) return;
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData(PANE_DRAG_TYPE, paneDragData({ machineId, paneId }));
+              }}>
+              {machines.length > 1 && <span className="pane-slot-machine">{machine?.name ?? machineId}</span>}
+              {pane && <button type="button" className="icon-button pane-slot-action" aria-label={t(slotView === "chat" ? "Show the terminal" : "Show the chat")} title={t(slotView === "chat" ? "Show the terminal" : "Show the chat")} onClick={toggleSlotView}>
+                {slotView === "chat" ? <SquareTerminal /> : <MessageSquare />}
+              </button>}
+              <button type="button" className="icon-button pane-slot-action" aria-label={t("Close this half")} title={t("Close this half")} onClick={() => closeSlot(slot)}>
+                <X />
+              </button>
+            </div> : undefined;
+            // a half with no strip to carry its close (its pane gone, or the half crashed) keeps one in a bar of its own
+            const slotBar = splitOn ? <div className="pane-slot-bar"><span className="pane-slot-title">{pane ? displayPaneTitle(pane) : t("Pane closed")}</span>{slotEnd}</div> : null;
             return (
               <MachineContext.Provider key={slot} value={machineId}><SlotSessions slot={slot} machineIds={machines.map((item) => item.id)}><PaneFollowContext.Provider value={sameTabs && !active}>
               <div
@@ -1688,31 +1703,13 @@ export function App() {
                 // text reach only the active half's terminal, so the drop makes the half active first
                 onDropCapture={active ? undefined : (event) => { if (!event.dataTransfer.types.includes(PANE_DRAG_TYPE)) activateSlot(slot); }}
               >
-                {splitOn && (
-                  <div className="pane-slot-bar" draggable={paneId !== null}
-                    // the half's own pane, dropped on a half of the pane area, opens there too (dockSide)
-                    onDragStart={(event) => {
-                      if (paneId === null) return;
-                      event.dataTransfer.effectAllowed = "move";
-                      event.dataTransfer.setData(PANE_DRAG_TYPE, paneDragData({ machineId, paneId }));
-                    }}>
-                    {pane?.agent && <AgentMark agent={pane.agent} size={14} />}
-                    <span className="pane-slot-title" title={pane ? displayPaneTitle(pane) : undefined}>{pane ? displayPaneTitle(pane) : t("Pane closed")}</span>
-                    {machines.length > 1 && <span className="pane-slot-machine">{machine?.name ?? machineId}</span>}
-                    <button type="button" className="icon-button pane-slot-action" aria-label={t(slotView === "chat" ? "Show the terminal" : "Show the chat")} title={t(slotView === "chat" ? "Show the terminal" : "Show the chat")} onClick={toggleSlotView}>
-                      {slotView === "chat" ? <SquareTerminal /> : <MessageSquare />}
-                    </button>
-                    <button type="button" className="icon-button pane-slot-action" aria-label={t("Close this half")} title={t("Close this half")} onClick={() => closeSlot(slot)}>
-                      <X />
-                    </button>
-                  </div>
-                )}
                 {/* a pane this half cannot draw leaves the sidebar and the other half working; picking
                     another pane tries again */}
-                <RenderBoundary resetKey={`${machineId}:${paneId ?? ""}`} fallback={(retry) => <RegionCrash message={t("This pane can't be shown.")} retry={retry} onShown={active ? paneLost : undefined} />}>
+                <RenderBoundary resetKey={`${machineId}:${paneId ?? ""}`} fallback={(retry) => <>{slotBar}<RegionCrash message={t("This pane can't be shown.")} retry={retry} onShown={active ? paneLost : undefined} /></>}>
                 <CrashProbe region="pane" />
+                {!(slotSnapshot && pane && workspace) && slotBar}
                 {slotSnapshot && pane && workspace && (
-                  <TabStrip snapshot={slotSnapshot} workspace={workspace} selectedPane={pane} panelId={slotPanelId} splitDrag={wideScreen} onSelectPane={onSelect}
+                  <TabStrip snapshot={slotSnapshot} workspace={workspace} selectedPane={pane} panelId={slotPanelId} splitDrag={wideScreen} onSelectPane={onSelect} end={slotEnd}
                     onNewTab={() => actions.openNewTab(active ? undefined : { machineId, workspaceId: workspace.workspace_id })}
                     onNewTerminal={() => actions.openTerminalTab(active ? undefined : { machineId, workspaceId: workspace.workspace_id })}
                     paneActions={active ? (paneId) => {
@@ -1775,11 +1772,14 @@ export function App() {
           <SplitDropPreview visible={splitDragOn && (paneDragging || tabDrag !== null)} side={dropAt} />
         </div>
         </div>
+        </WebPanelContext.Provider>
         </OpenFileContext.Provider>
         {/* last in the row: the file beside the pane (from 980px), the pane column shrinks and its terminal refits */}
         {viewing !== null && fileDocked && <MachineContext.Provider value={viewing.machineId}>
           <FileViewer key={viewing.path} docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path, presentation })} onKind={reportFileKind} onTogglePresentation={toggleFilePresentation} keyboardActive={!settingsOpen} />
         </MachineContext.Provider>}
+        {webPage !== null && filePanelAvailable && !(viewing !== null && fileDocked) &&
+          <WebPanel key={webPage} url={webPage} onClose={() => setWebPage(null)} panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
       </div>
 
       <MachineContext.Provider value={newSessionMachineId}><NewSessionDialog
@@ -1816,7 +1816,7 @@ export function App() {
       )}
       {diffViewing !== null && <MachineContext.Provider value={diffViewing.machineId}>
         <RepoDiffViewer key={`${diffViewing.scope}:${diffViewing.path}`} target={diffViewing} onClose={closeDiff} onOpenFile={(path) => {
-          const docked = filePanelAvailable && filePresentation(path) === "panel";
+          const docked = filePanelAvailable && openPresentation(path, settings.fileOpen) === "panel";
           if (docked) {
             setFilesOpen(false);
             releaseDiff();

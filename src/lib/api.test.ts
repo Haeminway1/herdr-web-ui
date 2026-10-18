@@ -36,11 +36,10 @@ it("refuses a 40 MiB file in the browser with the 32 MB limit named, before uplo
 it("posts the full safe telemetry snapshot and current notice version", async () => {
   const settings = telemetrySettingsSnapshot({
     ...DEFAULT_SETTINGS,
-    palette: "amber", paletteLight: "amber", paletteDark: "amber", darkTheme: "amber", lightTheme: "amber",
     terminalFontFamily: "Private Font Name",
     chatFontFamily: "Private Chat Font",
     usageHidden: ["account-identifier"],
-  })!;
+  });
   const change = { notice_seen: true as const, notice_version: NOTICE_VERSION, settings };
   let requestUrl = "";
   let requestInit: RequestInit | undefined;
@@ -59,8 +58,8 @@ it("posts the full safe telemetry snapshot and current notice version", async ()
   expect(body).toEqual(change);
   expect(body).not.toHaveProperty("changed_settings");
   expect(Object.keys(body.settings as object)).toHaveLength(50);
-  expect(body.settings).toHaveProperty("darkTheme", "amber");
-  expect(body.settings).toHaveProperty("lightTheme", "amber");
+  expect(body.settings).toHaveProperty("darkTheme", "codex");
+  expect(body.settings).toHaveProperty("lightTheme", "codex");
   expect(body.settings).toHaveProperty("statusIndicators", "classic");
   expect(body.settings).not.toHaveProperty("terminalFontFamily");
   expect(body.settings).not.toHaveProperty("chatFontFamily");
