@@ -69,6 +69,9 @@ async function checkPinned(page: Page, cdp?: CDPSession): Promise<void> {
   };
   await drag(ids[0]!, ids[1]!);
   const expected = [ids[1], ids[0]];
+  // CDP's touchEnd acknowledges the event before React necessarily commits the saved pin order.
+  await page.waitForFunction((order) => JSON.stringify([...document.querySelectorAll<HTMLElement>(".workspace-list-pinned > .workspace-group")]
+    .map((row) => row.dataset.workspace)) === JSON.stringify(order), expected, { timeout: 5_000 });
   assert.deepEqual(await pinnedRows(page), expected, "drag changes the pinned card order");
   assert.equal(await page.locator(".workspace-list-pinned .worktree-children").count(), 0, "pinned repository rows do not carry their worktrees into the card");
   const childRow = row(child);
