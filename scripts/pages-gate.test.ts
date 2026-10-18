@@ -4,12 +4,17 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { failureSite, scriptOutcome, selectBrowserScripts, serialBrowserScripts } from "./ci-browser-parallel.ts";
+import { browserWorkerSession, failureSite, scriptOutcome, selectBrowserScripts, serialBrowserScripts } from "./ci-browser-parallel.ts";
 
 const pages = readFileSync(new URL("../.github/workflows/pages.yml", import.meta.url), "utf8");
 const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 
 describe("Browser failure sites", () => {
+  it("keeps parallel browser workers and concurrent runs on different owned sessions", () => {
+    expect(new Set([browserWorkerSession("check-a", 0), browserWorkerSession("check-a", 1), browserWorkerSession("check-b", 0)]).size).toBe(3);
+    expect(browserWorkerSession("check-a", 0)).toBe("check-a-b0");
+  });
+
   it("returns no failure for PASS lines", () => {
     expect(failureSite("PASS scripts/ui-regression.ts\nPASS all checks")).toEqual({ site: null, message: null });
   });

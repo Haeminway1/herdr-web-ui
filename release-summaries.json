@@ -1,4 +1,10 @@
 {
+  "0.4.1109": {
+    "en": { "fixed": ["Sidebar scrolling works again; temporary GJC lookup errors keep the current chat.", "Interrupted upstream sync resumes without treating a start marker as completion."], "improved": ["Latest upstream behavior with Report colors and a compact native sidebar."] },
+    "ko": { "fixed": ["좌측 목록 스크롤을 복구하고, 일시적인 GJC 조회 실패에는 기존 대화를 유지합니다.", "정본 동기화가 중단돼도 시작 기록을 완료로 오인하지 않고 다시 시도합니다."], "improved": ["최신 정본 동작에 Report 색상과 간결한 정본 사이드바 외관을 적용했습니다."] },
+    "ja": { "fixed": ["サイドバーのスクロールを復旧し、一時的な GJC 読み取り失敗でも会話を保持します。", "中断した同期は開始記録を完了と扱わず、再試行します。"], "improved": ["最新の upstream に Report 配色とコンパクトな標準サイドバーを適用しました。"] },
+    "zh": { "fixed": ["恢复侧栏滚动；GJC 临时读取失败时保留当前对话。", "上游同步中断后可重试，不再把开始记录当作完成。"], "improved": ["采用最新上游行为，并保留 Report 配色和紧凑的原生侧栏。"] }
+  },
   "0.4.11": {
     "en": {
       "fixed": [

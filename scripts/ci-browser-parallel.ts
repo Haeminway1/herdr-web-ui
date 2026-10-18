@@ -79,6 +79,10 @@ export function scriptOutcome(code: number, secondRun: boolean): "pass" | "flaky
   return secondRun ? "flaky" : "pass";
 }
 
+export function browserWorkerSession(base: string, workerId: number): string {
+  return `${base}-b${workerId}`;
+}
+
 class ChromiumSetupError extends Error {
   constructor(readonly exitCode: number) {
     super(`Chromium setup failed with exit code ${exitCode}`);
@@ -175,6 +179,7 @@ async function main(): Promise<void> {
       const log = join(logDir, `${scriptName}.log`);
       const env = {
         CHROME_PATH: chromePath,
+        HERDR_TEST_SESSION: browserWorkerSession(process.env.HERDR_TEST_SESSION || "herdr-web-ui-test", workerId),
         HERDR_DEMO_BUILD: demoBuild,
         UI_EVIDENCE_DIR: shouldDisableEvidence ? "" : (evidenceDir ?? ""),
         CHECK_BROWSER_EVIDENCE_DIR: evidenceDir ?? "",
