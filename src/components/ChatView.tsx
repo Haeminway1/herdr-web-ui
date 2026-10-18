@@ -11,6 +11,7 @@ import "./ChatView.css";
 import "./ChatTimeline.css";
 
 import { AgentMark } from "./AgentMark.tsx";
+import { ManagedSessionStatus } from "./ManagedSessionStatus.tsx";
 import { AnimatedHeight } from "./AnimatedHeight.tsx";
 import { Markdown, ReservedImage } from "./Markdown.tsx";
 import { ImageLightbox } from "./ImageLightbox.tsx";
@@ -69,7 +70,7 @@ const ChatHistoryContext = createContext("");
  */
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult } from "../../shared/protocol.ts";
+import type { AgentStatus, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, ManagedSessionIdentity, OmoTaskResult } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { useT } from "../lib/i18n.ts";
@@ -166,6 +167,7 @@ export interface ChatViewProps {
 
 interface ChatState {
   activity?: ConversationResponse["activity"];
+  managedSession?: ManagedSessionIdentity;
   source: "conversation" | "scrollback";
   conversationSource?: string;
   turns: ConversationTurn[];
@@ -177,7 +179,7 @@ const EMPTY_STATE: ChatState = { source: "conversation", turns: [], messages: []
 
 /** The view of a structured (not scrollback) answer. */
 function conversationState(conversation: ConversationResponse): ChatState {
-  return { source: "conversation", conversationSource: conversation.source, turns: conversation.turns, messages: [], truncated: false, activity: conversation.activity };
+  return { source: "conversation", conversationSource: conversation.source, managedSession: conversation.managed_session, turns: conversation.turns, messages: [], truncated: false, activity: conversation.activity };
 }
 
 
@@ -991,7 +993,11 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
         showAnswerDetails(conversation);
         let next: ChatState;
         if (conversation.source !== "scrollback") next = conversationState(conversation);
-        else if (agent !== null) next = { source: "scrollback", turns: [], messages: [], truncated: false };
+        else if (conversation.managed_session?.state === "identity_pending" || conversation.managed_session?.state === "blocked") {
+          // A managed identity refusal is not permission to read or infer terminal history.
+          next = { source: "scrollback", managedSession: conversation.managed_session, turns: [], messages: [], truncated: false };
+        }
+        else if (agent !== null) next = { source: "scrollback", managedSession: conversation.managed_session, turns: [], messages: [], truncated: false };
         else {
           // The reader has rejected this history. Hide it before the separate terminal
           // request, which may wait or fail; a transport error must not revive those turns.
@@ -1411,6 +1417,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
   const footer = <>
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
+      {loaded && error === null && state.managedSession !== undefined && state.managedSession.state !== "ready" && <ManagedSessionStatus identity={state.managedSession} />}
       {error !== null && !waiting && (errorStatus === 401
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>
         : <FailureLine action={t("Couldn't load the conversation")} failure={error} onRetry={retryRead} />)}
@@ -1419,7 +1426,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       {/* A native turn's activity, where no open work block says it: before the turn has an assistant
           or tool row, and while it thinks (a work block's head says Working). One Working at a time. */}
       {state.activity !== undefined && connected && !ended && activity !== "idle" && agentStatus !== "blocked" && prompt === null && (activity === "thinking" || !workBlockLive) && <p className="chat-activity" role="status"><CircleDot aria-hidden="true" />{activity === "thinking" ? t("Thinking…") : t("Working…")}</p>}
-      {loaded && empty && error === null && prompt === null && (state.activity === undefined || activity === "idle") && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
+      {loaded && empty && error === null && state.managedSession?.state !== "identity_pending" && state.managedSession?.state !== "blocked" && prompt === null && (state.activity === undefined || activity === "idle") && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}
   </>;
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>
@@ -1451,7 +1458,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       renderRow={renderTurn}
     /> : <div className="chat-view" ref={scroller} onScroll={onScroll} role="log" aria-live="polite" aria-label={logLabel}>
       <div className="chat-transcript" data-conversation-source={state.conversationSource}>
-        {agent !== null ? <TerminalFallback key={paneId} paneId={paneId} visible={visible} />
+        {agent !== null && state.managedSession?.state !== "identity_pending" && state.managedSession?.state !== "blocked" ? <TerminalFallback key={paneId} paneId={paneId} visible={visible} />
           : state.messages.map((message, index) => <FallbackTurn key={index} paneId={paneId} message={message} />)}
         {footer}
       </div>

@@ -11,7 +11,7 @@ translations, screenshots and tests follow each feature's decision. A retained s
 never justifies copying the rest of its old file over newer upstream code.
 
 F9b restores only the requested navigation exceptions from `0ce93b2`, on the upstream tree.
-Decision totals: **16 keep, 7 drop, 28 take upstream** (51 feature families, not file counts).
+Decision totals: **17 keep, 7 drop, 28 take upstream** (52 feature families, not file counts).
 
 | Feature / affected code | Upstream equivalent? | Decision | Reason |
 | --- | --- | --- | --- |
@@ -63,7 +63,8 @@ Decision totals: **16 keep, 7 drop, 28 take upstream** (51 feature families, not
 | Attach startup capability probe filtering | Upstream `AttachStartupProbes` since #1165 | take upstream | The upstream protection already replaces the old fork class. |
 | Fresh owned browser fixtures and fork-only UI regression wiring | Upstream isolated check runner and browser suite | take upstream | Keep upstream scenarios and explicitly select their layout; cover the restored default and selected sidebar features on isolated fixtures too. Never capture real managed chat. |
 | Retired UI translations and old appearance/screenshots | Upstream dictionaries, docs and media | drop | Restore only active strings for selected features in Korean/Japanese/Chinese. Removed UI leaves no dead strings or old screenshots. |
-| Old fork-sync prompt and merge-every-feature source (`scripts/fork-sync*`) | Explicit upstream rebuild procedure | drop | Do not reintroduce the superseded preserve-all-UX policy. Existing external timers are not changed by this source rebuild. |
+| Old fork-sync preserve-all-UX prompt and merge-every-feature policy | Explicit upstream rebuild procedure | drop | The superseded policy is retired, not automatic synchronization itself. |
+| Automatic fork sync (`scripts/fork-sync.sh`, `scripts/fork-sync-prompt.md`) | Upstream-tag detection and isolated merge worktree | keep | Refresh only a clean deploy/haemin checkout, fail closed on unsafe refresh, and use a read-only dry-run; retain Herdr workspace/agent startup under the new upstream-first policy. Existing external timers are unchanged. |
 | Other server/provider changes in modified files | Current upstream provider and security fixes | take upstream | Port only the named retained hunks; keep upstream skill, Claude process-root, file-view, auth and usage behavior. |
 | 191 upstream-only paths, newer dependencies, CI, themes, skill menus, file panels and release fragments | Upstream main | take upstream | Keep all of upstream rather than copying the old fork's omissions, lockfile or generated files. |
 
