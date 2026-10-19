@@ -151,6 +151,25 @@ describe("GJC live identity independent of saved-store indexing", () => {
     expect(await gjcSdkTranscriptWithRunner([321], cwd, agentDir, transcript.runner)).toBeNull();
   });
 
+  it.each([
+    null,
+    { id: "session-1" },
+    { id: "session-1", path: "relative.jsonl" },
+    { id: "another-session", path: savedPath },
+  ])("keeps live authority separate from unreadable saved metadata %j", async (savedSession) => {
+    const fixture = fakeRunner([page([session()]), page([session()], { savedSession })]);
+    const generations: [string, number][] = [];
+    const generationCurrent = async (_directory: string, id: string, generation: number) => {
+      generations.push([id, generation]);
+      return true;
+    };
+    await expect(sdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver, undefined, generationCurrent))
+      .resolves.toMatchObject({ sessionId: "session-1", pid: 321 });
+    await expect(sdkTranscriptWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver, undefined, generationCurrent)).resolves.toBeNull();
+    expect(generations).toEqual([["session-1", 4], ["session-1", 4]]);
+    expect(fixture.calls).toHaveLength(2);
+  });
+
   it("does not relax ambiguous, uncertain or changed live authority for private sessions", async () => {
     for (const invalid of [{ ambiguous: true }, { terminalUncertain: true }, { live: false }, { endpointGeneration: 5 }, { hostIncarnation: "linux:other" }]) {
       const fixture = fakeRunner([page([session()]), page([session(invalid)], { savedSession: null })]);
