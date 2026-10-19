@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import {
+  GjcSdkLookupError,
   gjcSdkCurrentSessionWithRunner as sdkCurrentSessionWithRunner,
   gjcSdkTranscriptWithRunner as sdkTranscriptWithRunner,
   type GjcSdkCommandOptions,
@@ -19,6 +20,7 @@ afterAll(() => rmSync(cwd, { recursive: true, force: true }));
 const locator = () => ({ cwd, worktreeRoot: cwd, stateRoot: join(cwd, ".gjc", "state") });
 
 const testWorktreeRootResolver: GjcSdkWorktreeRootResolver = async () => cwd;
+const currentGeneration = async () => true;
 
 function gjcSdkTranscriptWithRunner(
   pids: readonly number[],
@@ -28,7 +30,7 @@ function gjcSdkTranscriptWithRunner(
   rootResolver: GjcSdkWorktreeRootResolver = testWorktreeRootResolver,
   cacheClock?: () => number,
 ) {
-  return sdkTranscriptWithRunner(pids, workingDirectory, directory, runner, rootResolver, cacheClock);
+  return sdkTranscriptWithRunner(pids, workingDirectory, directory, runner, rootResolver, cacheClock, currentGeneration);
 }
 
 function gjcSdkCurrentSessionWithRunner(
@@ -39,7 +41,7 @@ function gjcSdkCurrentSessionWithRunner(
   rootResolver: GjcSdkWorktreeRootResolver = testWorktreeRootResolver,
   cacheClock?: () => number,
 ) {
-  return sdkCurrentSessionWithRunner(pids, workingDirectory, directory, runner, rootResolver, cacheClock);
+  return sdkCurrentSessionWithRunner(pids, workingDirectory, directory, runner, rootResolver, cacheClock, currentGeneration);
 }
 
 function session(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -104,6 +106,26 @@ const commandArgs = [
 ];
 
 describe("GJC live identity independent of saved-store indexing", () => {
+  it("rejects stale generation even when both cached broker pages still report the old index", async () => {
+    const fixture = fakeRunner([page([session()]), saved()]);
+    let current = true;
+    const generation = async () => current;
+    const lookup = () => sdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver, undefined, generation);
+    expect((await lookup())?.sessionId).toBe("session-1");
+    current = false;
+    expect(await lookup()).toBeNull();
+    expect(await sdkTranscriptWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver, undefined, generation)).toBeNull();
+    expect(fixture.calls).toHaveLength(2);
+  });
+
+  it.each(["ENOENT", "EACCES", "ETIMEDOUT"])("rejects %s without leaking CLI details or erasing a pending identity", async (code) => {
+    const runner: GjcSdkCommandRunner = async () => { throw Object.assign(new Error("secret /home/user/private"), { code }); };
+    const failure = gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, runner);
+    await expect(failure).rejects.toBeInstanceOf(GjcSdkLookupError);
+    await expect(failure).rejects.toMatchObject({ reason: code === "ETIMEDOUT" ? "timeout" : "unavailable" });
+    await expect(failure).rejects.not.toThrow("secret");
+  });
+
   it("proves the current private session even when the saved-store index has no path", async () => {
     const fixture = fakeRunner([page([session()]), page([session()], { savedSession: null })]);
     expect(await gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver))
@@ -161,6 +183,7 @@ describe("GJC SDK transcript identity binding", () => {
       path: savedPath,
       hostIncarnation: "linux:12345",
       endpointGeneration: 4,
+      guardSessionIds: ["session-1"],
     });
     expect(calls.map(({ command, args }) => [command, args])).toEqual([
       ["gjc", [...commandArgs, "--json-input", JSON.stringify({ scope: scope(cwd) })]],
@@ -185,6 +208,37 @@ describe("GJC SDK transcript identity binding", () => {
     ]);
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, conflicting.runner)).resolves.toBeNull();
     expect(conflicting.calls).toHaveLength(2);
+  });
+
+  it("guards stale and direct-fence same-pid sessions across pages without unrelated pids", async () => {
+    mkdirSync(agentDir, { recursive: true });
+    const stale = session({ sessionId: "stale-same-pid", live: false });
+    const fence = session({
+      sessionId: "direct-fence",
+      endpointGeneration: 0,
+      processIncarnation: "linux:12345",
+      locator: { ...locator(), stateRoot: agentDir },
+    });
+    const unrelated = session({ sessionId: "unrelated-pid", pid: 999 });
+    const exactStale = session({ sessionId: "exact-stale-same-pid", deleted: true });
+    const exactUnrelated = session({ sessionId: "exact-unrelated-pid", pid: 999 });
+    const { runner } = fakeRunner([
+      page([stale, unrelated], { continuationCursor: "next-page" }),
+      page([fence, session()]),
+      page([stale, fence, session(), exactStale, exactUnrelated], {
+        savedSession: { id: "session-1", path: savedPath },
+      }),
+    ]);
+
+    const binding = await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner);
+    expect(binding?.guardSessionIds).toEqual([
+      "stale-same-pid",
+      "direct-fence",
+      "session-1",
+      "exact-stale-same-pid",
+    ]);
+    expect(binding?.guardSessionIds).not.toContain("unrelated-pid");
+    expect(binding?.guardSessionIds).not.toContain("exact-unrelated-pid");
   });
 
   it("does not choose by cwd alone when multiple pane GJC processes match", async () => {
@@ -348,6 +402,7 @@ describe("GJC SDK transcript identity binding", () => {
       path: join(cwd, "session-2.jsonl"),
       hostIncarnation: "linux:12345",
       endpointGeneration: 4,
+      guardSessionIds: ["session-2"],
     });
     expect(calls).toHaveLength(4);
   });
@@ -419,12 +474,12 @@ describe("GJC SDK transcript identity binding", () => {
       calls += 1;
       return new Promise(() => {});
     };
-    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).rejects.toMatchObject({ reason: "timeout" });
     expect(calls).toBe(1);
   });
 
   it("rejects malformed broker output and repeated or over-budget pagination", async () => {
-    for (const output of ["not json", JSON.stringify({ type: "broker_response", ok: false, result: {} }), broker({ indexSeq: 1, sessions: {} })]) {
+    for (const output of ["not json", broker({ indexSeq: 1, sessions: {} })]) {
       const { runner } = fakeRunner([output]);
       await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
     }
@@ -440,8 +495,16 @@ describe("GJC SDK transcript identity binding", () => {
     }
 
     const pages = fakeRunner((_args, call) => page([], { continuationCursor: `cursor-${call}` }));
-    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, pages.runner)).resolves.toBeNull();
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, pages.runner)).rejects.toMatchObject({ reason: "timeout" });
     expect(pages.calls).toHaveLength(6); // the global spawn budget precedes the larger page ceiling
+  });
+
+  it.each(["discovery", "exact"] as const)("reports %s broker failures as sanitized unavailable and never caches them", async phase => {
+    const failure = JSON.stringify({ type: "broker_response", ok: false, error: "secret /private/session" });
+    const fixture = fakeRunner((_args, call) => phase === "discovery" || call > 0 ? failure : page([session()]));
+    await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, fixture.runner)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
+    expect(fixture.calls).toHaveLength(phase === "discovery" ? 2 : 3);
   });
 
   it("keeps SDK execution bounded, non-interactive, and quiet on transport failure", async () => {
@@ -451,7 +514,7 @@ describe("GJC SDK transcript identity binding", () => {
       throw new Error("broker credentials and local paths must not escape");
     };
 
-    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).rejects.toMatchObject({ reason: "unavailable" });
     expect(captured?.command).toBe("gjc");
     expect(captured?.args).toEqual([...commandArgs, "--json-input", JSON.stringify({ scope: scope(cwd) })]);
     expect(captured?.options.env.GJC_SDK_BROKER_AUTOSTART).toBe("0");
@@ -582,8 +645,8 @@ describe("GJC SDK session.list cache", () => {
     const fixture = fakeRunner(() => page([session()]));
     const lookup = (root: number) => gjcSdkCurrentSessionWithRunner([321], cwd, join(cwd, `budget-agent-${root}`), fixture.runner, testWorktreeRootResolver, clock);
     for (const root of [1, 2, 3]) await expect(lookup(root)).resolves.toMatchObject({ sessionId: "session-1" });
-    await expect(lookup(4)).resolves.toBeNull();
-    await expect(lookup(4)).resolves.toBeNull();
+    await expect(lookup(4)).rejects.toMatchObject({ reason: "timeout" });
+    await expect(lookup(4)).rejects.toMatchObject({ reason: "timeout" });
     expect(fixture.calls).toHaveLength(6);
     now = 10_050;
     await expect(lookup(4)).resolves.toMatchObject({ sessionId: "session-1" });
@@ -704,7 +767,7 @@ describe("GJC SDK session.list timeout queue", () => {
     await firstStarted;
     await expect(first).resolves.toBeNull();
 
-    const second = sdkCurrentSessionWithRunner([322], nestedCwd, agentDir, runner, rootResolver);
+    const second = sdkCurrentSessionWithRunner([322], nestedCwd, agentDir, runner, rootResolver, undefined, currentGeneration);
     await secondRootStarted;
     await nextTurn();
     expect(calls).toHaveLength(1);

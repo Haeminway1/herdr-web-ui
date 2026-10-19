@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { ConversationUnavailable, conversationForPane as readConversation, HistoryChanged, resolveTranscript as readTranscript } from "./conversation.ts";
 import { labelManagedPanes as projectPanes, resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
-import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
+import { GjcSdkLookupError, type GjcSdkSessionIdentity } from "./gjc-sdk.ts";
 import { createGjcStatus, gjcPanes as discoverGjc } from "./gjc-status.ts";
 import { omoPanes, omoSessionForPane } from "./omo.ts";
 
@@ -214,6 +214,22 @@ it("waits when SDK authority is absent, even with a pinned inode", async () => {
   live = null;
   expect(await resolve()).toMatchObject({ identity: { state: "identity_pending" }, sessionFile: null });
   await expect(conversationForPane(pane)).rejects.toThrow("identity_pending");
+});
+
+it.each(["unavailable", "timeout"] as const)("keeps managed SDK %s pending without authorizing its provider child", async reason => {
+  const unavailableDeps: ManagedSessionDeps = {
+    ...deps,
+    gjcSession: async () => { throw new GjcSdkLookupError(reason); },
+  };
+  const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  expect(await resolveManagedSession(pane, namespace, unavailableDeps)).toMatchObject({
+    identity: { harness: "gjc", state: "identity_pending", reason: "identity_pending", session_id: null },
+    sessionFile: null,
+  });
+  const projected = await projectPanes(snapshot, namespace, unavailableDeps);
+  expect(projected.panes[0]).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "identity_pending" } });
+  expect(projected.agents[0]?.agent_session).toBeNull();
+  await expect(readConversation(pane, undefined, undefined, unavailableDeps)).rejects.toThrow("identity_pending");
 });
 
 it.each(["starttime", "boot", "cwd"] as const)("rejects a changed process %s", async field => {
