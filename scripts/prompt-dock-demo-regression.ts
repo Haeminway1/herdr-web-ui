@@ -36,6 +36,17 @@ const FORM = {
   multi_select: false, custom_option_index: 3,
   steps: [{ label: "Scope", answered: true, current: false }, { label: "Store", answered: false, current: true }, { label: "Rollout", answered: false, current: false }],
 };
+/** Claude's review of several answers, as server/prompt.ts hands it over: the pane wrapped the
+ * second question, and the card reads it whole */
+const ANSWERS_REVIEW = {
+  id: "demo-review", agent: "claude", kind: "menu", title: "Review your answers", question: "Ready to submit your answers?", body: null,
+  answers: [
+    { question: "What should the two top-level rows be called?", answer: "Fictional repo names (Recommended)" },
+    { question: "The demo's terminal replay (git log, bun test, the pretend shell) lives in the 'release' shell workspace. What happens to it?", answer: "Second tab in a repo (Recommended)" },
+  ],
+  options: [{ label: "Submit answers", description: null }, { label: "Cancel", description: null }],
+  multi_select: false, custom_option_index: null,
+};
 /** the same form as a plan to approve: a typed pick waits for Confirm */
 const PLAN = { ...FORM, id: "demo-plan", kind: "plan", title: "Ready to code?", steps: undefined };
 /** the prompt that comes after one of those, while the answer to the first is still on its way */

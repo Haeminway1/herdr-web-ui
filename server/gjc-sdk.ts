@@ -8,11 +8,6 @@ import { GjcSdkLookupError, lookupExecutionError } from "./gjc-sdk-error.ts";
 const PAGE_LIMIT = 100;
 const MAX_PAGES = 8;
 const MAX_ROWS = PAGE_LIMIT * MAX_PAGES;
-// Share roster polls across discovery and exact lookups instead of repeatedly
-// spawning the CLI. Managed generation/process/header checks remain per read.
-const SESSION_LIST_CACHE_TTL_MS = 10_000;
-const SESSION_LIST_MAX_STARTS = 6;
-const SESSION_LIST_START_WINDOW_MS = 10_050;
 // A full `gjc sdk session raw global --op session.list` call measured 1.0-2.0 s on a
 // loaded Apple M1 Pro, so 2 s cut off many cold lookups. The 10 s SDK budget reserves 5 s
 // of the client's 15 s local chat read for other work, whose timeouts are independent.
@@ -21,6 +16,11 @@ const COMMAND_TIMEOUT_MS = 5_000;
 const TOTAL_TIMEOUT_MS = 10_000;
 const STATUS_COMMAND_TIMEOUT_MS = 2_000;
 const STATUS_TOTAL_TIMEOUT_MS = 8_000;
+// Share roster polls across discovery and exact lookups instead of repeatedly
+// spawning the CLI. Managed generation/process/header checks remain per read.
+const SESSION_LIST_CACHE_TTL_MS = 10_000;
+const SESSION_LIST_MAX_STARTS = 6;
+const SESSION_LIST_START_WINDOW_MS = 10_050;
 const MAX_BUFFER = 1024 * 1024;
 const MAX_CURSOR_LENGTH = 4096;
 
@@ -78,8 +78,8 @@ interface SessionListRequest {
   readonly agentDir: string;
   readonly jsonInput: Record<string, unknown>;
   readonly deadline: number;
-  readonly cacheClock: () => number;
   readonly commandTimeoutMs: number;
+  readonly cacheClock: () => number;
 }
 
 const sessionListStates = new WeakMap<GjcSdkCommandRunner, Map<string, SessionListState>>();
@@ -171,15 +171,15 @@ function collectGuardSessionIds(rows: readonly unknown[], pids: ReadonlySet<numb
  * must still prevent a binding (SDK session-index.ts: isDirectSessionGcFenceRow).
  */
 function directSessionFence(row: Record<string, unknown>, agentDir: string): boolean {
-  if (!isRecord(row.locator)) return false;
+  if (!isRecord(row.locator)
+    || !nonEmptyString(row.sessionId) || row.live !== true
+    || row.endpointGeneration !== 0
+    || row.terminal !== false || row.terminalUncertain !== false || row.ambiguous !== false
+    || row.identityProvenance !== "composite"
+    || !nonEmptyString(row.hostIncarnation) || row.processIncarnation !== row.hostIncarnation
+    || row.endpointMtimeMs !== undefined || row.endpointFileId !== undefined || row.endpointIncarnation !== undefined) return false;
   const root = canonicalPath(agentDir);
-  return root !== null && canonicalPath(row.locator.stateRoot) === root
-    && nonEmptyString(row.sessionId) && row.live === true
-    && row.endpointGeneration === 0
-    && row.terminal === false && row.terminalUncertain === false && row.ambiguous === false
-    && row.identityProvenance === "composite"
-    && nonEmptyString(row.hostIncarnation) && row.processIncarnation === row.hostIncarnation
-    && row.endpointMtimeMs === undefined && row.endpointFileId === undefined && row.endpointIncarnation === undefined;
+  return root !== null && canonicalPath(row.locator.stateRoot) === root;
 }
 
 function canonicalPath(value: unknown): string | null {
@@ -187,46 +187,35 @@ function canonicalPath(value: unknown): string | null {
   try {
     const canonical = realpathSync.native(value);
     return process.platform === "win32" ? canonical.toLowerCase() : canonical;
-  } catch {
-    return null;
-  }
-}
-
-function parseBrokerPage(text: string): BrokerPage | null {
-  try {
-    const envelope: unknown = JSON.parse(text);
-    if (isRecord(envelope) && envelope.type === "broker_response" && envelope.ok === false) throw new GjcSdkLookupError("unavailable");
-    if (!isRecord(envelope) || envelope.type !== "broker_response" || envelope.ok !== true || !isRecord(envelope.result)) return null;
-    const result = envelope.result;
-    if (typeof result.indexSeq !== "number" || !Number.isSafeInteger(result.indexSeq) || result.indexSeq < 0 || !Array.isArray(result.sessions)) return null;
-
-    let continuationCursor: string | null = null;
-    if (Object.hasOwn(result, "continuationCursor") && result.continuationCursor !== null) {
-      if (typeof result.continuationCursor !== "string"
-        || result.continuationCursor.length === 0
-        || result.continuationCursor.length > MAX_CURSOR_LENGTH
-        || result.continuationCursor.trim() !== result.continuationCursor
-        || /[\u0000-\u001f\u007f]/.test(result.continuationCursor)) return null;
-      continuationCursor = result.continuationCursor;
-    }
-
-    return {
-      indexSeq: result.indexSeq as number,
-      sessions: result.sessions,
-      continuationCursor,
-      savedSession: result.savedSession,
-    };
   } catch (error) {
-    if (error instanceof GjcSdkLookupError) throw error;
-    return null;
+    throw lookupExecutionError(error);
   }
 }
 
-function brokerUnavailable(text: string): boolean {
+function parseBrokerPage(text: string): BrokerPage {
+  let envelope: unknown;
   try {
-    const response: unknown = JSON.parse(text);
-    return isRecord(response) && response.type === "broker_response" && response.ok === false;
-  } catch { return false; }
+    envelope = JSON.parse(text);
+  } catch {
+    throw new GjcSdkLookupError("unavailable");
+  }
+  if (!isRecord(envelope) || envelope.type !== "broker_response" || envelope.ok !== true || !isRecord(envelope.result))
+    throw new GjcSdkLookupError("unavailable");
+  const result = envelope.result;
+  if (typeof result.indexSeq !== "number" || !Number.isSafeInteger(result.indexSeq) || result.indexSeq < 0 || !Array.isArray(result.sessions))
+    throw new GjcSdkLookupError("unavailable");
+
+  let continuationCursor: string | null = null;
+  if (Object.hasOwn(result, "continuationCursor") && result.continuationCursor !== null) {
+    if (typeof result.continuationCursor !== "string"
+      || result.continuationCursor.length === 0
+      || result.continuationCursor.length > MAX_CURSOR_LENGTH
+      || result.continuationCursor.trim() !== result.continuationCursor
+      || /[\u0000-\u001f\u007f]/.test(result.continuationCursor)) throw new GjcSdkLookupError("unavailable");
+    continuationCursor = result.continuationCursor;
+  }
+
+  return { indexSeq: result.indexSeq, sessions: result.sessions, continuationCursor, savedSession: result.savedSession };
 }
 
 function bindingFromRow(value: unknown, pids: ReadonlySet<number>, cwd: string, worktreeRoot: string | null): SessionBinding | null {
@@ -292,8 +281,8 @@ async function runBounded(
   runner: GjcSdkCommandRunner,
   args: string[],
   deadline: number,
-  onRunnerSettled: () => void,
   commandTimeoutMs: number,
+  onRunnerSettled: () => void,
 ): Promise<string> {
   const remaining = Math.min(commandTimeoutMs, deadline - Date.now());
   if (remaining <= 0) {
@@ -364,13 +353,13 @@ function cachedSessionList(state: SessionListState, key: string, now: number): s
   return state.cache.get(key)?.output ?? null;
 }
 
-async function waitForSessionListTurn(previous: Promise<void>, deadline: number): Promise<void> {
+async function waitForSessionList<T>(previous: Promise<T>, deadline: number): Promise<T> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new GjcSdkLookupError("timeout");
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    return await Promise.race([
       previous,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new GjcSdkLookupError("timeout")), remaining);
@@ -403,7 +392,7 @@ async function runSerializedSessionList(
   state: SessionListState,
   key: string,
 ): Promise<string> {
-  const { agentDir, jsonInput, deadline, cacheClock, commandTimeoutMs } = request;
+  const { agentDir, jsonInput, deadline, commandTimeoutMs, cacheClock } = request;
   const previous = state.queue.tail;
   let releaseQueue: (() => void) | undefined;
   const queueTurn = new Promise<void>((resolve) => {
@@ -419,7 +408,7 @@ async function runSerializedSessionList(
   };
 
   try {
-    await waitForSessionListTurn(previous, deadline);
+    await waitForSessionList(previous, deadline);
     acquired = true;
 
     const cachedAfterWait = cachedSessionList(state, key, cacheClock());
@@ -428,14 +417,13 @@ async function runSerializedSessionList(
     await reserveSessionListStart(state.queue, deadline, cacheClock);
     const args = sdkArgs(agentDir, jsonInput);
     runnerPending = true;
-    const output = await runBounded(runner, args, deadline, () => {
+    const output = await runBounded(runner, args, deadline, commandTimeoutMs, () => {
       runnerPending = false;
       releaseWhenFinished();
-    }, commandTimeoutMs);
+    });
     const parsed = parseBrokerPage(output);
     const exactLookup = Object.hasOwn(jsonInput, "resolveSessionId");
-    if (parsed !== null && parsed.sessions.length <= PAGE_LIMIT
-      && (!exactLookup || parsed.continuationCursor === null)) {
+    if (parsed.sessions.length <= PAGE_LIMIT && (!exactLookup || parsed.continuationCursor === null)) {
       state.cache.set(key, { output, expiresAt: cacheClock() + SESSION_LIST_CACHE_TTL_MS });
     }
     return output;
@@ -462,7 +450,10 @@ function runCachedSessionList(
   if (cached !== null) return Promise.resolve(cached);
 
   const inFlight = state.inFlight.get(key);
-  if (inFlight !== undefined) return inFlight;
+  if (inFlight !== undefined) {
+    // A short status read may share a cold chat query, but never its longer deadline.
+    return waitForSessionList(inFlight, Math.min(request.deadline, Date.now() + request.commandTimeoutMs));
+  }
 
   const requestPromise = runSerializedSessionList(runner, request, state, key);
   state.inFlight.set(key, requestPromise);
@@ -532,21 +523,20 @@ async function resolveTranscript(
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const input = cursor === null ? { scope } : { scope, cursor };
-      const output = await runCachedSessionList(runner, { agentDir, jsonInput: input, deadline, cacheClock, commandTimeoutMs });
-      if (brokerUnavailable(output)) throw new GjcSdkLookupError("unavailable");
+      const output = await runCachedSessionList(runner, { agentDir, jsonInput: input, deadline, commandTimeoutMs, cacheClock });
       const response = parseBrokerPage(output);
-      if (response === null || response.sessions.length > PAGE_LIMIT) return null;
-      if (indexSeq !== null && response.indexSeq !== indexSeq) return null;
+      if (response.sessions.length > PAGE_LIMIT) throw new GjcSdkLookupError("unavailable");
+      if (indexSeq !== null && response.indexSeq !== indexSeq) throw new GjcSdkLookupError("unavailable");
       indexSeq = response.indexSeq;
-      if (rows.length + response.sessions.length > MAX_ROWS) return null;
+      if (rows.length + response.sessions.length > MAX_ROWS) throw new GjcSdkLookupError("unavailable");
       rows.push(...response.sessions);
       collectGuardSessionIds(response.sessions, wantedPids, guardSessionIds);
 
       cursor = response.continuationCursor;
       if (cursor === null) break;
-      if (seenCursors.has(cursor)) return null;
+      if (seenCursors.has(cursor)) throw new GjcSdkLookupError("unavailable");
       seenCursors.add(cursor);
-      if (page === MAX_PAGES - 1) return null;
+      if (page === MAX_PAGES - 1) throw new GjcSdkLookupError("unavailable");
     }
 
     const candidates: SessionBinding[] = [];
@@ -565,12 +555,12 @@ async function resolveTranscript(
       agentDir,
       jsonInput: { cwd: expected.locatorCwd, resolveSessionId: expected.sessionId },
       deadline,
-      cacheClock,
       commandTimeoutMs,
+      cacheClock,
     });
-    if (brokerUnavailable(lookup)) throw new GjcSdkLookupError("unavailable");
     const exact = parseBrokerPage(lookup);
-    if (exact === null || exact.continuationCursor !== null || indexSeq === null || exact.indexSeq < indexSeq) return null;
+    if (exact.sessions.length > PAGE_LIMIT) throw new GjcSdkLookupError("unavailable");
+    if (exact.continuationCursor !== null || indexSeq === null || exact.indexSeq < indexSeq) throw new GjcSdkLookupError("unavailable");
 
     collectGuardSessionIds(exact.sessions, wantedPids, guardSessionIds);
     const samePidRows = exact.sessions.filter((row) => isRecord(row)
@@ -634,7 +624,7 @@ export function gjcSdkCurrentSessionWithRunner(
   cacheClock: () => number = sessionListCacheClock,
   generationCurrent: typeof gjcSdkGenerationCurrent = gjcSdkGenerationCurrent,
 ): Promise<GjcSdkSessionIdentity | null> {
-  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock)
+  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock, "status")
     .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? currentIdentity(binding) : null);
 }
 
