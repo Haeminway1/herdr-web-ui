@@ -119,7 +119,7 @@ export interface GjcDiscovery {
 export async function gjcPanes(panes: HerdrPane[], deps: GjcDiscovery = {}): Promise<Map<string, OmoPane>> {
   const managedSession = deps.managedSession ?? ((pane: HerdrPane) => resolveManagedSession(pane));
   const processInfo = deps.processInfo ?? ((paneId: string) => herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: paneId }).catch(() => null));
-  const transcript = deps.transcript ?? ((paneId: string, cwd: string) => gjcTranscriptForPane(paneId, cwd).catch(() => null));
+  const transcript = deps.transcript ?? ((paneId: string, cwd: string) => gjcTranscriptForPane(paneId, cwd, undefined, { purpose: "status" }).catch(() => null));
   const startedAt = deps.startedAt ?? processStartedAt;
   const underShell = deps.underShell ?? ((shellPid: unknown) => gjcPidUnderShell(shellPid, deps.platform));
   const found = new Map<string, OmoPane>();

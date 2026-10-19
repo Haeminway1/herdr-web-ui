@@ -40,10 +40,11 @@ import nodePath, { type PlatformPath } from "node:path";
 import type { ConversationMetadata, ConversationPart, ConversationTurn, HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc, paneRead, sessionSnapshot } from "./herdr/client.ts";
 import { resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
-import { codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
+import { CodexReadScope, codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, codexTranscriptImage } from "./codex-images.ts";
 import { AmbiguousClaudeStore, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
 import { forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
+import { GjcSdkLookupError, lookupExecutionError } from "./gjc-sdk-error.ts";
 import { omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
 import { processStartedAt } from "./process-start.ts";
 import { ompHeldTranscript } from "./omp.ts";
@@ -434,7 +435,7 @@ export function parseClaudeTranscript(text: string, maxTurns = MAX_TURNS, option
         if (typeof block !== "object" || block === null) continue;
         const b = block as { type?: string; text?: unknown; thinking?: unknown; name?: unknown; input?: unknown };
         if (b.type === "text" && typeof b.text === "string" && b.text.length > 0) {
-          turn.parts.push({ kind: "text", text: b.text });
+          turn.parts.push({ kind: "text", text: b.text, ...(completed ? { phase: "final_answer" as const } : {}) });
         } else if (b.type === "thinking") {
           const thinking = typeof b.thinking === "string" ? b.thinking : typeof b.text === "string" ? b.text : "";
           // the terminal prints an "updates" entry's thinking as narration between the tools, so it
@@ -470,7 +471,8 @@ const writtenSessions = new Set<string>();
 const cache = new Map<string, { source: RecognizedConversation["source"]; signature: string; turns: ConversationTurn[]; metadata: ConversationMetadata; cursor: string | null; abandoned?: { count: number; branches: number; summary: string | null } }>();
 
 export class ConversationUnavailable extends Error {
-  constructor(reason: string, readonly managedSession?: ManagedSessionIdentity) {
+  /** `screen`: the model and effort the agent's own live status line states (start-screen.ts), for the scrollback standing in */
+  constructor(reason: string, readonly managedSession?: ManagedSessionIdentity, readonly screen?: ConversationMetadata) {
     super(reason);
     this.name = "ConversationUnavailable";
   }
@@ -499,6 +501,8 @@ export type RecognizedConversation = {
   managed_session?: ManagedSessionIdentity;
   turns: ConversationTurn[];
   metadata: ConversationMetadata;
+  /** `metadata` was read off the agent's own screen (ConversationResponse.screen) */
+  screen?: true;
   /** the first turn's position, for the page before it; null at the conversation's beginning */
   cursor: string | null;
   /**
@@ -543,6 +547,7 @@ interface TranscriptStream {
   floor: number;
   promptStarts?: number[];
   fd?: number;
+  io?: CodexReadScope;
 }
 
 // In-place rewrites keep the inode. Change the cursor generation when observed,
@@ -558,14 +563,14 @@ function transcriptGeneration(path: string, stat: { dev: number; ino: number; si
   return generation ? `-${generation}` : "";
 }
 
-function transcriptStream(source: StreamSource, path: string, stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }, codexHome: string, agy?: AgyProjection, fd?: number): TranscriptStream {
+function transcriptStream(source: StreamSource, path: string, stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }, codexHome: string, agy?: AgyProjection, fd?: number, io?: CodexReadScope): TranscriptStream {
   // (a chain whose parent was archived since comes back shorter: codexHistorySegments;
   // a pi branch skips the side paths a /tree left behind: piBranchSegments)
   const grok = source === "grok-transcript" ? grokProjection(path, stat) : null;
   const branch = source === "pi-transcript" ? piBranchSegments(path, stat.size) : null;
   if (source === "pi-transcript" && branch === null) throw new ConversationUnavailable("branch_unreadable");
   const segments: { path: string; start: number; end: number }[] = source === "codex-transcript"
-    ? codexHistorySegments(path, codexHome).map((segment) => ({ path: segment.path, start: 0, end: segment.end }))
+    ? codexHistorySegments(path, codexHome, io).map((segment) => ({ path: segment.path, start: 0, end: segment.end }))
     : grok !== null ? grok.segments.map((segment) => ({ path, ...segment }))
     : agy ? agy.segments.map((segment) => ({ path, ...segment }))
     : branch !== null ? branch.map((segment) => ({ path, start: segment.start, end: segment.end }))
@@ -599,12 +604,12 @@ function transcriptStream(source: StreamSource, path: string, stat: { dev: numbe
     chain = `-${createHash("sha256").update(layout).digest("base64url").slice(0, 10)}`;
   } else if (source === "codex-transcript") {
     const earlier = files.slice(0, -1).map((file) => {
-      const identity = statSync(file.path, { throwIfNoEntry: false });
+      const identity = io ? io.stat(file.path) : statSync(file.path, { throwIfNoEntry: false });
       return `${file.path}\0${file.length}\0${identity ? `${identity.dev}:${identity.ino}` : "-"}`;
     });
     chain = earlier.length === 0 ? "" : `-${createHash("sha256").update(earlier.join("\n")).digest("base64url").slice(0, 10)}`;
   }
-  return { id: `${stat.dev.toString(36)}-${stat.ino.toString(36)}${chain}${transcriptGeneration(path, stat)}`, files, length: stream, floor: 0, promptStarts: grok?.promptStarts ?? agy?.promptStarts, fd };
+  return { id: `${io ? "managed-" : ""}${stat.dev.toString(36)}-${stat.ino.toString(36)}${chain}${transcriptGeneration(path, stat)}`, files, length: stream, floor: 0, promptStarts: grok?.promptStarts ?? agy?.promptStarts, fd, io };
 }
 
 function readStream(stream: TranscriptStream, from: number, to: number): Buffer {
@@ -613,12 +618,12 @@ function readStream(stream: TranscriptStream, from: number, to: number): Buffer 
     const low = Math.max(from, file.start);
     const high = Math.min(to, file.start + file.length);
     if (low >= high) continue;
-    const fd = stream.fd ?? openSync(file.path, "r");
+    const fd = stream.io?.fd(file.path) ?? stream.fd ?? openSync(file.path, "r");
     try {
       const buffer = Buffer.alloc(high - low);
       chunks.push(buffer.subarray(0, readSync(fd, buffer, 0, buffer.length, file.offset + (low - file.start))));
     } finally {
-      if (stream.fd === undefined) closeSync(fd);
+      if (stream.fd === undefined && stream.io === undefined) closeSync(fd);
     }
   }
   return Buffer.concat(chunks);
@@ -978,7 +983,7 @@ function codexLiveTurn(path: string, stream: TranscriptStream, start: number, be
 /** Codex settings belong to the live rollout; native clears bound other stores. A model or
  * thinking-level change after the head and before the page follows the head, in order. */
 function metadataHead(path: string, stream: TranscriptStream, source: RecognizedConversation["source"], start: number): string {
-  if (source === "codex-transcript") return readRange(path, 0, METADATA_HEAD_BYTES);
+  if (source === "codex-transcript") return readRange(path, 0, METADATA_HEAD_BYTES, stream.io);
   const end = Math.min(start, stream.floor + METADATA_HEAD_BYTES);
   const later = Object.values(clearScans.get(path)?.settings ?? {})
     // a record the head cuts in two is read whole here
@@ -1323,9 +1328,15 @@ type ManagedResolvedTranscript = {
   source: ManagedSource;
   path: string;
   managed_session: ManagedSessionIdentity;
+  fileIdentity: { dev: number; ino: number };
   codexHome?: string;
   agy?: AgyStore;
 };
+
+function managedReadScope(resolved: ManagedResolvedTranscript): CodexReadScope {
+  const store = resolved.source === "codex-transcript" ? nodePath.join(resolved.codexHome!, "sessions") : nodePath.dirname(resolved.path);
+  return new CodexReadScope(resolved.path, store, resolved.fileIdentity, resolved.source === "omo-transcript");
+}
 
 type ResolvedTranscript =
   | { source: StreamSource; path: string; codexHome?: string; agy?: AgyStore }
@@ -1376,13 +1387,14 @@ async function managedTranscript(pane: HerdrPane, deps: ManagedSessionDeps): Pro
   if (resolution === null) {
     throw new ConversationUnavailable("blocked_managed_record_unavailable", pane.managed_session);
   }
+  if (resolution.lookupError) throw resolution.lookupError;
   const { identity, sessionFile } = resolution;
   if (identity.state !== "ready" || identity.harness === null || identity.id === null || identity.generation === null
     || identity.session_id === null || sessionFile === null) {
     throw new ConversationUnavailable(identity.reason ?? identity.state, identity);
   }
   const source = MANAGED_SOURCES[identity.harness];
-  const resolved: ManagedResolvedTranscript = { source, path: sessionFile, managed_session: identity };
+  const resolved: ManagedResolvedTranscript = { source, path: sessionFile, managed_session: identity, fileIdentity: resolution.fileIdentity! };
   if (identity.harness === "codex") {
     let directory = nodePath.dirname(sessionFile);
     while (nodePath.basename(directory) !== "sessions" && nodePath.dirname(directory) !== directory) directory = nodePath.dirname(directory);
@@ -1397,18 +1409,34 @@ function sameManagedIdentity(a: ManagedSessionIdentity, b: ManagedSessionIdentit
 }
 
 async function assertManagedTranscriptCurrent(pane: HerdrPane, resolved: ManagedResolvedTranscript, deps: ManagedSessionDeps): Promise<void> {
+  let livePane: HerdrPane | null;
+  try {
+    livePane = deps.paneById ? await deps.paneById(pane.pane_id)
+      : (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === pane.pane_id) ?? null;
+  } catch (error) { throw lookupExecutionError(error); }
+  if (livePane === null) throw new ConversationUnavailable("blocked_managed_identity_changed");
+  const lookup = managedLookupPane(livePane);
+  if (!lookup.declared || lookup.invalid || lookup.pane.tokens?.hm_managed_session !== resolved.managed_session.id
+    || lookup.pane.tokens?.hm_managed_generation !== String(resolved.managed_session.generation)) {
+    throw new ConversationUnavailable("blocked_managed_identity_changed", livePane.managed_session);
+  }
   let current: ManagedResolvedTranscript | null;
-  try { current = await managedTranscript(pane, deps); } catch (error) {
+  try { current = await managedTranscript(livePane, deps); } catch (error) {
     if (error instanceof ConversationUnavailable) throw new ConversationUnavailable("blocked_managed_identity_changed", error.managedSession);
     throw error;
   }
-  if (current === null || current.path !== resolved.path || !sameManagedIdentity(current.managed_session, resolved.managed_session)) {
+  if (current === null || current.path !== resolved.path || current.fileIdentity.dev !== resolved.fileIdentity.dev
+    || current.fileIdentity.ino !== resolved.fileIdentity.ino || !sameManagedIdentity(current.managed_session, resolved.managed_session)) {
     throw new ConversationUnavailable(current?.managed_session.reason ?? "blocked_managed_identity_changed", current?.managed_session);
   }
 }
 
+function managedPrefix(identity: ManagedSessionIdentity): string {
+  return `managed-${identity.id}-${identity.generation}:`;
+}
+
 function managedPage(page: ConversationPage, identity: ManagedSessionIdentity): { page: ConversationPage; prefix: string } {
-  const prefix = `managed-${identity.id}-${identity.generation}:`;
+  const prefix = managedPrefix(identity);
   const unwrap = (cursor: string | undefined): string | undefined => {
     if (cursor === undefined) return undefined;
     if (!cursor.startsWith(prefix) || cursor.length === prefix.length) throw new HistoryChanged();
@@ -1603,7 +1631,18 @@ export async function conversationForPane(pane: HerdrPane, codexHome?: string, p
   if (!("managed_session" in resolved)) throw new ConversationUnavailable("no_managed_session");
   const identity = resolved.managed_session;
   const translated = managedPage(page, identity);
-  const answer = transcriptPage(resolved.source, resolved.path, translated.page, resolved.codexHome ?? codexHome);
+  let answer: RecognizedConversation;
+  try {
+    const io = managedReadScope(resolved);
+    try { answer = transcriptPageRead(resolved.source, resolved.path, translated.page, resolved.codexHome ?? codexHome, undefined, undefined, io); }
+    finally { io.close(); }
+  } catch (error) {
+    await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
+    // A validated managed file becoming unreadable is not proof of an empty history.
+    if (error instanceof ConversationUnavailable && error.message === "transcript_missing") throw new GjcSdkLookupError("unavailable");
+    if (!(error instanceof ConversationUnavailable || error instanceof HistoryChanged || error instanceof GjcSdkLookupError)) throw new GjcSdkLookupError("unavailable");
+    throw error;
+  }
   await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
   rememberPaneRead(pane.pane_id, resolved.path);
   const historyId = `${translated.prefix}${answer.history_id}`;
@@ -1614,6 +1653,15 @@ export async function conversationForPane(pane: HerdrPane, codexHome?: string, p
   rememberPaneSession(pane.pane_id, session);
   return {
     ...answer,
+    turns: answer.turns.map((turn) => ({
+      ...turn,
+      parts: turn.parts.map((part) => part.kind === "image" ? { ...part, ref: `${translated.prefix}${part.ref}` }
+        : part.kind === "tool" ? {
+          ...part,
+          ...(part.output_ref === undefined ? {} : { output_ref: `${translated.prefix}${part.output_ref}` }),
+          ...(part.images === undefined ? {} : { images: part.images.map((image) => ({ ...image, ref: `${translated.prefix}${image.ref}` })) }),
+        } : part),
+    })),
     managed_session: identity,
     cursor: answer.cursor === null ? null : `${translated.prefix}${answer.cursor}`,
     history_id: historyId,
@@ -1632,11 +1680,17 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
   let resolved: NativeTranscript;
 
   // no transcript states the model yet: the agent's own screen does (start-screen.ts). A screen
-  // that cannot be read leaves it unknown, as it was
+  // that cannot be read leaves it unknown. omp follows its transcript only: catalog discovery
+  // can refresh the CLI's OAuth credentials and is never initiated by the bridge.
+  const screenMetadata = async (source: RecognizedConversation["source"]): Promise<ConversationMetadata> => {
+    const screen = await paneRead({ paneId, source: "visible", format: "text", timeoutMs: 2_000 }).then((read) => read.text, () => "");
+    return startScreenMetadata(source, screen);
+  };
   const notBegun = async (source: RecognizedConversation["source"], id: string): Promise<RecognizedConversation> => {
-    const screen = readsStartScreen(source) ? await paneRead({ paneId, source: "visible", format: "text", timeoutMs: 2_000 }).then((read) => read.text, () => "") : "";
-    const metadata = startScreenMetadata(source, screen);
-    return { source, turns: [], metadata, cursor: null, history_id: id, version: answerVersion(id, `${metadata.model}\0${metadata.reasoning_effort}`) };
+    // what the screen states can change with the pane's output, with no file to watch: the chat re-reads on it
+    const screen = readsStartScreen(source);
+    const metadata = screen ? await screenMetadata(source) : { model: null, reasoning_effort: null };
+    return { source, turns: [], metadata, ...(screen ? { screen: true as const } : {}), cursor: null, history_id: id, version: answerVersion(id, `${metadata.model}\0${metadata.reasoning_effort}`) };
   };
 
   const onNotStarted = (error: ConversationNotStarted): Promise<RecognizedConversation> => {
@@ -1662,7 +1716,15 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     if (pane === undefined) { launchedAgents.forget(paneId); throw error; }
     // an agent this server started writes no session before its first message (launched-agents.ts)
     const launch = launchedAgents.notBegun(paneId, pane.agent_status);
-    if (launch === null) throw error;
+    if (launch === null) {
+      // a Codex that reported no session yet (one started in the terminal): the terminal stands in
+      // for the chat, and Codex's live status line still states the model and effort it runs at
+      if (pane.agent === "codex" && page.before === undefined && page.since === undefined && page.from === undefined) {
+        const screen = await screenMetadata("codex-transcript");
+        if (screen.model !== null) throw new ConversationUnavailable(error.message, undefined, screen);
+      }
+      throw error;
+    }
     if (page.before !== undefined || page.since !== undefined || page.from !== undefined) throw new HistoryChanged();
     return await notBegun(launch.source, launch.historyId);
   }
@@ -1732,16 +1794,16 @@ export function transcriptPage(source: StreamSource, path: string, page: Convers
   return transcriptPageRead(source, path, page, codexHome);
 }
 
-function transcriptPageRead(source: StreamSource, path: string, page: ConversationPage, codexHome?: string, agy?: AgyProjection, fd?: number): RecognizedConversation {
+function transcriptPageRead(source: StreamSource, path: string, page: ConversationPage, codexHome?: string, agy?: AgyProjection, fd?: number, io?: CodexReadScope): RecognizedConversation {
   let stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
   try {
-    stat = statSync(path);
+    stat = io ? io.stat(path) : statSync(path);
   } catch {
     throw new ConversationUnavailable("transcript_missing");
   }
   let stream: TranscriptStream;
   try {
-    stream = transcriptStream(source, path, stat, codexHome ?? defaultCodexHome(), agy, fd);
+    stream = transcriptStream(source, path, stat, codexHome ?? defaultCodexHome(), agy, fd, io);
     applyHistoryBoundary(path, stream, source);
   } catch (error) {
     // a branch that cannot be walked says so; a file that went unreadable mid-read has
@@ -1820,21 +1882,26 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
  * image. Codex uses a hash of the native attachment and searches only the bound history.
  */
 export async function conversationImage(paneId: string, ref: string, codexHome?: string, opencodeDb?: string, managedDeps: ManagedSessionDeps = {}): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
-  if (!IMAGE_REF.test(ref) && !CODEX_IMAGE_REF.test(ref) && !PI_IMAGE_REF.test(ref) && !OPENCODE_IMAGE_REF.test(ref)) return null;
+  if (ref.length > 256) return null;
   const snapshot = await sessionSnapshot();
   const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined || typeof pane.cwd !== "string" || pane.cwd.length === 0) return null;
   let resolved: ResolvedTranscript;
   try { resolved = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes, opencodeDb, undefined, undefined, managedDeps); }
   catch (error) { if (error instanceof ConversationUnavailable) return null; throw error; }
+  const nativeRef = nativeConversationRef(ref, resolved);
+  if (nativeRef === null || (!IMAGE_REF.test(nativeRef) && !CODEX_IMAGE_REF.test(nativeRef) && !PI_IMAGE_REF.test(nativeRef) && !OPENCODE_IMAGE_REF.test(nativeRef))) return null;
   // OpenCode's store is read per request and keeps nothing for the pane to release
-  if (resolved.source === "opencode-transcript") return opencodeImage(resolved.path, resolved.session, ref);
-  const image = resolved.source === "codex-transcript" ? codexTranscriptImage(codexHistorySegments(resolved.path, resolved.codexHome ?? codexHome), ref, pane.cwd)
-    : resolved.source === "pi-transcript" ? piTranscriptImage(resolved.path, ref)
-    : resolved.source === "claude-transcript" ? transcriptImage(resolved.path, ref) : null;
+  if (resolved.source === "opencode-transcript") return opencodeImage(resolved.path, resolved.session, nativeRef);
+  const io = "managed_session" in resolved ? managedReadScope(resolved) : undefined;
+  let image: { mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null;
   try {
+    image = resolved.source === "codex-transcript" ? await codexTranscriptImage(codexHistorySegments(resolved.path, resolved.codexHome ?? codexHome, io), nativeRef, pane.cwd, io)
+      : resolved.source === "pi-transcript" ? piTranscriptImage(resolved.path, nativeRef)
+      : resolved.source === "claude-transcript" ? transcriptImage(resolved.path, nativeRef, io) : null;
     if ("managed_session" in resolved) await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
-  } catch (error) { if (error instanceof ConversationUnavailable) return null; throw error; }
+  } catch (error) { if (error instanceof ConversationUnavailable) return null; throw io && !(error instanceof GjcSdkLookupError) ? new GjcSdkLookupError("unavailable") : error; }
+  finally { io?.close(); }
   rememberPaneRead(paneId, resolved.path);
   return image;
 }
@@ -1842,12 +1909,12 @@ export async function conversationImage(paneId: string, ref: string, codexHome?:
 const IMAGE_REF = /^([0-9a-f-]{8,64}):(\d{1,3})$/i;
 
 /** The image an image part's ref names in a Claude transcript file, decoded; null when there is none. */
-export function transcriptImage(path: string, ref: string): { mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null {
+export function transcriptImage(path: string, ref: string, io?: CodexReadScope): { mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null {
   const match = IMAGE_REF.exec(ref);
   if (match === null) return null;
   const [, uuid, index] = match;
   let text: string;
-  try { text = readFileSync(path, "utf8"); } catch { return null; }
+  try { text = io ? readManagedText(io, path) : readFileSync(path, "utf8"); } catch (error) { if (io) throw error; return null; }
   text = activeHistoryText(text, "claude-transcript");
   const needle = JSON.stringify(uuid);
   for (const line of text.split("\n")) {
@@ -1864,25 +1931,50 @@ export function transcriptImage(path: string, ref: string): { mediaType: string;
   return null;
 }
 
+function readManagedText(io: CodexReadScope, path: string, end = io.stat(path).size): string {
+  const bytes = Buffer.alloc(end);
+  const fd = io.fd(path);
+  let at = 0;
+  while (at < end) {
+    const count = readSync(fd, bytes, at, Math.min(1024 * 1024, end - at), at);
+    if (count === 0) break;
+    at += count;
+  }
+  return bytes.subarray(0, at).toString("utf8");
+}
+
 const TOOL_REF = /^[A-Za-z0-9_:.-]{1,128}$/;
 /** A whole output is still bounded: a page of it, not a log file. */
 const TOOL_OUTPUT_MAX = 2_000_000;
 
+/** A retained card must never read a different managed generation that reuses its native id. */
+function nativeConversationRef(ref: string, resolved: ResolvedTranscript): string | null {
+  if (!("managed_session" in resolved)) return /^managed-[0-9a-f]{32}-[1-9][0-9]*:/.test(ref) ? null : ref;
+  const prefix = managedPrefix(resolved.managed_session);
+  return ref.startsWith(prefix) ? ref.slice(prefix.length) : null;
+}
+
 /** The whole output of a tool call whose page output was cut, by its id; null when there is none. */
 export async function toolOutput(paneId: string, ref: string, codexHome?: string, opencodeDb?: string, hermesHome?: string, grokHome?: string, managedDeps: ManagedSessionDeps = {}): Promise<string | null> {
-  if (!TOOL_REF.test(ref)) return null;
+  if (ref.length > 256) return null;
   const snapshot = await sessionSnapshot();
   const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined || typeof pane.cwd !== "string" || pane.cwd.length === 0) return null;
   let resolved: ResolvedTranscript;
   try { resolved = await resolveTranscript(pane, pane.cwd, codexHome, snapshot.panes, opencodeDb, hermesHome, grokHome, managedDeps); }
   catch (error) { if (error instanceof ConversationUnavailable) return null; throw error; }
+  const nativeRef = nativeConversationRef(ref, resolved);
+  if (nativeRef === null || !TOOL_REF.test(nativeRef)) return null;
   if (resolved.source === "opencode-transcript") {
-    const output = opencodeToolOutput(resolved.path, resolved.session, ref);
+    const output = opencodeToolOutput(resolved.path, resolved.session, nativeRef);
     return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
-  if (resolved.source === "hermes-transcript") return hermesToolOutput(resolved.sessionId, resolved.path, ref, TOOL_OUTPUT_MAX);
-  const output = transcriptToolOutput(resolved.source, resolved.path, ref, resolved.codexHome ?? codexHome);
+  if (resolved.source === "hermes-transcript") return hermesToolOutput(resolved.sessionId, resolved.path, nativeRef, TOOL_OUTPUT_MAX);
+  const io = "managed_session" in resolved ? managedReadScope(resolved) : undefined;
+  let output: string | null;
+  try { output = transcriptToolOutput(resolved.source, resolved.path, nativeRef, resolved.codexHome ?? codexHome, io); }
+  catch (error) { throw io && !(error instanceof GjcSdkLookupError) ? new GjcSdkLookupError("unavailable") : error; }
+  finally { io?.close(); }
   if (resolved.agy && !sameAgyStore(resolved.agy, await resolveAgyStore(pane))) return null;
   try {
     if ("managed_session" in resolved) await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
@@ -1892,15 +1984,15 @@ export async function toolOutput(paneId: string, ref: string, codexHome?: string
 }
 
 /** The output a transcript file holds for one tool call id, whole (up to TOOL_OUTPUT_MAX). */
-export function transcriptToolOutput(source: StreamSource, path: string, ref: string, codexHome?: string): string | null {
+export function transcriptToolOutput(source: StreamSource, path: string, ref: string, codexHome?: string, io?: CodexReadScope): string | null {
   if (!TOOL_REF.test(ref)) return null;
   if (source === "codex-transcript") {
     let segments: ReturnType<typeof codexHistorySegments>;
-    try { segments = codexHistorySegments(path, codexHome); } catch { return null; }
+    try { segments = codexHistorySegments(path, codexHome, io); } catch (error) { if (io) throw error; return null; }
     for (const segment of segments) {
       let text: string;
       // a rollout may have been archived since resolution: the others still hold theirs
-      try { text = readRange(segment.path, 0, segment.end); } catch { continue; }
+      try { text = readRange(segment.path, 0, segment.end, io); } catch (error) { if (io) throw error; continue; }
       const output = outputInText(source, text, ref);
       if (output !== null) return output;
     }
@@ -1910,7 +2002,7 @@ export function transcriptToolOutput(source: StreamSource, path: string, ref: st
   if (source === "agy-transcript") return agyToolOutput(path, ref);
   if (source === "pi-transcript") return piToolOutput(path, ref);
   let text: string;
-  try { text = readFileSync(path, "utf8"); } catch { return null; }
+  try { text = io ? readManagedText(io, path) : readFileSync(path, "utf8"); } catch (error) { if (io) throw error; return null; }
   return outputInText(source, text, ref);
 }
 

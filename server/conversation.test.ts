@@ -19,7 +19,64 @@ import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
 import type { ManagedSessionDeps } from "./managed-sessions.ts";
 import * as gjcRuntime from "./gjc-runtime.ts";
 import * as omo from "./omo.ts";
+import * as conversation from "./conversation.ts";
+import { handlePaneRequest } from "./pane-routes.ts";
 import { ConversationUnavailable, conversationForPane, conversationImage, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, resolveTranscript, toolOutput, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
+
+describe("conversation image cache policy", () => {
+  it("revalidates a managed tool ref instead of caching it as a native immutable id", async () => {
+    const output = spyOn(conversation, "toolOutput").mockResolvedValue("fixture output");
+    try {
+      const url = new URL(`http://fixture/api/pane/conversation/tool-output?${new URLSearchParams({ pane_id: "fixture", ref: "managed-0123456789abcdef0123456789abcdef-2:tool-id" })}`);
+      const response = await handlePaneRequest(new Request(url), url, url.pathname, {});
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response?.text()).toBe("fixture output");
+    } finally { output.mockRestore(); }
+  });
+
+  it.each([
+    ["managed-0123456789abcdef0123456789abcdef-2:codex-attachment", "private, no-store"],
+    ["managed-0123456789abcdef0123456789abcdef-2:12345678:0", "private, no-store"],
+    ["codex-attachment", "private, no-store"],
+    ["opencode:attachment", "private, no-store"],
+    ["12345678:0", "private, max-age=86400, immutable"],
+  ])("keeps %s within its source's cache boundary", async (ref, expected) => {
+    const image = spyOn(conversation, "conversationImage").mockResolvedValue({ mediaType: "image/png", bytes: new Uint8Array([1, 2, 3]) });
+    try {
+      const url = new URL(`http://fixture/api/pane/conversation/image?${new URLSearchParams({ pane_id: "fixture", ref })}`);
+      const response = await handlePaneRequest(new Request(url), url, url.pathname, {});
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("cache-control")).toBe(expected);
+    } finally { image.mockRestore(); }
+  });
+});
+
+it("labels only Claude's explicit end_turn text as final-answer evidence", () => {
+  const entry = (stop_reason: string | null) => JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason, content: [{ type: "text", text: "Answer" }] } });
+  expect(parseClaudeTranscript(entry(null))[0]?.parts).toEqual([{ kind: "text", text: "Answer" }]);
+  expect(parseClaudeTranscript(entry("tool_use"))[0]?.parts).toEqual([{ kind: "text", text: "Answer" }]);
+  expect(parseClaudeTranscript(entry("end_turn"))[0]?.parts).toEqual([{ kind: "text", text: "Answer", phase: "final_answer" }]);
+});
+
+it("keeps a cached pre-final Claude page distinct from its appended final answer", () => {
+  const dir = mkdtempSync(join(tmpdir(), "claude-finish-proof-"));
+  const file = join(dir, "session.jsonl");
+  const record = (stop_reason: string | null, text: string) => JSON.stringify({
+    type: "assistant", timestamp: "2026-10-19T01:00:00Z",
+    message: { role: "assistant", stop_reason, content: [{ type: "text", text }] },
+  }) + "\n";
+  try {
+    writeFileSync(file, record(null, "Partial answer"));
+    const before = transcriptPage("claude-transcript", file);
+    expect(before.turns.at(-1)?.parts.at(-1)).toEqual({ kind: "text", text: "Partial answer" });
+    expect(transcriptPage("claude-transcript", file).turns).toEqual(before.turns);
+    appendFileSync(file, record("end_turn", "Final answer"));
+    expect(transcriptPage("claude-transcript", file).turns.at(-1)?.parts.at(-1))
+      .toEqual({ kind: "text", text: "Final answer", phase: "final_answer" });
+    expect(before.turns.at(-1)?.parts.at(-1)).toEqual({ kind: "text", text: "Partial answer" });
+  } finally { forgetTranscriptState(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 describe("omo skill roots", () => {
   it("finds the bundled plugin from a Windows canonical launcher path", async () => {
@@ -1093,8 +1150,8 @@ describe("gjc sessions", () => {
     ].join("\n");
     const turns = parseOmpTranscript(text);
     expect(turns.map((turn) => turn.role)).toEqual(["user", "assistant", "assistant"]);
-    expect(turns[1]!.parts.at(-1)).toEqual({ kind: "text", text: "The full review." });
-    expect(turns[2]).toEqual({ role: "assistant", ts: "2026-10-05T22:14:58.000Z", end_ts: "2026-10-05T22:14:58.000Z", parts: [{ kind: "thinking", text: "nothing new" }, { kind: "text", text: "Nothing new to do." }] });
+    expect(turns[1]!.parts.at(-1)).toEqual({ kind: "text", text: "The full review.", phase: "final_answer" });
+    expect(turns[2]).toEqual({ role: "assistant", ts: "2026-10-05T22:14:58.000Z", end_ts: "2026-10-05T22:14:58.000Z", parts: [{ kind: "thinking", text: "nothing new" }, { kind: "text", text: "Nothing new to do.", phase: "final_answer" }] });
   });
 
   it("says which kind of notice the runtime delivered, and nothing where the runtime named none", () => {
@@ -1931,6 +1988,7 @@ describe("managed conversation identity", () => {
   const managedDeps: ManagedSessionDeps = {
     processIdentity: (pid) => observed?.pid === pid ? { ...observed } : null,
     gjcSession: async () => live,
+    paneById: async () => pane,
   };
 
   function writeHarness(harness: "gjc" | "omo" | "codex" | "claude", entries: string[] = []): string {
@@ -2028,6 +2086,156 @@ describe("managed conversation identity", () => {
     expect(answer.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: "parent answer" });
   });
 
+  it.each([300 * 1024, 1024 * 1024])("reads managed Codex history with a %i-byte session header", async (bytes) => {
+    writeHarness("codex");
+    const header = { type: "session_meta", payload: { id: sessionId, cwd: root, padding: "" } };
+    header.payload.padding = "x".repeat(bytes - Buffer.byteLength(JSON.stringify(header) + "\n"));
+    const row = JSON.stringify(header) + "\n";
+    expect(Buffer.byteLength(row)).toBe(bytes);
+    writeFileSync(sessionFile, row + JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "header question" } }) + "\n"
+      + JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "header answer" } }) + "\n");
+    const answer = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(JSON.stringify(answer.turns)).toContain("header answer");
+    expect(answer.managed_session?.state).toBe("ready");
+  });
+
+  it.each(["file", "symlink", "ancestor"] as const)("denies a transient %s swap after managed authorization, then recovers", async (kind) => {
+    writeHarness("claude", [JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "original answer" }] } })]);
+    const original = join(root, "original.jsonl");
+    const replacement = join(root, "replacement.jsonl");
+    const originalDir = join(root, "original-projects");
+    const decoyDir = join(root, "decoy-projects");
+    writeFileSync(replacement, JSON.stringify({ type: "user", sessionId, cwd: root }) + "\n" + JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "injected answer" }] } }) + "\n");
+    if (kind === "ancestor") {
+      mkdirSync(decoyDir);
+      copyFileSync(replacement, join(decoyDir, "exact.jsonl"));
+    }
+    const open = fs.openSync;
+    let headers = 0;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, flags: number, ...args: unknown[]) => {
+      if (path !== sessionFile || ++headers !== 3) return (open as (...args: unknown[]) => number)(path, flags, ...args);
+      swapped = true;
+      const directory = join(root, "claude", "projects");
+      if (kind === "ancestor") {
+        renameSync(directory, originalDir);
+        renameSync(decoyDir, directory);
+      } else {
+        renameSync(sessionFile, original);
+        if (kind === "symlink") symlinkSync(replacement, sessionFile);
+        else renameSync(replacement, sessionFile);
+      }
+      try { return (open as (...args: unknown[]) => number)(path, flags, ...args); }
+      finally {
+        if (kind === "ancestor") { renameSync(directory, decoyDir); renameSync(originalDir, directory); }
+        else { if (kind === "symlink") rmSync(sessionFile); else renameSync(sessionFile, replacement); renameSync(original, sessionFile); }
+      }
+    }) as typeof fs.openSync);
+    try {
+      await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      expect(swapped).toBe(true);
+    } finally { spy.mockRestore(); }
+    const recovered = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(JSON.stringify(recovered.turns)).toContain("original answer");
+    expect(JSON.stringify(recovered.turns)).not.toContain("injected answer");
+  });
+
+  it("rejects a transient replacement inode opened for a managed root header", async () => {
+    writeHarness("claude");
+    const replacement = join(root, "replacement.jsonl");
+    const original = join(root, "original.jsonl");
+    copyFileSync(sessionFile, replacement);
+    const open = fs.openSync;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, flags: number, ...args: unknown[]) => {
+      if (path !== sessionFile || swapped) return (open as (...args: unknown[]) => number)(path, flags, ...args);
+      swapped = true;
+      renameSync(sessionFile, original);
+      renameSync(replacement, sessionFile);
+      try { return (open as (...args: unknown[]) => number)(path, flags, ...args); }
+      finally { renameSync(sessionFile, replacement); renameSync(original, sessionFile); }
+    }) as typeof fs.openSync);
+    try {
+      await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "blocked_session_header" });
+      expect(swapped).toBe(true);
+    } finally { spy.mockRestore(); }
+    expect((await conversationForPane(pane, undefined, {}, managedDeps)).managed_session?.state).toBe("ready");
+  });
+
+  it.each(["image", "tool"] as const)("never returns transient replacement %s bytes after authorization", async (kind) => {
+    const entry = (label: string): string[] => [
+      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from(label).toString("base64") } }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "managed-tool", content: label }] } }),
+    ];
+    writeHarness("claude", entry("original bytes"));
+    const replacement = join(root, "replacement.jsonl");
+    writeFileSync(replacement, [JSON.stringify({ type: "user", sessionId, cwd: root }), ...entry("injected bytes")].join("\n") + "\n");
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    const open = fs.openSync;
+    let headers = 0;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, flags: number, ...args: unknown[]) => {
+      if (path !== sessionFile || ++headers !== 3) return (open as (...args: unknown[]) => number)(path, flags, ...args);
+      swapped = true;
+      const original = join(root, "original.jsonl");
+      renameSync(sessionFile, original);
+      renameSync(replacement, sessionFile);
+      try { return (open as (...args: unknown[]) => number)(path, flags, ...args); }
+      finally { renameSync(sessionFile, replacement); renameSync(original, sessionFile); }
+    }) as typeof fs.openSync);
+    const ref = `managed-${nonce}-1:${kind === "image" ? `${imageId}:0` : "managed-tool"}`;
+    try {
+      if (kind === "image") await expect(conversationImage(pane.pane_id, ref, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      else await expect(toolOutput(pane.pane_id, ref, undefined, undefined, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      expect(swapped).toBe(true);
+    } finally { spy.mockRestore(); }
+    if (kind === "image") expect((await conversationImage(pane.pane_id, ref, undefined, undefined, managedDeps))?.bytes).toEqual(Buffer.from("original bytes"));
+    else expect(await toolOutput(pane.pane_id, ref, undefined, undefined, undefined, undefined, managedDeps)).toBe("original bytes");
+    snapshot.mockRestore();
+  });
+
+  it("pins inherited Codex segment bytes against a transient swap during history chain discovery", async () => {
+    writeHarness("codex");
+    const thread = "11111111-1111-4111-8111-111111111111";
+    const directory = join(root, "codex", "sessions", "2026", "09", "30");
+    mkdirSync(directory, { recursive: true });
+    const parent = join(directory, `rollout-2026-09-30T01-00-00-${thread}.jsonl`);
+    const line = (type: string, payload: unknown): string => JSON.stringify({ type, payload }) + "\n";
+    const header = (extra = {}): string => line("session_meta", { id: sessionId, cwd: root, ...extra });
+    const kept = header({ id: thread })
+      + line("response_item", { type: "function_call", name: "exec_command", call_id: "inherited", arguments: "{}" })
+      + line("response_item", { type: "function_call_output", call_id: "inherited", output: "original inherited bytes" });
+    writeFileSync(parent, kept);
+    writeFileSync(sessionFile, header({ history_base: { thread_id: thread, end_ordinal_exclusive: 3, end_byte_offset: Buffer.byteLength(kept) } }) + line("event_msg", { type: "user_message", message: "current" }));
+    const info = statSync(sessionFile);
+    record.file_identity = { dev: info.dev, ino: info.ino };
+    save();
+    const replacement = join(root, "replacement.jsonl");
+    writeFileSync(replacement, header({ id: thread })
+      + line("response_item", { type: "function_call", name: "exec_command", call_id: "inherited", arguments: "{}" })
+      + line("response_item", { type: "function_call_output", call_id: "inherited", output: "injected inherited bytes" }));
+    const original = join(root, "original-parent.jsonl");
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    const open = fs.openSync;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, flags: number, ...args: unknown[]) => {
+      if (path !== parent || swapped) return (open as (...args: unknown[]) => number)(path, flags, ...args);
+      swapped = true;
+      renameSync(parent, original);
+      renameSync(replacement, parent);
+      try { return (open as (...args: unknown[]) => number)(path, flags, ...args); }
+      finally { renameSync(parent, replacement); renameSync(original, parent); }
+    }) as typeof fs.openSync);
+    try {
+      await expect(toolOutput(pane.pane_id, `managed-${nonce}-1:inherited`, undefined, undefined, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      expect(swapped).toBe(true);
+    } finally { spy.mockRestore(); snapshot.mockRestore(); }
+    expect(await conversationForPane(pane, undefined, {}, managedDeps)).toMatchObject({ source: "codex-transcript" });
+    const fresh = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    try { expect(await toolOutput(pane.pane_id, `managed-${nonce}-1:inherited`, undefined, undefined, undefined, undefined, managedDeps)).toBe("original inherited bytes"); }
+    finally { fresh.mockRestore(); }
+  });
+
   it("routes a tagged pane without managed label metadata", async () => {
     writeHarness("gjc", [message("user", "question"), message("assistant", "answer")]);
     const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
@@ -2036,6 +2244,66 @@ describe("managed conversation identity", () => {
       expect(answer).toMatchObject({ source: "gjc-transcript", managed_session: { state: "ready", harness: "gjc" } });
       expect(nativeLookupCalls).toBe(0);
     } finally { snapshot.mockRestore(); }
+  });
+
+  it.each(["timeout", "unavailable"] as const)("propagates managed SDK %s without clearing history or following the provider child", async (reason) => {
+    writeHarness("gjc", [message("user", "parent prompt"), message("assistant", "parent answer")]);
+    const first = await conversationForPane(pane, undefined, {}, managedDeps);
+    const failureDeps: ManagedSessionDeps = {
+      ...managedDeps,
+      gjcSession: async () => { throw new GjcSdkLookupError(reason); },
+    };
+    await expect(conversationForPane(pane, undefined, {}, failureDeps)).rejects.toMatchObject({
+      name: "GjcSdkLookupError", reason, message: "GJC SDK lookup failed",
+    });
+    const recovered = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(recovered.history_id).toBe(first.history_id);
+    expect(recovered.turns).toEqual(first.turns);
+    expect(nativeLookupCalls).toBe(0);
+  });
+
+  it("propagates an SDK outage during final managed identity revalidation", async () => {
+    writeHarness("gjc", [message("user", "parent prompt"), message("assistant", "parent answer")]);
+    let reads = 0;
+    const failureDeps: ManagedSessionDeps = {
+      ...managedDeps,
+      gjcSession: async () => {
+        if (++reads > 1) throw new GjcSdkLookupError("timeout");
+        return live;
+      },
+    };
+    await expect(conversationForPane(pane, undefined, {}, failureDeps)).rejects.toMatchObject({
+      name: "GjcSdkLookupError", reason: "timeout", message: "GJC SDK lookup failed",
+    });
+    expect(reads).toBe(2);
+    expect(nativeLookupCalls).toBe(0);
+  });
+
+  it.each(["ENOENT", "EACCES"])("keeps a managed transcript page read %s distinct from absent history", async (code) => {
+    writeHarness("omo", [message("user", "parent prompt"), message("assistant", "parent answer")]);
+    const first = await conversationForPane(pane, undefined, {}, managedDeps);
+    const original = fs.fstatSync;
+    let calls = 0;
+    const stat = spyOn(fs, "fstatSync").mockImplementation(((fd: number, ...args: unknown[]) => {
+      if (++calls === 4) throw Object.assign(new Error("private fixture descriptor"), { code });
+      return (original as (...args: unknown[]) => fs.Stats)(fd, ...args);
+    }) as typeof fs.fstatSync);
+    try {
+      await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({
+        name: "GjcSdkLookupError", reason: "unavailable", message: "GJC SDK lookup failed",
+      });
+    } finally { stat.mockRestore(); }
+    expect((await conversationForPane(pane, undefined, {}, managedDeps)).history_id).toBe(first.history_id);
+    expect(nativeLookupCalls).toBe(0);
+  });
+
+  it("propagates a missing managed record without authorizing provider fallback", async () => {
+    writeHarness("gjc");
+    rmSync(recordFile);
+    await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({
+      name: "GjcSdkLookupError", reason: "unavailable", message: "GJC SDK lookup failed",
+    });
+    expect(nativeLookupCalls).toBe(0);
   });
 
   it.each([
@@ -2088,24 +2356,137 @@ describe("managed conversation identity", () => {
     await expect(conversationForPane(pane, undefined, { before: first.cursor ?? undefined }, managedDeps)).rejects.toBeInstanceOf(HistoryChanged);
   });
 
+  it("revalidates a still-current managed pane through the fresh snapshot path", async () => {
+    writeHarness("claude");
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    try {
+      const answer = await conversationForPane(pane, undefined, {}, { ...managedDeps, paneById: undefined });
+      expect(answer.managed_session).toMatchObject({ state: "ready", id: nonce, generation: 1 });
+      expect(snapshot).toHaveBeenCalledTimes(1);
+    } finally { snapshot.mockRestore(); }
+  });
+
+  it.each(["nonce", "generation", "removed", "closed"] as const)("rejects a live pane %s change even while the former managed record stays ready", async (change) => {
+    const entries = [
+      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from("old image").toString("base64") } }] } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "same-tool", name: "Bash", input: {} }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "same-tool", content: "old output" }] } }),
+    ];
+    writeHarness("claude", entries);
+    const changed = change === "closed" ? [] : [{
+      ...pane,
+      tokens: change === "removed" ? {} : {
+        ...pane.tokens,
+        ...(change === "nonce" ? { hm_managed_session: "f".repeat(32) } : { hm_managed_generation: "2" }),
+      },
+    }];
+    const deps = { ...managedDeps, paneById: undefined };
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: changed } as SessionSnapshot);
+    try {
+      await expect(conversationForPane(pane, undefined, {}, deps)).rejects.toMatchObject({
+        name: "ConversationUnavailable", message: "blocked_managed_identity_changed",
+      });
+      snapshot.mockResolvedValueOnce({ panes: [pane] } as SessionSnapshot);
+      expect(await conversationImage(pane.pane_id, `managed-${nonce}-1:${imageId}:0`, undefined, undefined, deps)).toBeNull();
+      snapshot.mockResolvedValueOnce({ panes: [pane] } as SessionSnapshot);
+      expect(await toolOutput(pane.pane_id, `managed-${nonce}-1:same-tool`, undefined, undefined, undefined, undefined, deps)).toBeNull();
+      expect(record.state).toBe("ready");
+      expect(record.generation).toBe(1);
+    } finally { snapshot.mockRestore(); }
+  });
+
+  it.each(["ENOENT", "EACCES"])("propagates a live pane %s refresh failure as unavailable", async (code) => {
+    writeHarness("claude");
+    const deps = { ...managedDeps, paneById: async () => { throw Object.assign(new Error("private pane refresh"), { code }); } };
+    await expect(conversationForPane(pane, undefined, {}, deps)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
+  });
+
   it("uses the managed Claude record for prompt attachments and tool output", async () => {
     const image = Buffer.from("managed image bytes").toString("base64");
+    const output = "exact managed tool output".repeat(300);
     const entries = [
       JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: image } }] } }),
       JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "managed-tool", name: "Bash", input: { command: "fixture" } }] } }),
-      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "managed-tool", content: "exact managed tool output" }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "managed-tool", content: output }] } }),
     ];
     writeHarness("claude", entries);
     const decoy = join(root, "decoy.jsonl");
     writeFileSync(decoy, JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "managed-tool", name: "Bash", input: {} }] } }) + "\n");
     const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
     try {
-      expect(await toolOutput(pane.pane_id, "managed-tool", undefined, undefined, undefined, undefined, managedDeps)).toBe("exact managed tool output");
-      const attachment = await conversationImage(pane.pane_id, `${imageId}:0`, undefined, undefined, managedDeps);
+      const first = await conversationForPane(pane, undefined, {}, managedDeps);
+      const parts = first.turns.flatMap((turn) => turn.parts);
+      const tool = parts.find((part) => part.kind === "tool");
+      const imagePart = parts.find((part) => part.kind === "image");
+      if (tool?.kind !== "tool" || imagePart?.kind !== "image") throw new Error("missing managed auxiliary refs");
+      const toolRef = tool.output_ref!;
+      const imageRef = imagePart.ref;
+      expect(toolRef).toBe(`managed-${nonce}-1:managed-tool`);
+      expect(imageRef).toBe(`managed-${nonce}-1:${imageId}:0`);
+      expect(await toolOutput(pane.pane_id, toolRef, undefined, undefined, undefined, undefined, managedDeps)).toBe(output);
+      const attachment = await conversationImage(pane.pane_id, imageRef, undefined, undefined, managedDeps);
       expect(attachment?.bytes).toEqual(Buffer.from("managed image bytes"));
+      expect(await toolOutput(pane.pane_id, "managed-tool", undefined, undefined, undefined, undefined, managedDeps)).toBeNull();
+      expect(await conversationImage(pane.pane_id, `${imageId}:0`, undefined, undefined, managedDeps)).toBeNull();
+      expect((await conversationForPane(pane, undefined, {}, managedDeps)).turns).toEqual(first.turns);
+
+      record.generation = 2;
+      pane = { ...pane, tokens: { ...pane.tokens, hm_managed_generation: "2" } };
+      writeHarness("claude", entries);
+      snapshot.mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+      expect(await toolOutput(pane.pane_id, toolRef, undefined, undefined, undefined, undefined, managedDeps)).toBeNull();
+      expect(await conversationImage(pane.pane_id, imageRef, undefined, undefined, managedDeps)).toBeNull();
+      const second = await conversationForPane(pane, undefined, {}, managedDeps);
+      expect(second.history_id).not.toBe(first.history_id);
+      expect(await toolOutput(pane.pane_id, `managed-${nonce}-2:managed-tool`, undefined, undefined, undefined, undefined, managedDeps)).toBe(output);
+      expect((await conversationImage(pane.pane_id, `managed-${nonce}-2:${imageId}:0`, undefined, undefined, managedDeps))?.bytes).toEqual(Buffer.from("managed image bytes"));
       expect(nativeLookupCalls).toBe(0);
     } finally {
       snapshot.mockRestore();
     }
+  });
+});
+
+describe("a Codex pane that reported no session yet", () => {
+  // captured live 2026-10-19, Codex 0.163.0-alpha.10.2 started in a terminal, before any message
+  const FRESH = [
+    "  >_ OpenAI Codex (v0.163.0-alpha.10.2)",
+    "     /tmp/project",
+    "",
+    "› Ask Codex to do anything",
+    "",
+    "  GPT-6.1-Sol low · /tmp/project",
+    "  ? for shortcuts              ⚠ 3 warnings · f2 to view",
+  ].join("\n");
+
+  it("stands in with the terminal, carrying the model Codex's own status line states", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-codex-fresh-"));
+    const pane = { pane_id: "codex-fresh", cwd: root, foreground_cwd: root, agent: "codex", agent_status: "idle" } as HerdrPane;
+    let screen = FRESH;
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    const rpc = spyOn(herdr, "herdrRpc").mockImplementation(async (method: string) => (method === "agent.get"
+      ? { agent: { agent: "codex" } } : { process_info: { foreground_processes: [{ argv: ["codex"] }] } }) as never);
+    const read = spyOn(herdr, "paneRead").mockImplementation(async () => ({ text: screen }) as never);
+    try {
+      await expect(paneConversation(pane.pane_id, join(root, ".codex"))).rejects.toMatchObject({
+        name: "ConversationUnavailable", screen: { model: "gpt-6.1-sol", reasoning_effort: "low" },
+      });
+      // switched with /model: the status line says the new one
+      screen = FRESH.replace("GPT-6.1-Sol low", "GPT-6-Sol high");
+      await expect(paneConversation(pane.pane_id, join(root, ".codex"))).rejects.toMatchObject({ screen: { model: "gpt-6-sol", reasoning_effort: "high" } });
+      // a picker hiding the footer leaves the model unknown, whatever its options say
+      screen = "  >_ OpenAI Codex (v0.163.0)\n  Select Model and Effort\n› 1. GPT-6.1-Sol (default) (current)\n  GPT-6-Sol high · /tmp/project";
+      const picker = await paneConversation(pane.pane_id, join(root, ".codex")).catch((error: unknown) => error);
+      expect(picker).toBeInstanceOf(ConversationUnavailable);
+      expect((picker as ConversationUnavailable).screen).toBeUndefined();
+      // a screen that does not say leaves the scrollback as it was, and so does a page of history
+      screen = "$ ";
+      const unknown = await paneConversation(pane.pane_id, join(root, ".codex")).catch((error: unknown) => error);
+      expect(unknown).toBeInstanceOf(ConversationUnavailable);
+      expect((unknown as ConversationUnavailable).screen).toBeUndefined();
+      screen = FRESH;
+      const page = await paneConversation(pane.pane_id, join(root, ".codex"), { before: "x:0" }).catch((error: unknown) => error);
+      expect((page as ConversationUnavailable).screen).toBeUndefined();
+    } finally { snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
   });
 });
