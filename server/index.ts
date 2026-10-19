@@ -1,5 +1,6 @@
 import { handleWorkspaceRequest } from "./workspace-routes.ts";
 import { connectionData, createCore, type SocketData } from "./core/index.ts";
+import { ClientConnectionLog } from "./client-connection-log.ts";
 import { handlePaneRequest } from "./pane-routes.ts";
 import { paneContext } from "./pane-context.ts";
 import { randomBytes } from "node:crypto";
@@ -249,6 +250,7 @@ export function createServer(
   });
 
   const envPort = process.env["PORT"];
+  const clientConnectionLog = new ClientConnectionLog();
   const server = Bun.serve<SocketData>({
     port: options.port ?? (envPort ? Number(envPort) : DEFAULT_PORT),
     hostname,
@@ -323,12 +325,21 @@ export function createServer(
       // it. The endpoint it registers is https-only (server/push.ts), and that is the
       // protection: a watch device's subscription is delivered every status change anyway.
       // /api/push/test stays with a session that can drive only because it is a mutation.
-      const ownPreferences = pathname === "/api/auth" || pathname === "/api/push/subscribe";
+      // A watch device may report its own connection metadata, never terminal input or file data.
+      const ownPreferences = pathname === "/api/auth" || pathname === "/api/push/subscribe" || pathname === "/api/connection-diagnostics";
       // a repository's changes are file contents too: the patch of a credential file is that file
       const repositoryDiff = /^\/api\/(?:machines\/[^/]+\/)?workspace\/diff\//.test(pathname);
       if (readOnly && (fileRead || directoryListing || repositoryDiff || mutating && !ownPreferences)) {
         return jsonResponse({ error: { code: "read_only", message: "this device can only watch" } }, 403);
       }
+
+      // API reads can chain several bounded 10 s Herdr RPCs. Give the handler time to return
+      // its JSON result or timeout instead of Bun closing the socket at its default 10 s idle
+      // cutoff. Static files keep their default; streaming and long-operation routes override
+      // this finite budget below, after access and origin checks have passed. Only a signed-in
+      // request gets it: the routes open without sign-in (health, auth, pairing) keep the default,
+      // so an unauthenticated client cannot hold idle sockets for a minute.
+      if (pathname.startsWith("/api/") && authenticated) bunServer.timeout(request, 60);
 
       if (pathname === "/api/bridge") {
         if (token === "" && !bridgeAuthorized) return unauthorizedJson();
@@ -351,9 +362,6 @@ export function createServer(
           return response;
         }
       }
-      // Chat reads can chain several valid 10 s RPCs. Leave the 15/30 s client deadline
-      // in charge rather than Bun's default 10 s idle cutoff. PC proxies have their own budget above.
-      if (pathname === "/api/pane/read" || pathname === "/api/pane/conversation") bunServer.timeout(request, 60);
       if (pathname === "/ws") {
         if (!sameOrigin(request)) return new Response("invalid origin", { status: 403 });
         const deviceId = access.level === "full" ? access.device?.id : undefined;
@@ -406,6 +414,7 @@ export function createServer(
       if (pathname === "/api/portal" || pathname.startsWith("/api/portal/")) {
         return handlePortalRequest(request, pathname, options.portal, { port: bunServer.port ?? DEFAULT_PORT, tokenSet: token !== "", serveOnly });
       }
+      if (pathname === "/api/connection-diagnostics") return clientConnectionLog.handle(request, client ?? "unknown");
       if (pathname === "/api/telemetry") return handleTelemetryRequest(request, options.telemetry);
       // what every browser of this server shares; a watching device reads it and cannot change it (above)
       if (pathname === "/api/preferences") return handlePreferencesRequest(request, preferences);
