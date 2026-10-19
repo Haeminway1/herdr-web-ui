@@ -1,5 +1,5 @@
 /// <reference lib="es2024.sharedmemory" />
-import { afterAll, describe, expect, it, jest } from "bun:test";
+import { afterAll, describe, expect, it, jest, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -432,6 +432,31 @@ describe("GJC SDK transcript identity binding", () => {
     expect(JSON.stringify(failure)).not.toContain(secret);
     expect(rootLookups).toBe(1);
     expect(calls).toHaveLength(0);
+  });
+
+  it.each(["ENOENT", "EACCES"])("keeps %s canonical anchor failures typed on both identity paths", async code => {
+    const root = join(cwd, `anchor-${code}`);
+    mkdirSync(root);
+    for (const target of [cwd, root]) {
+      for (const lookup of [gjcSdkCurrentSessionWithRunner, gjcSdkTranscriptWithRunner]) {
+        const row = session({ locator: { ...locator(), worktreeRoot: root } });
+        const fixture = fakeRunner([page([row]), saved(row)]);
+        const native = realpathSync.native;
+        const denied = spyOn(realpathSync, "native").mockImplementation(((value: string, ...args: unknown[]) => {
+          if (String(value) === target) throw Object.assign(new Error(`secret ${target}`), { code });
+          return Reflect.apply(native, realpathSync, [value, ...args]);
+        }) as typeof realpathSync.native);
+        try {
+          const failure = await lookup([321], cwd, agentDir, fixture.runner, async () => root).catch(error => error);
+          expect(failure).toBeInstanceOf(GjcSdkLookupError);
+          expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+          expect(JSON.stringify(failure)).not.toContain(target);
+          expect(fixture.calls).toHaveLength(0);
+        } finally { denied.mockRestore(); }
+        await expect(lookup([321], cwd, agentDir, fixture.runner, async () => root)).resolves.toMatchObject({ sessionId: "session-1" });
+        expect(fixture.calls).toHaveLength(2);
+      }
+    }
   });
 
   it("distinguishes two same-cwd panes by each pane's supplied GJC pid", async () => {
@@ -1015,6 +1040,50 @@ describe("GJC SDK session.list cache", () => {
     now = 10_050;
     await expect(lookup(4)).resolves.toMatchObject({ sessionId: "session-1" });
     expect(fixture.calls).toHaveLength(8);
+  });
+
+  it("serializes concurrent distinct-root lookups under one six-start window", async () => {
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let firstStarted: () => void = () => {};
+    const started = new Promise<void>(resolve => { firstStarted = resolve; });
+    let active = 0;
+    let maxActive = 0;
+    let starts = 0;
+    const runner: GjcSdkCommandRunner = async () => {
+      starts += 1;
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      try {
+        if (starts === 1) {
+          firstStarted();
+          await firstGate;
+        }
+        return page([]);
+      } finally {
+        active -= 1;
+      }
+    };
+    const clock = () => 1_000;
+    const lookup = (index: number) => gjcSdkCurrentSessionWithRunner(
+      [321], cwd, join(cwd, `concurrent-budget-${index}`), runner, testWorktreeRootResolver, clock,
+    );
+    const first = lookup(0);
+    try {
+      await started;
+      const outcomesPending = Promise.allSettled([first, ...Array.from({ length: 6 }, (_, index) => lookup(index + 1))]);
+      releaseFirst();
+      const outcomes = await outcomesPending;
+      expect(outcomes.filter(outcome => outcome.status === "fulfilled").map(outcome => outcome.value)).toEqual(Array(6).fill(null));
+      const rejected = outcomes.filter(outcome => outcome.status === "rejected");
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.reason).toBeInstanceOf(GjcSdkLookupError);
+      expect(rejected[0]?.reason).toMatchObject({ reason: "timeout" });
+      expect(starts).toBe(6);
+      expect(maxActive).toBe(1);
+    } finally {
+      releaseFirst();
+    }
   });
 
   it.each(["same", "different"])("serializes raw queries with %s agent directories", async (directory) => {

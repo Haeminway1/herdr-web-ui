@@ -4,10 +4,11 @@ import * as fs from "node:fs";
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { forgetTranscriptState } from "./conversation.ts";
 import * as herdr from "./herdr/client.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
-import { gjcPidUnderShell, gjcSessionFile, gjcTranscriptForPane, isGjcProcess, parseGjcPs, recentProcessTable, storeRelative, terminalBreadcrumb, validateGjcSdkTranscript } from "./gjc-runtime.ts";
+import { forgetGjcState, gjcPidUnderShell, gjcSessionFile, gjcTranscriptForPane, isGjcProcess, parseGjcPs, recentProcessTable, storeRelative, terminalBreadcrumb, validateGjcSdkTranscript } from "./gjc-runtime.ts";
 
 // Session paths come back canonical and the store root is passed in canonical; macOS's tmpdir is a symlink into /private.
 const tempDir = (prefix: string) => realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -145,6 +146,21 @@ it("finds gjc under a Windows pane's shell, the only process herdr names there",
   let asked = false;
   expect(await gjcPidUnderShell(100, "linux", async () => { asked = true; return rows; })).toBeNull();
   expect(asked).toBe(false);
+});
+
+it("forgets a rejected Windows process table without an auxiliary unhandled rejection", async () => {
+  forgetGjcState();
+  const failure = Object.assign(new Error("private process details"), { code: "EACCES" });
+  try {
+    await expect(recentProcessTable(async () => { throw failure; }, 100)).rejects.toBe(failure);
+    await nextTurn();
+    const rows = [{ pid: 200, parent: 100, path: "gjc", commandLine: "gjc", started: 1 }];
+    let calls = 0;
+    const read = async () => { calls += 1; return rows; };
+    expect(await recentProcessTable(read, 101)).toEqual(rows);
+    expect(await recentProcessTable(read, 102)).toEqual(rows);
+    expect(calls).toBe(1);
+  } finally { forgetGjcState(); }
 });
 
 it("validates an SDK-selected main transcript by canonical path and exact first-line identity", () => {

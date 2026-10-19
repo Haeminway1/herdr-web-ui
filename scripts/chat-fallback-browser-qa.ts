@@ -8,6 +8,8 @@ import { build as viteBuild } from "vite";
 import { CONTENT_SECURITY_POLICY } from "../server/static.ts";
 import { chromePath } from "./chrome-path.ts";
 import { parseClaudeTranscript } from "../server/conversation.ts";
+import { GjcSdkLookupError, lookupExecutionError } from "../server/gjc-sdk-error.ts";
+import { errorResponse } from "../server/http.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-chat-fallback-")));
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -20,6 +22,7 @@ try {
   await viteBuild({ configFile: join(repo, "vite.config.ts"), root, publicDir: false, logLevel: "warn", build: { outDir: output, emptyOutDir: true } });
   const terminalReads: string[] = [];
   let structured = false, resolveAgent!: () => void, agentReadArrived!: () => void;
+  let lookupFailure: GjcSdkLookupError | null = null;
   let source = "codex-transcript";
   let turns: ConversationTurn[] = [{ role: "assistant", ts: null, parts: [{ kind: "text", text: "Structured conversation arrived" }] }];
   // resolved by the server's handler: a browser-side waitForRequest can win the race against it
@@ -29,7 +32,10 @@ try {
     if (url.pathname === "/api/pane/prompt") return Response.json({ prompt: null });
     // the chat's skill matcher asks for the pane's commands
     if (url.pathname === "/api/pane/commands") return Response.json({ commands: [] });
-    if (url.pathname === "/api/pane/conversation") return Response.json({ source: (structured && pane === "agent") || pane === "empty" ? source : "scrollback", cursor: null, turns: structured && pane === "agent" ? turns : [] });
+    if (url.pathname === "/api/pane/conversation") {
+      if (pane === "agent" && lookupFailure) return errorResponse(lookupFailure);
+      return Response.json({ source: (structured && pane === "agent") || pane === "empty" ? source : "scrollback", cursor: null, turns: structured && pane === "agent" ? turns : [] });
+    }
     if (url.pathname === "/api/pane/read") {
       terminalReads.push(pane ?? "");
       if (pane === "error") return Response.json({ error: { code: "read_failed", message: "Terminal output unavailable" } }, { status: 500 });
@@ -63,6 +69,24 @@ try {
   structured = true;
   await page.evaluate(() => window.chatFallbackQA.refresh());
   await page.getByText("Structured conversation arrived", { exact: true }).waitFor();
+  const readsBeforeOutages = terminalReads.length;
+  for (const code of ["ENOENT", "EACCES", "BROKER_FAILED", "ETIMEDOUT"]) {
+    lookupFailure = lookupExecutionError(Object.assign(new Error("private /fixture/session credentials"), { code }));
+    const refused = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation" && response.status() === (code === "ETIMEDOUT" ? 504 : 503));
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    const response = await refused;
+    assert.deepEqual(await response.json(), { error: { code: `gjc_sdk_${lookupFailure.reason}`, message: "GJC SDK lookup failed" } });
+    if (code === "ETIMEDOUT") await page.getByText("Waiting for the PC…", { exact: true }).waitFor();
+    else await page.locator('.chat-failure[role="alert"]').waitFor();
+    assert.equal(await page.getByText("Structured conversation arrived", { exact: true }).isVisible(), true, `${code} retains the displayed chat`);
+    assert.equal(terminalReads.length, readsBeforeOutages, `${code} never authorizes terminal fallback`);
+    assert.equal((await page.locator("body").innerText()).includes("private /fixture/session"), false);
+    lookupFailure = null;
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await page.locator('.chat-failure[role="alert"]').waitFor({ state: "detached" });
+    await page.getByText("Waiting for the PC…", { exact: true }).waitFor({ state: "detached" });
+  }
+  console.log("PASS typed filesystem, broker and timeout outages retain displayed chat without terminal fallback");
   const nextKindRead = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/pane/conversation", { timeout: 3_000 });
   await page.evaluate(() => window.chatFallbackQA.agent("claude"));
   await nextKindRead;
