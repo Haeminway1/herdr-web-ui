@@ -8,10 +8,15 @@ import { GjcSdkLookupError, lookupExecutionError } from "./gjc-sdk-error.ts";
 const PAGE_LIMIT = 100;
 const MAX_PAGES = 8;
 const MAX_ROWS = PAGE_LIMIT * MAX_PAGES;
-const COMMAND_TIMEOUT_MS = 2_000;
-const TOTAL_TIMEOUT_MS = 8_000;
-// Share roster polls across discovery and exact lookups instead of repeatedly
-// spawning the CLI. Managed generation/process/header checks remain per read.
+// A full `gjc sdk session raw global --op session.list` call measured 1.0-2.0 s on a
+// loaded Apple M1 Pro, so 2 s cut off many cold lookups. The 10 s SDK budget reserves 5 s
+// of the client's 15 s local chat read for other work, whose timeouts are independent.
+// Status discovery keeps the old shorter budget so snapshots do not inherit cold-chat waits.
+const COMMAND_TIMEOUT_MS = 5_000;
+const TOTAL_TIMEOUT_MS = 10_000;
+const STATUS_COMMAND_TIMEOUT_MS = 2_000;
+const STATUS_TOTAL_TIMEOUT_MS = 8_000;
+// Share discovery and exact lookups; process and native generation checks remain per read.
 const SESSION_LIST_CACHE_TTL_MS = 10_000;
 const SESSION_LIST_MAX_STARTS = 6;
 const SESSION_LIST_START_WINDOW_MS = 10_050;
@@ -72,6 +77,7 @@ interface SessionListRequest {
   readonly agentDir: string;
   readonly jsonInput: Record<string, unknown>;
   readonly deadline: number;
+  readonly commandTimeoutMs: number;
   readonly cacheClock: () => number;
 }
 
@@ -215,13 +221,6 @@ function parseBrokerPage(text: string): BrokerPage | null {
   }
 }
 
-function brokerUnavailable(text: string): boolean {
-  try {
-    const response: unknown = JSON.parse(text);
-    return isRecord(response) && response.type === "broker_response" && response.ok === false;
-  } catch { return false; }
-}
-
 function bindingFromRow(value: unknown, pids: ReadonlySet<number>, cwd: string, worktreeRoot: string | null): SessionBinding | null {
   if (!isRecord(value)) return null;
   const locator = value.locator;
@@ -285,9 +284,10 @@ async function runBounded(
   runner: GjcSdkCommandRunner,
   args: string[],
   deadline: number,
+  commandTimeoutMs: number,
   onRunnerSettled: () => void,
 ): Promise<string> {
-  const remaining = Math.min(COMMAND_TIMEOUT_MS, deadline - Date.now());
+  const remaining = Math.min(commandTimeoutMs, deadline - Date.now());
   if (remaining <= 0) {
     onRunnerSettled();
     throw new GjcSdkLookupError("timeout");
@@ -395,7 +395,7 @@ async function runSerializedSessionList(
   state: SessionListState,
   key: string,
 ): Promise<string> {
-  const { agentDir, jsonInput, deadline, cacheClock } = request;
+  const { agentDir, jsonInput, deadline, commandTimeoutMs, cacheClock } = request;
   const previous = state.queue.tail;
   let releaseQueue: (() => void) | undefined;
   const queueTurn = new Promise<void>((resolve) => {
@@ -420,7 +420,7 @@ async function runSerializedSessionList(
     await reserveSessionListStart(state.queue, deadline, cacheClock);
     const args = sdkArgs(agentDir, jsonInput);
     runnerPending = true;
-    const output = await runBounded(runner, args, deadline, () => {
+    const output = await runBounded(runner, args, deadline, commandTimeoutMs, () => {
       runnerPending = false;
       releaseWhenFinished();
     });
@@ -469,8 +469,9 @@ async function resolveWorktreeRoot(
   resolver: GjcSdkWorktreeRootResolver,
   cwd: string,
   deadline: number,
+  commandTimeoutMs: number,
 ): Promise<string | null | undefined> {
-  const timeoutMs = Math.min(COMMAND_TIMEOUT_MS, deadline - Date.now());
+  const timeoutMs = Math.min(commandTimeoutMs, deadline - Date.now());
   if (timeoutMs <= 0) throw new GjcSdkLookupError("timeout");
 
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -495,6 +496,7 @@ async function resolveTranscript(
   agentDir: string,
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver,
+  purpose: "chat" | "status",
   cacheClock: () => number = sessionListCacheClock,
 ): Promise<ResolvedSession | null> {
   try {
@@ -502,10 +504,11 @@ async function resolveTranscript(
       || typeof cwd !== "string" || cwd === ""
       || typeof agentDir !== "string" || agentDir === "") return null;
 
-    const deadline = Date.now() + TOTAL_TIMEOUT_MS;
+    const commandTimeoutMs = purpose === "status" ? STATUS_COMMAND_TIMEOUT_MS : COMMAND_TIMEOUT_MS;
+    const deadline = Date.now() + (purpose === "status" ? STATUS_TOTAL_TIMEOUT_MS : TOTAL_TIMEOUT_MS);
     const canonicalCwd = canonicalPath(cwd);
     if (canonicalCwd === null) return null;
-    const canonicalWorktreeRoot = await resolveWorktreeRoot(worktreeRootResolver, canonicalCwd, deadline);
+    const canonicalWorktreeRoot = await resolveWorktreeRoot(worktreeRootResolver, canonicalCwd, deadline, commandTimeoutMs);
     if (canonicalWorktreeRoot === undefined) return null;
     const wantedPids = new Set(pids);
     const seenCursors = new Set<string>();
@@ -521,8 +524,7 @@ async function resolveTranscript(
 
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const input = cursor === null ? { scope } : { scope, cursor };
-      const output = await runCachedSessionList(runner, { agentDir, jsonInput: input, deadline, cacheClock });
-      if (brokerUnavailable(output)) throw new GjcSdkLookupError("unavailable");
+      const output = await runCachedSessionList(runner, { agentDir, jsonInput: input, deadline, commandTimeoutMs, cacheClock });
       const response = parseBrokerPage(output);
       if (response === null || response.sessions.length > PAGE_LIMIT) return null;
       if (indexSeq !== null && response.indexSeq !== indexSeq) return null;
@@ -554,9 +556,9 @@ async function resolveTranscript(
       agentDir,
       jsonInput: { cwd: expected.locatorCwd, resolveSessionId: expected.sessionId },
       deadline,
+      commandTimeoutMs,
       cacheClock,
     });
-    if (brokerUnavailable(lookup)) throw new GjcSdkLookupError("unavailable");
     const exact = parseBrokerPage(lookup);
     if (exact === null || exact.continuationCursor !== null || indexSeq === null || exact.indexSeq < indexSeq) return null;
 
@@ -622,7 +624,7 @@ export function gjcSdkCurrentSessionWithRunner(
   cacheClock: () => number = sessionListCacheClock,
   generationCurrent: typeof gjcSdkGenerationCurrent = gjcSdkGenerationCurrent,
 ): Promise<GjcSdkSessionIdentity | null> {
-  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock)
+  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, "status", cacheClock)
     .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? currentIdentity(binding) : null);
 }
 
@@ -631,8 +633,9 @@ export function gjcSdkTranscript(
   pids: readonly number[],
   cwd: string,
   agentDir: string,
+  purpose: "chat" | "status" = "chat",
 ): Promise<GjcSdkBinding | null> {
-  return gjcSdkTranscriptWithRunner(pids, cwd, agentDir, runGjcSdkCommand);
+  return gjcSdkTranscriptWithRunner(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot, sessionListCacheClock, gjcSdkGenerationCurrent, purpose);
 }
 
 /** Fixture-injection entry point; production callers should use gjcSdkTranscript. */
@@ -644,7 +647,8 @@ export function gjcSdkTranscriptWithRunner(
   worktreeRootResolver: GjcSdkWorktreeRootResolver = gitWorktreeRoot,
   cacheClock: () => number = sessionListCacheClock,
   generationCurrent: typeof gjcSdkGenerationCurrent = gjcSdkGenerationCurrent,
+  purpose: "chat" | "status" = "chat",
 ): Promise<GjcSdkBinding | null> {
-  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock)
+  return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, purpose, cacheClock)
     .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? savedTranscript(binding) : null);
 }
