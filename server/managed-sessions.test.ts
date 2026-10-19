@@ -22,6 +22,7 @@ let live: GjcSdkSessionIdentity | null;
 const deps: ManagedSessionDeps = {
   processIdentity: pid => observed?.pid === pid ? { ...observed } : null,
   gjcSession: async () => live,
+  paneById: async () => pane,
 };
 const message = (role: string, text: string) => JSON.stringify({ type: "message", message: { role, content: [{ type: "text", text }] } });
 const save = () => writeFileSync(recordFile, JSON.stringify(record), { mode: 0o600 });
@@ -126,6 +127,7 @@ it.each([new Error("private GJC SDK exception"), "private GJC SDK rejection"] as
     version: "fixture",
   };
   const failedDeps: ManagedSessionDeps = {
+    ...deps,
     processIdentity: pid => pid === 42 ? observed : pid === failedChild.pid ? failedChild : null,
     gjcSession: async pids => {
       if (pids.includes(failedChild.pid)) return Promise.reject(rejection);
@@ -137,11 +139,21 @@ it.each([new Error("private GJC SDK exception"), "private GJC SDK rejection"] as
   const failed = projected.panes.find(entry => entry.pane_id === failedPane.pane_id);
   expect(projected.panes[0]).toMatchObject({ managed_session: { state: "ready", session_id: sessionId }, agent_session: { source: "herdr-manager", value: sessionId } });
   expect((await readConversation(pane, undefined, undefined, failedDeps)).turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
-  expect(failed).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "blocked", reason: "blocked_managed_record_unavailable", session_id: null } });
+  expect(failed).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "identity_pending", reason: "identity_pending", session_id: null } });
   expect(projected.panes[2]).toEqual(unmanagedPane);
   expect(projected.agents[1]?.agent_session).toBeNull();
   expect(projected.agents[2]?.agent_session).toEqual(unmanagedPane.agent_session);
   expect(JSON.stringify(projected)).not.toContain("private GJC SDK");
+  expect(await resolveManagedSession(failedPane, namespace, failedDeps)).toMatchObject({
+    identity: { state: "identity_pending" }, lookupError: { reason: "unavailable", message: "GJC SDK lookup failed" },
+  });
+});
+
+it.each(["timeout", "unavailable"] as const)("retains a typed %s broker failure on a pending identity", async reason => {
+  const failure = new GjcSdkLookupError(reason);
+  const result = await resolveManagedSession(pane, namespace, { ...deps, gjcSession: async () => { throw failure; } });
+  expect(result).toMatchObject({ identity: { state: "identity_pending", session_id: null }, sessionFile: null });
+  expect(result?.lookupError).toBe(failure);
 });
 
 it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and isolates the whole roster", async reason => {
@@ -166,6 +178,7 @@ it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and
     file_identity: { dev: info.dev, ino: info.ino }, child,
   }), { mode: 0o600 });
   const failedDeps: ManagedSessionDeps = {
+    ...deps,
     processIdentity: pid => pid === 42 ? observed : pid === 43 ? child : null,
     gjcSession: async pids => {
       if (pids.includes(43)) throw new GjcSdkLookupError(reason);
@@ -179,7 +192,7 @@ it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and
   expect(result.agents[1]).toMatchObject({ agent: "gjc", agent_session: null });
   expect((await resolveManagedSession(failedPane, namespace, failedDeps))?.identity.state).toBe("identity_pending");
   await expect(readConversation(failedPane, undefined, undefined, failedDeps)).rejects.toMatchObject({
-    managedSession: { state: "identity_pending", reason: "identity_pending" },
+    reason, message: "GJC SDK lookup failed",
   });
   expect(JSON.stringify(result)).not.toContain("stale-child");
 });
@@ -197,17 +210,18 @@ it.each(["EACCES", "EIO"])("keeps trusted record and transcript %s reads pending
       expect(result.panes[0]).toMatchObject({ agent_session: null, managed_session: { state: "identity_pending", session_id: null } });
       expect(result.agents[0]?.agent_session).toBeNull();
       expect(JSON.stringify(result)).not.toContain(target);
-      await expect(conversationForPane(pane)).rejects.toThrow("identity_pending");
+      expect(await resolve()).toMatchObject({ lookupError: { reason: "unavailable", message: "GJC SDK lookup failed" } });
+      await expect(conversationForPane(pane)).rejects.toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
     } finally { denied.mockRestore(); }
     expect((await resolve()).identity.state).toBe("ready");
   }
 });
 
-it("keeps a missing transcript pending but still blocks an absent managed record", async () => {
+it("keeps a missing transcript or initial record pending without claiming absence", async () => {
   rmSync(sessionFile);
-  expect(await resolve()).toMatchObject({ identity: { state: "identity_pending", session_id: null }, sessionFile: null });
+  expect(await resolve()).toMatchObject({ identity: { state: "identity_pending", session_id: null }, sessionFile: null, lookupError: { reason: "unavailable" } });
   rmSync(recordFile);
-  expect((await resolve()).identity.state).toBe("blocked");
+  expect(await resolve()).toMatchObject({ identity: { state: "identity_pending" }, lookupError: { reason: "unavailable" } });
 });
 
 it("leaves unmanaged snapshots untouched without reading unrelated agent projections", async () => {
@@ -297,7 +311,7 @@ it.each(["unavailable", "timeout"] as const)("keeps managed SDK %s pending witho
   const projected = await projectPanes(snapshot, namespace, unavailableDeps);
   expect(projected.panes[0]).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "identity_pending" } });
   expect(projected.agents[0]?.agent_session).toBeNull();
-  await expect(readConversation(pane, undefined, undefined, unavailableDeps)).rejects.toThrow("identity_pending");
+  await expect(readConversation(pane, undefined, undefined, unavailableDeps)).rejects.toMatchObject({ reason, message: "GJC SDK lookup failed" });
 });
 
 it.each(["starttime", "boot", "cwd"] as const)("rejects a changed process %s", async field => {
@@ -361,7 +375,7 @@ it("refuses malformed or partial managed tokens but leaves unmanaged panes alone
 
 it("refuses missing, oversized, symlinked and publicly writable records", async () => {
   const original = readFileSync(recordFile, "utf8"); rmSync(recordFile);
-  expect((await resolve()).identity.state).toBe("blocked");
+  expect(await resolve()).toMatchObject({ identity: { state: "identity_pending" }, lookupError: { reason: "unavailable" } });
   writeFileSync(recordFile, " ".repeat(65537)); expect((await resolve()).identity.reason).toBe("blocked_record_owner");
   writeFileSync(recordFile, original); chmodSync(recordFile, 0o666); expect((await resolve()).identity.reason).toBe("blocked_record_owner");
   rmSync(recordFile); const outside = join(root, "record.json"); writeFileSync(outside, original); symlinkSync(outside, recordFile);

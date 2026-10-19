@@ -3648,6 +3648,7 @@ describe("Codex's model lists", () => {
 describe("an answer and the menu it was made for", () => {
   interface Pane {
     agent: string; status: string; screen: string; sent: string[]; onSent?: (sent: string) => void;
+    managed?: { id: string | null; harness: "gjc" | "omo" | "codex" | "claude" | null; generation: number | null; state: "ready" | "identity_pending" | "blocked"; reason: string | null; session_id: string | null };
     /** the pane's folder and its Codex rollout, for a prompt named by the agent's own call */
     cwd?: string; rollout?: string;
     /** how long herdr takes over each screen read from now on */
@@ -3686,7 +3687,7 @@ describe("an answer and the menu it was made for", () => {
         const answer = (result: unknown) => socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
         const snapshotDelay = request.method === "session.snapshot" ? pane.nextSnapshotDelay : undefined;
         if (snapshotDelay !== undefined) pane.nextSnapshotDelay = undefined;
-        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}) })), layouts: [] } }), snapshotDelay ?? 0);
+        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.managed ? { managed_session: pane.managed } : {}), ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}) })), layouts: [] } }), snapshotDelay ?? 0);
         if (request.method === "pane.read") {
           pane.onRead?.();
           const once = pane.nextRead;
@@ -3731,6 +3732,55 @@ describe("an answer and the menu it was made for", () => {
     const body = await response.json() as { error?: { code: string } };
     return { status: response.status, code: body.error?.code };
   }
+
+  const readyManaged = () => ({ id: "a".repeat(32), harness: "claude" as const, generation: 1, state: "ready" as const, reason: null, session_id: "session-one" });
+
+  test("binds identical managed menus to nonce, generation and session identity", async () => {
+    await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
+      pane.managed = readyManaged();
+      const first = (await card())!;
+      pane.managed = { ...pane.managed, generation: 2 };
+      expect((await card())!.id).not.toBe(first.id);
+      expect(await answer(first.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      const second = (await card())!;
+      pane.managed = { ...pane.managed, session_id: "session-two" };
+      expect((await card())!.id).not.toBe(second.id);
+      expect(await answer(second.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      const third = (await card())!;
+      pane.managed = { ...pane.managed, id: "b".repeat(32) };
+      expect((await card())!.id).not.toBe(third.id);
+      expect(await answer(third.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      const current = (await card())!;
+      expect(await answer(current.id, { option_index: 0 })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["enter"]);
+    });
+  });
+
+  test("pending and blocked managed panes refuse misleading provider menus", async () => {
+    await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
+      for (const state of ["identity_pending", "blocked"] as const) {
+        pane.managed = { ...readyManaged(), state, harness: null, session_id: null };
+        expect(await card()).toBeNull();
+        expect(await answer("provider-menu", { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      }
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test("stops later managed answer keys when the generation changes after menu reads", async () => {
+    await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
+      pane.managed = readyManaged();
+      const current = (await card())!;
+      pane.onSent = (sent) => {
+        if (sent === "down") {
+          pane.screen = claudeBackgroundApproval(1);
+          pane.managed = { ...pane.managed!, generation: 2 };
+        }
+      };
+      expect(await answer(current.id, { option_index: 1 })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down"]);
+    });
+  });
 
   const omoRule = "─".repeat(100);
   const omoWidget = (box = "❯") => `? Question pending (1 unanswered) · 30m

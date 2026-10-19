@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { HerdrPane, InteractivePrompt, PromptAnswer } from "../shared/protocol.ts";
+import type { HerdrPane, InteractivePrompt, ManagedSessionIdentity, PromptAnswer } from "../shared/protocol.ts";
 import { codexTranscriptPath, paneCodexHome, unansweredCodexQuestions, type QueuedQuestion } from "./codex.ts";
 import { HerdrError, paneRead, paneScrollInfo, paneSendKeys, paneSendText, sessionSnapshot } from "./herdr/client.ts";
 import { omoTranscriptForPane } from "./omo.ts";
@@ -3458,7 +3458,32 @@ export async function claudeHeldIsGrey(paneId: string, prompt: InteractivePrompt
     .then((read) => same(claudeGreyInput(read.text)), () => false);
 }
 
-async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[] }> {
+function managedDeclared(pane: HerdrPane): boolean {
+  return pane.managed_session !== undefined || Object.hasOwn(pane.tokens ?? {}, "hm_managed_session") || Object.hasOwn(pane.tokens ?? {}, "hm_managed_generation");
+}
+
+function managedBinding(pane: HerdrPane): string | null {
+  const identity: ManagedSessionIdentity | undefined = pane.managed_session;
+  if (!identity || identity.state !== "ready" || !identity.id || !/^[0-9a-f]{32}$/.test(identity.id) || !identity.harness
+    || !Number.isSafeInteger(identity.generation) || identity.generation === null || identity.generation <= 0 || !identity.session_id
+    || pane.agent !== identity.harness) return null;
+  const tokens = pane.tokens ?? {};
+  if ((Object.hasOwn(tokens, "hm_managed_session") || Object.hasOwn(tokens, "hm_managed_generation"))
+    && (tokens.hm_managed_session !== identity.id || tokens.hm_managed_generation !== String(identity.generation))) return null;
+  return JSON.stringify([identity.id, identity.harness, identity.generation, identity.session_id]);
+}
+
+async function sameManagedBinding(paneId: string, binding: string | null): Promise<boolean> {
+  if (binding === null) return true;
+  const pane = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
+  return !!pane && managedBinding(pane) === binding;
+}
+
+function bindManagedPrompt(prompt: InteractivePrompt | null, binding: string | null): InteractivePrompt | null {
+  return prompt && binding ? { ...prompt, id: createHash("sha256").update(JSON.stringify([prompt.id, binding])).digest("hex") } : prompt;
+}
+
+async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[]; binding: string | null }> {
   const { panes } = await sessionSnapshot();
   // a closed pane's wait has ended too
   for (const logged of fallbackLogged) if (!panes.some((candidate) => candidate.pane_id === logged)) fallbackLogged.delete(logged);
@@ -3468,8 +3493,10 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   for (const known of chatSent.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) chatSent.delete(known);
   const pane = panes.find((candidate) => candidate.pane_id === paneId);
   if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
+  const binding = managedDeclared(pane) ? managedBinding(pane) : null;
   const agent = pane.agent ?? "";
   const status = pane.agent_status;
+  if (managedDeclared(pane) && binding === null) return { agent, status, prompt: null, pane, panes, binding };
   // counted right before the screen is read, after the snapshot: what matters is whether an
   // answer ran while the screen was being read
   const turns = answerTurns.get(paneId) ?? 0;
@@ -3479,7 +3506,7 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
   if (known.prompt !== null || status !== "blocked" || !agent || settling) {
     fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes };
+    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes, binding };
   }
   // herdr says the agent waits on the user and no reader knows the screen: the fallback card
   const screen = known.screen ?? await liveScreen(paneId);
@@ -3488,14 +3515,14 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   // (claudeModelListWaits, codexModelListWaits)
   if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexModelListWaits(screen))) || claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE)) {
     fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, null, turns), pane, panes };
+    return { agent, status, prompt: asked(paneId, null, turns), pane, panes, binding };
   }
   const prompt = asked(paneId, parseFallbackPrompt(agent, screen), turns)!;
   if (!fallbackLogged.has(paneId) && fallbackLogged.size < FALLBACK_LOGGED_MAX) {
     fallbackLogged.add(paneId);
     console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
   }
-  return { agent, status, prompt, pane, panes };
+  return { agent, status, prompt, pane, panes, binding };
 }
 
 /**
@@ -3567,7 +3594,7 @@ async function readKnownPrompt(
  * id of the one just answered, which can still be on screen for a moment). alt+↓ elsewhere,
  * on the main prompt or an approval, changes nothing (checked on Codex 0.156.1).
  */
-async function closeQueue(paneId: string, answered: string): Promise<void> {
+async function closeQueue(paneId: string, answered: string, binding: string | null = null): Promise<void> {
   const since = Date.now();
   for (let attempt = 0; attempt < 10; attempt += 1) {
     await Bun.sleep(100);
@@ -3577,7 +3604,7 @@ async function closeQueue(paneId: string, answered: string): Promise<void> {
       // the question just answered, a moment ago; still there after 600ms, it is its twin
       // (Codex takes the Enter at once, and questions may repeat a title and options)
       if (shown.id === answered && Date.now() - since < 600) continue;
-      await paneSendKeys(paneId, [KEY.closeQueue]);
+      if (await sameManagedBinding(paneId, binding)) await paneSendKeys(paneId, [KEY.closeQueue]);
       return;
     }
     if (queuedQuestionCount(screen) > 0 || shown === null) return;
@@ -3600,10 +3627,10 @@ function sameText(shown: string, asked: string): boolean {
  * chat's next read shows the question actually waiting (a skip can leave the rollout's
  * guess behind); a queue that does not open is left alone.
  */
-async function openQueuedQuestion(paneId: string, queued: ParsedPrompt, givenUp: () => boolean = () => false, opens: (open: boolean) => void = () => undefined): Promise<InteractivePrompt | null> {
+async function openQueuedQuestion(paneId: string, queued: ParsedPrompt, givenUp: () => boolean = () => false, opens: (open: boolean) => void = () => undefined, binding: string | null = null): Promise<InteractivePrompt | null> {
   // the key only once the screen still shows the questions' count, nothing of the user's queued,
   // and while somebody still waits for the answer (asked after the read, which takes its time)
-  if (queuedQuestionCount(await liveScreen(paneId)) === 0 || givenUp()) return null;
+  if (queuedQuestionCount(await liveScreen(paneId)) === 0 || givenUp() || !(await sameManagedBinding(paneId, binding))) return null;
   // told before the key goes: it may be pressed and its reply still be lost
   opens(true);
   await paneSendKeys(paneId, [KEY.openQueue]);
@@ -3623,14 +3650,14 @@ async function openQueuedQuestion(paneId: string, queued: ParsedPrompt, givenUp:
   // close of this request's opening, told before it is tried: if its reply is lost, nobody
   // closes a second time what another client may have opened since
   opens(false);
-  await closeOpenQuestion(paneId);
+  await closeOpenQuestion(paneId, binding);
   return null;
 }
 
 /** Closes Codex's queue if a question shows open in it. */
-async function closeOpenQuestion(paneId: string): Promise<void> {
+async function closeOpenQuestion(paneId: string, binding: string | null = null): Promise<void> {
   const screen = await liveScreen(paneId);
-  if (parsePrompt("codex", screen)?.responder === "codex-async-question") await paneSendKeys(paneId, [KEY.closeQueue]);
+  if (parsePrompt("codex", screen)?.responder === "codex-async-question" && await sameManagedBinding(paneId, binding)) await paneSendKeys(paneId, [KEY.closeQueue]);
 }
 
 /** How long an answer waits for the menu to show the cursor on its row, before it is refused. */
@@ -3694,7 +3721,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // `plan=0` is how a connection server asks for a watching device through its PC proxy, which
       // reaches this PC with its own credential: it only ever narrows the answer
       const watching = options.readOnly || url.searchParams.get("plan") === "0";
-      const prompt = watching ? read.prompt : await withPlanFile(read.prompt, options.claudeTranscript?.(paneId));
+      const prompt = bindManagedPrompt(watching ? read.prompt : await withPlanFile(read.prompt, options.claudeTranscript?.(paneId)), read.binding);
       // no menu up: what Claude suggests typing next, for the composer's placeholder, and the chat's
       // own last message where Claude put it back into the box on a cancel. Only a nicety: it is read
       // only while Claude waits for the next prompt (a working agent shows none), and a failed or
@@ -3731,9 +3758,9 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     const response = await serialize(body.pane_id, async () => {
       // given up while it waited its turn: nothing is read, opened or sent for it
       if (request.signal.aborted) return promptChanged();
-      const { prompt, agent, pane, panes } = await readPrompt(body.pane_id, options.codexHome);
+      const { prompt, agent, pane, panes, binding } = await readPrompt(body.pane_id, options.codexHome);
       // a plan card's id carries its plan file's revision: the file as it is now must match too
-      if (!prompt || (await withPlanFile(prompt, options.claudeTranscript?.(body.pane_id)))!.id !== body.prompt_id) return promptChanged();
+      if (!prompt || bindManagedPrompt(await withPlanFile(prompt, options.claudeTranscript?.(body.pane_id)), binding)!.id !== body.prompt_id) return promptChanged();
       log.matched = true;
       // checked against the card before anything is sent: an invalid answer never opens the queue
       let steps: AnswerStep[];
@@ -3762,7 +3789,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         if (request.signal.aborted) return promptChanged();
         if (opensQueue) {
           // the card came from the rollout: answer it in the open queue, once it shows this question
-          const opened = await openQueuedQuestion(body.pane_id, parsedByPublicPrompt.get(prompt)!, () => request.signal.aborted, (open) => { queueOpened = open; });
+          const opened = await openQueuedQuestion(body.pane_id, parsedByPublicPrompt.get(prompt)!, () => request.signal.aborted, (open) => { queueOpened = open; }, binding);
           // a queue it could not answer in it has closed again itself, or never opened: a
           // queue another client opened meanwhile is that client's to close
           if (!opened) return promptChanged();
@@ -3772,6 +3799,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         if (opensOmo) {
           // Alt+Up opens the form even with whitespace in the composer; no draft is submitted.
           // A remapped shortcut or a different question fails closed before any answer text.
+          if (!(await sameManagedBinding(body.pane_id, binding))) return promptChanged();
           await paneSendKeys(body.pane_id, [KEY.openQueue]);
           const deadline = Date.now() + SETTLE_MS;
           let opened: InteractivePrompt | null = null;
@@ -3887,6 +3915,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           // none where no look was taken or the row names no key this reader knows
           const key: AnswerStep | null = step.pick ? (seen as ParsedPrompt | null)?.rowKey ?? null : step;
           if (key === null) return promptChanged();
+          if (!(await sameManagedBinding(body.pane_id, binding))) return promptChanged();
           const first = !move && !committed;
           if (!move) committed = true;
           try {
@@ -3912,7 +3941,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         answersUnderWay.delete(body.pane_id);
         answerTurns.set(body.pane_id, (answerTurns.get(body.pane_id) ?? 0) + 1);
         // the queue this request opened never stays open, whatever failed on the way
-        if (queueOpened && !answered) await closeOpenQuestion(body.pane_id).catch(() => undefined);
+        if (queueOpened && !answered) await closeOpenQuestion(body.pane_id, binding).catch(() => undefined);
         // answered, or as good as: the same prompt on the screen after this is asked anew
         if (committed) askingEnded(body.pane_id);
         // sent or dropped from its card: the same words in the box after this are a new message
@@ -3923,7 +3952,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       if (parsedByPublicPrompt.get(target)?.responder === "codex-async-question") {
         queueFronts.delete(body.pane_id);
         // by what it says, as closeQueue reads it off the screen
-        await closeQueue(body.pane_id, contentId(target)!);
+        await closeQueue(body.pane_id, contentId(target)!, binding);
       }
       const responder = parsedByPublicPrompt.get(target)?.responder;
       if (responder === "omo-question" || responder === "omo-review" || responder === "omo-typing" || responder === "omo-pending") {
