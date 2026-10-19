@@ -91,8 +91,12 @@ describe("CI cache contract", () => {
   });
 
   it("does not transfer dependency or browser caches over the prepared image", () => {
-    expect(action.runs.steps.find((step) => step.name === "Cache Bun dependencies")!.if)
-      .toBe("runner.environment != 'self-hosted'");
+    const cache = action.runs.steps.find((step) => step.name === "Cache Bun dependencies")!;
+    const restore = action.runs.steps.find((step) => step.name === "Restore Bun dependencies (read-only)")!;
+    expect(cache.if).toBe("runner.environment != 'self-hosted' && inputs.cache != 'restore'");
+    expect(restore.if).toBe("runner.environment != 'self-hosted' && inputs.cache == 'restore'");
+    expect(restore.uses).toBe("actions/cache/restore@v4");
+    expect(restore.with).toEqual(cache.with);
     for (const uses of ["oven-sh/setup-bun@v2", "actions/setup-node@v7"]) {
       expect(action.runs.steps.find((step) => step.uses === uses)!.if).toContain("runner.environment != 'self-hosted'");
     }

@@ -278,6 +278,8 @@ exit 77
     ...process.env,
     HOME: home,
     XDG_STATE_HOME: stateHome,
+    // A sync worker inherits its real deploy root. Fixtures must never use that checkout.
+    FORK_SYNC_REPO: work,
     ROUTE_CALLS: routeCalls,
     FORK_SYNC_ROUTE_BIN: route,
     FORK_SYNC_GJC_BIN: gjc,
