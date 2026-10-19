@@ -164,15 +164,14 @@ function collectGuardSessionIds(rows: readonly unknown[], pids: ReadonlySet<numb
  * must still prevent a binding (SDK session-index.ts: isDirectSessionGcFenceRow).
  */
 function directSessionFence(row: Record<string, unknown>, agentDir: string): boolean {
-  if (!isRecord(row.locator)) return false;
+  if (!isRecord(row.locator) || !nonEmptyString(row.sessionId) || row.live !== true
+    || row.endpointGeneration !== 0
+    || row.terminal !== false || row.terminalUncertain !== false || row.ambiguous !== false
+    || row.identityProvenance !== "composite"
+    || !nonEmptyString(row.hostIncarnation) || row.processIncarnation !== row.hostIncarnation
+    || row.endpointMtimeMs !== undefined || row.endpointFileId !== undefined || row.endpointIncarnation !== undefined) return false;
   const root = canonicalPath(agentDir);
-  return root !== null && canonicalPath(row.locator.stateRoot) === root
-    && nonEmptyString(row.sessionId) && row.live === true
-    && row.endpointGeneration === 0
-    && row.terminal === false && row.terminalUncertain === false && row.ambiguous === false
-    && row.identityProvenance === "composite"
-    && nonEmptyString(row.hostIncarnation) && row.processIncarnation === row.hostIncarnation
-    && row.endpointMtimeMs === undefined && row.endpointFileId === undefined && row.endpointIncarnation === undefined;
+  return root !== null && canonicalPath(row.locator.stateRoot) === root;
 }
 
 function canonicalPath(value: unknown): string | null {
@@ -180,8 +179,8 @@ function canonicalPath(value: unknown): string | null {
   try {
     const canonical = realpathSync.native(value);
     return process.platform === "win32" ? canonical.toLowerCase() : canonical;
-  } catch {
-    return null;
+  } catch (error) {
+    throw lookupExecutionError(error);
   }
 }
 

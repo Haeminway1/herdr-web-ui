@@ -45,7 +45,10 @@ export function recentProcessTable(read: () => Promise<ProcessRow[]> = windowsPr
   const entry = { at: now, rows: read() };
   processTable = entry;
   // an empty table is a read that failed: the next poll asks again
-  void entry.rows.then((rows) => { if (rows.length === 0 && processTable === entry) processTable = null; });
+  void entry.rows.then(
+    (rows) => { if (rows.length === 0 && processTable === entry) processTable = null; },
+    () => { if (processTable === entry) processTable = null; },
+  );
   return entry.rows;
 }
 

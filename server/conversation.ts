@@ -44,6 +44,7 @@ import { codexHistorySegments, createCodexTranscriptParser, codexOutputText, cod
 import { CODEX_IMAGE_REF, codexTranscriptImage } from "./codex-images.ts";
 import { AmbiguousClaudeStore, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
 import { forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { omoProcessIdentity, omoSessionForPane, processEnviron } from "./omo.ts";
 import { processStartedAt } from "./process-start.ts";
 import { ompHeldTranscript } from "./omp.ts";
@@ -1376,6 +1377,7 @@ async function managedTranscript(pane: HerdrPane, deps: ManagedSessionDeps): Pro
   if (resolution === null) {
     throw new ConversationUnavailable("blocked_managed_record_unavailable", pane.managed_session);
   }
+  if (resolution.lookupError) throw resolution.lookupError;
   const { identity, sessionFile } = resolution;
   if (identity.state !== "ready" || identity.harness === null || identity.id === null || identity.generation === null
     || identity.session_id === null || sessionFile === null) {
@@ -1603,7 +1605,15 @@ export async function conversationForPane(pane: HerdrPane, codexHome?: string, p
   if (!("managed_session" in resolved)) throw new ConversationUnavailable("no_managed_session");
   const identity = resolved.managed_session;
   const translated = managedPage(page, identity);
-  const answer = transcriptPage(resolved.source, resolved.path, translated.page, resolved.codexHome ?? codexHome);
+  let answer: RecognizedConversation;
+  try {
+    answer = transcriptPage(resolved.source, resolved.path, translated.page, resolved.codexHome ?? codexHome);
+  } catch (error) {
+    await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
+    // A validated managed file becoming unreadable is not proof of an empty history.
+    if (error instanceof ConversationUnavailable && error.message === "transcript_missing") throw new GjcSdkLookupError("unavailable");
+    throw error;
+  }
   await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
   rememberPaneRead(pane.pane_id, resolved.path);
   const historyId = `${translated.prefix}${answer.history_id}`;
