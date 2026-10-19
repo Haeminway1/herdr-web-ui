@@ -11,6 +11,11 @@ export interface ManagedSessionDeps {
   processIdentity?: (pid: number) => ProcessIdentity | null;
 }
 
+function unavailableRead(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null ? Reflect.get(error, "code") : undefined;
+  return ["EACCES", "EPERM", "EIO", "EMFILE", "ENFILE", "EAGAIN", "ESTALE", "EBUSY", "ETIMEDOUT"].includes(code);
+}
+
 function processIdentity(pid: number): ProcessIdentity | null {
   try {
     if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid <= 0 || !owned(statSync(`/proc/${pid}`))) return null;
@@ -20,6 +25,7 @@ function processIdentity(pid: number): ProcessIdentity | null {
     if (fields[0] === "Z" || starttime === undefined || !/^[0-9]+$/.test(starttime)) return null;
     return { pid, starttime, boot: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), cwd: realpathSync(readlinkSync(`/proc/${pid}/cwd`)) };
   } catch (error) {
+    if (unavailableRead(error)) throw new GjcSdkLookupError("unavailable");
     if (error instanceof Error) return null;
     throw error;
   }
@@ -174,6 +180,7 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
   identity.id = nonce;
   if (typeof generation !== "string" || !/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(Number(generation))) return blocked("blocked_managed_generation");
   identity.generation = Number(generation);
+  let recordBound = false;
   try {
     const rootInfo = lstatSync(namespace);
     if (!rootInfo.isDirectory() || !owned(rootInfo) || !safeAncestors(namespace, rootInfo)) return blocked("blocked_record_root");
@@ -189,6 +196,7 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       || !pane.terminal_id || record.terminal_id !== pane.terminal_id) return blocked("blocked_pane_identity");
     const recordCwd = record.cwd;
     identity.harness = recordHarness;
+    recordBound = true;
     if (record.desired_state !== "running") return blocked("blocked_session_stopped");
     if (record.state === "blocked") return blocked(typeof record.error === "string" && REASON.test(record.error) ? record.error : "blocked_record_state");
     if (["intent", "registered", "starting", "identity_pending"].includes(String(record.state))) {
@@ -263,7 +271,8 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     identity.session_id = sessionId;
     return { identity, sessionFile };
   } catch (error) {
-    if (error instanceof GjcSdkLookupError) return pending("identity_pending");
+    const code = typeof error === "object" && error !== null ? Reflect.get(error, "code") : undefined;
+    if (error instanceof GjcSdkLookupError || unavailableRead(error) || (recordBound && code === "ENOENT")) return pending("identity_pending");
     return blocked("blocked_managed_record_unavailable");
   }
 }

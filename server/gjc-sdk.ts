@@ -81,8 +81,16 @@ const sessionListCacheClock = () => performance.now();
 
 const GIT_MAX_BUFFER = 64 * 1024;
 
+/** Git's exit code alone also covers permission, ownership and repository failures. */
+export function isGitOutsideWorktree(error: unknown): boolean {
+  return isRecord(error) && error.code === 128 && error.stdout === ""
+    && typeof error.stderr === "string"
+    && /^fatal: not a git repository \(or any of the parent directories\): \.git\r?\n$/.test(error.stderr);
+}
+
 const gitWorktreeRoot: GjcSdkWorktreeRootResolver = async (cwd, timeoutMs) => {
   const execution = execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+    env: { ...process.env, LC_ALL: "C" },
     encoding: "utf8",
     timeout: timeoutMs,
     killSignal: "SIGKILL",
@@ -95,8 +103,7 @@ const gitWorktreeRoot: GjcSdkWorktreeRootResolver = async (cwd, timeoutMs) => {
     const { stdout } = await execution;
     return stdout.endsWith("\r\n") ? stdout.slice(0, -2) : stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout;
   } catch (error) {
-    // Git uses 128 outside a worktree; execution failures cannot prove a null anchor.
-    if (isRecord(error) && error.code === 128) return null;
+    if (isGitOutsideWorktree(error)) return null;
     throw lookupExecutionError(error);
   }
 };

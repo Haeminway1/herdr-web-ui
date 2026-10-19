@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -181,6 +182,32 @@ it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and
     managedSession: { state: "identity_pending", reason: "identity_pending" },
   });
   expect(JSON.stringify(result)).not.toContain("stale-child");
+});
+
+it.each(["EACCES", "EIO"])("keeps trusted record and transcript %s reads pending without provider authority", async (code) => {
+  for (const target of [recordFile, sessionFile]) {
+    const open = fs.openSync;
+    const denied = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (String(path) === target) throw Object.assign(new Error(`private ${target}`), { code });
+      return Reflect.apply(open, fs, [path, ...args]);
+    }) as typeof fs.openSync);
+    try {
+      const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+      const result = await labelManagedPanes(snapshot);
+      expect(result.panes[0]).toMatchObject({ agent_session: null, managed_session: { state: "identity_pending", session_id: null } });
+      expect(result.agents[0]?.agent_session).toBeNull();
+      expect(JSON.stringify(result)).not.toContain(target);
+      await expect(conversationForPane(pane)).rejects.toThrow("identity_pending");
+    } finally { denied.mockRestore(); }
+    expect((await resolve()).identity.state).toBe("ready");
+  }
+});
+
+it("keeps a missing transcript pending but still blocks an absent managed record", async () => {
+  rmSync(sessionFile);
+  expect(await resolve()).toMatchObject({ identity: { state: "identity_pending", session_id: null }, sessionFile: null });
+  rmSync(recordFile);
+  expect((await resolve()).identity.state).toBe("blocked");
 });
 
 it("leaves unmanaged snapshots untouched without reading unrelated agent projections", async () => {

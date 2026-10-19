@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import {
+  isGitOutsideWorktree,
   gjcSdkCurrentSessionWithRunner as sdkCurrentSessionWithRunner,
   gjcSdkTranscriptWithRunner as sdkTranscriptWithRunner,
   type GjcSdkCommandOptions,
@@ -108,6 +109,23 @@ const commandArgs = [
 ];
 
 describe("GJC live identity independent of saved-store indexing", () => {
+  it("accepts a null Git anchor only for the exact non-worktree diagnostic", async () => {
+    const outside = { code: 128, stdout: "", stderr: "fatal: not a git repository (or any of the parent directories): .git\n" };
+    expect(isGitOutsideWorktree(outside)).toBe(true);
+    for (const failure of [
+      { ...outside, stderr: "fatal: detected dubious ownership in repository at '/private/work'\n" },
+      { ...outside, stderr: "fatal: cannot open .git/config: Permission denied\n" },
+      { ...outside, stderr: "Permission denied\n" + outside.stderr },
+      { ...outside, stdout: "unexpected" },
+      { ...outside, code: "EACCES" },
+    ]) expect(isGitOutsideWorktree(failure)).toBe(false);
+    const row = session({ locator: { ...locator(), worktreeRoot: null } });
+    const fixture = fakeRunner([page([row]), saved(row)]);
+    await expect(sdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner, undefined, undefined, currentGeneration))
+      .resolves.toMatchObject({ sessionId: "session-1" });
+    expect(fixture.calls).toHaveLength(2);
+  });
+
   it("rejects stale generation even when both cached broker pages still report the old index", async () => {
     const fixture = fakeRunner([page([session()]), saved()]);
     let current = true;

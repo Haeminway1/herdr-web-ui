@@ -8,7 +8,7 @@ import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readlinkSync
 import nodePath, { join, type PlatformPath } from "node:path";
 
 import { gjcSdkTranscript } from "./gjc-sdk.ts";
-import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
+import { lookupExecutionError } from "./gjc-sdk-error.ts";
 import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 import { captureGjcIndex, gjcIndexUnchanged, type GjcIndexStamp } from "./gjc-index.ts";
 import { herdrRpc } from "./herdr/client.ts";
@@ -257,7 +257,10 @@ export function validateGjcSdkTranscript(binding: GjcSdkBinding, cwd: string, ag
         : headerCwd === expectedCwd;
       return sameCwd ? path : null;
     } finally { closeSync(fd); }
-  } catch { return null; }
+  } catch (error) {
+    if (error instanceof SyntaxError) return null;
+    throw lookupExecutionError(error);
+  }
 }
 
 type GjcPaneProcessInfo = { process_info?: { shell_pid?: unknown; foreground_processes?: { pid?: unknown; argv?: unknown }[] } };
@@ -347,7 +350,7 @@ async function lookupGjcTranscript(
   if (!nodePath.isAbsolute(cwd) || !nodePath.isAbsolute(agentDir)) return null;
   const readProcessInfo = options.processInfo ?? ((id: string) => herdrRpc<GjcPaneProcessInfo>(
     "pane.process_info", { pane_id: id },
-  ).catch(() => null));
+  ));
   const sdkTranscript = options.sdkTranscript ?? gjcSdkTranscript;
   const generationCurrent = options.generationCurrent ?? gjcSdkGenerationCurrent;
   const readProcessTable = options.readProcessTable ?? windowsProcessTable;
@@ -440,12 +443,8 @@ async function lookupGjcTranscript(
     }
     return path;
   } catch (error) {
-    // a timed-out lookup reaches the route as 504, so the chat keeps what it shows (#1295); the kept
-    // binding was already dropped, since a lookup only runs once it no longer held
-    if (error instanceof GjcSdkLookupError) {
-      transcriptBindings.delete(key);
-      throw error;
-    }
-    return forget();
+    // An unavailable read cannot prove absence or authorize a cached binding after recovery.
+    transcriptBindings.delete(key);
+    throw lookupExecutionError(error);
   }
 }

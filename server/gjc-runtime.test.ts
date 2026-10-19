@@ -1,9 +1,11 @@
-import { expect, it } from "bun:test";
+import { expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { forgetTranscriptState } from "./conversation.ts";
+import * as herdr from "./herdr/client.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { gjcPidUnderShell, gjcSessionFile, gjcTranscriptForPane, isGjcProcess, parseGjcPs, recentProcessTable, storeRelative, terminalBreadcrumb, validateGjcSdkTranscript } from "./gjc-runtime.ts";
 
@@ -171,6 +173,61 @@ it("validates an SDK-selected main transcript by canonical path and exact first-
     writeFileSync(longHeader, JSON.stringify({ type: "session", id: sessionId, cwd, padding: "x".repeat(64 * 1024) }) + "\n");
     expect(validateGjcSdkTranscript(bind(longHeader), cwd, agentDir)).toBeNull();
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+it.each(["ENOENT", "EACCES"])("propagates %s from the selected transcript or store without serving cached authority", async (code) => {
+  for (const target of ["root", "transcript"]) {
+    forgetTranscriptState();
+    const home = tempDir("gjc-sdk-io-failure-");
+    try {
+      const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent"), store = join(agentDir, "sessions");
+      const project = join(store, "project"), indexDir = join(agentDir, "sdk", "sessions");
+      mkdirSync(cwd); mkdirSync(project, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+      writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered" }));
+      const path = join(project, "main.jsonl"), sessionId = "io-session";
+      writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
+      let lookups = 0;
+      const options = {
+        platform: "linux", processBirth: () => 1000, generationCurrent: async () => true,
+        processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+        sdkTranscript: async () => { lookups += 1; return { path, sessionId, pid: 200, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] }; },
+      };
+      expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+      const realpath = fs.realpathSync;
+      const denied = spyOn(fs, "realpathSync").mockImplementation(((value: fs.PathLike, ...args: unknown[]) => {
+        if (String(value) === (target === "root" ? store : path)) throw Object.assign(new Error(`secret ${path}`), { code });
+        return Reflect.apply(realpath, fs, [value, ...args]);
+      }) as typeof fs.realpathSync);
+      try {
+        const failure = await gjcTranscriptForPane("pane", cwd, home, options).catch(error => error);
+        expect(failure).toBeInstanceOf(GjcSdkLookupError);
+        expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+        expect(JSON.stringify(failure)).not.toContain(path);
+      } finally { denied.mockRestore(); }
+      expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+      expect(lookups).toBe(2);
+    } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+  }
+});
+
+it.each(["ENOENT", "EACCES", "ETIMEDOUT", "timeout"])("propagates a process-info %s rejection rather than identity absence", async (code) => {
+  const home = tempDir("gjc-process-info-failure-");
+  const rejection = Object.assign(new Error("secret process details"), { code });
+  const rpc = spyOn(herdr, "herdrRpc").mockRejectedValue(rejection);
+  try {
+    for (const production of [false, true]) {
+      let calls = 0;
+      const failure = await gjcTranscriptForPane("pane", home, home, {
+        processInfo: production ? undefined : async () => { throw rejection; },
+        sdkTranscript: async () => { calls += 1; return null; },
+      }).catch(error => error);
+      expect(failure).toBeInstanceOf(GjcSdkLookupError);
+      expect(failure).toMatchObject({ reason: code === "ETIMEDOUT" || code === "timeout" ? "timeout" : "unavailable" });
+      expect(JSON.stringify(failure)).not.toContain("secret");
+      expect(calls).toBe(0);
+    }
+    expect(rpc).toHaveBeenCalledWith("pane.process_info", { pane_id: "pane" });
+  } finally { rpc.mockRestore(); forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
 it("re-reads pane process info and birth identity before accepting the SDK binding", async () => {
