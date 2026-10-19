@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSy
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { forgetTranscriptState } from "./conversation.ts";
-import { GjcSdkLookupError } from "./gjc-sdk.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { gjcPidUnderShell, gjcSessionFile, gjcTranscriptForPane, isGjcProcess, parseGjcPs, recentProcessTable, storeRelative, terminalBreadcrumb, validateGjcSdkTranscript } from "./gjc-runtime.ts";
 
 // Session paths come back canonical and the store root is passed in canonical; macOS's tmpdir is a symlink into /private.
@@ -189,6 +189,7 @@ it("re-reads pane process info and birth identity before accepting the SDK bindi
       processInfo: async () => { reads += 1; return info(reads === 1 ? 200 : 200); },
       processBirth: () => { births += 1; return births === 1 ? 1000 : 1000; },
       sdkTranscript: async (pids: readonly number[]) => { expect(pids).toEqual([200]); return binding; },
+      generationCurrent: async () => true,
     };
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(realpathSync(path));
     expect(reads).toBe(2);
@@ -244,6 +245,7 @@ it("shares one SDK lookup between overlapping reads of a pane", async () => {
       processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["/usr/bin/gjc"] }] } }),
       processBirth: () => 1000,
       sdkTranscript: async () => { lookups += 1; if (gated) await gate; return lookups > 6 ? null : binding; },
+      generationCurrent: async () => true,
     };
     // regression (fails on main: 5 lookups): five overlapping reads of one pane share one lookup
     const burst = Array.from({ length: 5 }, () => gjcTranscriptForPane("pane", cwd, home, options));
@@ -292,10 +294,10 @@ it("avoids cross-pane SDK lookup bursts on unrelated heartbeats without extendin
       };
       const options = {
         platform: "linux", now: () => clock,
-        generationCurrent: async () => true,
         processInfo: async () => ({ process_info: { foreground_processes: [{ pid, argv: ["gjc"] }] } }),
         processBirth: () => 1000,
         sdkTranscript: async () => { lookups += 1; return binding; },
+        generationCurrent: async () => true,
       };
       return async () => expect(await gjcTranscriptForPane(`pane-${n}`, cwd, home, options)).toBe(path);
     });
@@ -344,7 +346,6 @@ it("does not absorb a session change written during an SDK lookup into the kept 
     let lookups = 0;
     const options = {
       platform: "linux",
-      generationCurrent: async () => true,
       processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
       processBirth: () => 1000,
       sdkTranscript: async () => {
@@ -353,6 +354,7 @@ it("does not absorb a session change written during an SDK lookup into the kept 
         appendFileSync(index, sdkIndexRow(cwd, 2, { type: "host_registered", sessionId: "new", pid: 200 }));
         return old;
       },
+      generationCurrent: async () => true,
     };
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(old.path);
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(fresh.path);
@@ -360,7 +362,7 @@ it("does not absorb a session change written during an SDK lookup into the kept 
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
-it("revokes a cached transcript when native generation becomes unavailable without authorizing its old file", async () => {
+it("retires a cached transcript when native generation retires without authorizing its old file", async () => {
   forgetTranscriptState();
   const home = tempDir("gjc-generation-revoked-");
   try {
@@ -382,7 +384,7 @@ it("revokes a cached transcript when native generation becomes unavailable witho
     live = false;
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
     expect(lookups).toBe(2);
-    expect(generationChecks).toBe(2);
+    expect(generationChecks).toBe(4);
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -406,10 +408,10 @@ it("keeps a proven binding for later reads until the session index or the pane's
     let answer: typeof oldBinding | null = oldBinding, lookups = 0, pid = 200, birth = 1000, clock = 0, running = true;
     const options = {
       platform: "linux",
-      generationCurrent: async () => true,
       processInfo: async () => ({ process_info: { foreground_processes: running ? [{ pid, argv: ["/usr/bin/gjc"] }] : [] } }),
       processBirth: () => birth,
       sdkTranscript: async () => { lookups += 1; return answer; },
+      generationCurrent: async () => true,
       now: () => clock,
     };
     const read = () => gjcTranscriptForPane("pane", cwd, home, options);
@@ -474,6 +476,138 @@ it("keeps a proven binding for later reads until the session index or the pane's
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
+it("invalidates an unchanged-index cached transcript when SDK generation changes", async () => {
+  forgetTranscriptState();
+  const home = tempDir("gjc-sdk-generation-cache-");
+  try {
+    const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+    const project = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+    mkdirSync(cwd); mkdirSync(project, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+    writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered" }));
+    const path = join(project, "main.jsonl"), sessionId = "generation-session";
+    writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
+    let current = true, lookups = 0;
+    const options = {
+      platform: "linux", generationCurrent: async () => current,
+      processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+      processBirth: () => 1000,
+      sdkTranscript: async () => { lookups += 1; return lookups === 1
+        ? { sessionId, pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] }
+        : null; },
+    };
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+    expect(lookups).toBe(1);
+    current = false;
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
+    expect(lookups).toBe(2);
+  } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it("rejects a cached binding revoked without an index change", async () => {
+  forgetTranscriptState();
+  const home = tempDir("gjc-sdk-revoked-cache-");
+  try {
+    const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+    const store = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+    mkdirSync(cwd); mkdirSync(store, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+    const path = join(store, "session.jsonl"), sessionId = "session";
+    writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
+    writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId, pid: 200 }));
+    let current = true, lookups = 0;
+    const options = {
+      platform: "linux", now: () => 0,
+      processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+      processBirth: () => 1000,
+      sdkTranscript: async () => {
+        lookups += 1;
+        return lookups === 1 ? { path, sessionId, pid: 200, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] } : null;
+      },
+      generationCurrent: async () => current,
+    };
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(realpathSync(path));
+    current = false;
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
+    expect(lookups).toBe(2);
+  } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it.each(["timeout", "unavailable"] as const)("propagates cached generation %s and requires fresh authority after recovery", async (reason) => {
+  forgetTranscriptState();
+  const home = tempDir("gjc-sdk-generation-failure-");
+  try {
+    const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+    const store = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+    mkdirSync(cwd); mkdirSync(store, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+    const path = join(store, "session.jsonl"), sessionId = "session";
+    writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
+    writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId, pid: 200 }));
+    const binding = { path, sessionId, pid: 200, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] };
+    const failure = new GjcSdkLookupError(reason);
+    let unavailable = false, lookups = 0, observations = 0;
+    const options = {
+      platform: "linux", now: () => 0,
+      processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+      processBirth: () => 1000,
+      sdkTranscript: async () => { lookups += 1; return binding; },
+      generationCurrent: async () => {
+        observations += 1;
+        if (unavailable) throw failure;
+        return true;
+      },
+    };
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+    unavailable = true;
+    await expect(gjcTranscriptForPane("pane", cwd, home, options)).rejects.toBe(failure);
+    expect(lookups).toBe(1);
+    unavailable = false;
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+    expect(lookups).toBe(2);
+    expect(observations).toBe(3);
+  } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it.each(["fresh", "cached"] as const)("rejects a %s transcript when the pane changes while generation is awaited", async (mode) => {
+  for (const change of ["exit", "switch"] as const) {
+    forgetTranscriptState();
+    const home = tempDir("gjc-sdk-generation-race-");
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    try {
+      const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+      const store = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+      mkdirSync(cwd); mkdirSync(store, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+      const path = join(store, "session.jsonl"), sessionId = "session";
+      writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
+      writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId, pid: 200 }));
+      const binding = { path, sessionId, pid: 200, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] };
+      let pid = 200, observations = 0, lookups = 0, reads = 0;
+      const options = {
+        platform: "linux", now: () => 0,
+        processInfo: async () => { reads += 1; return { process_info: { foreground_processes: pid === 0 ? [] : [{ pid, argv: ["gjc"] }] } }; },
+        processBirth: () => 1000,
+        sdkTranscript: async () => { lookups += 1; return binding; },
+        generationCurrent: async () => {
+          observations += 1;
+          if (mode === "fresh" || observations === 2) { entered.resolve(); await gate.promise; }
+          return true;
+        },
+      };
+      if (mode === "cached") {
+        expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+        expect(lookups).toBe(1);
+      }
+      const pending = gjcTranscriptForPane("pane", cwd, home, options);
+      await entered.promise;
+      pid = change === "exit" ? 0 : 201;
+      gate.resolve();
+      expect(await pending).toBeNull();
+      expect(reads).toBeGreaterThanOrEqual(mode === "cached" ? 4 : 2);
+      expect(lookups).toBe(1);
+    } finally { gate.resolve(); forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+  }
+});
+
 it.each(["timeout", "unavailable"] as const)("propagates SDK %s without retaining an old transcript or a failed lookup", async (reason) => {
   const home = tempDir("gjc-sdk-failure-");
   try {
@@ -494,6 +628,7 @@ it.each(["timeout", "unavailable"] as const)("propagates SDK %s without retainin
         if (lookups === 2) throw failure;
         return lookups === 3 ? null : binding;
       },
+      generationCurrent: async () => true,
     };
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
     const failed = gjcTranscriptForPane("pane", cwd, home, options);
@@ -536,6 +671,7 @@ it.each(["cwd", "home", "SDK callback"])("keeps overlapping pane reads separate 
         await gate.promise;
         return bindingA;
       },
+      generationCurrent: async () => true,
     };
     // When a later snapshot arrives after the first SDK lookup has actually started.
     const first = gjcTranscriptForPane("pane", cwdA, home, options);
@@ -597,6 +733,7 @@ it("uses a fresh Windows process tree for the final process identity check", asy
       platform: "win32",
       processInfo,
       readProcessTable,
+      generationCurrent: async () => true,
       sdkTranscript: async (pids: readonly number[]) => { expect(pids).toEqual([200]); return binding; },
     });
     expect(tableReads).toBe(2);

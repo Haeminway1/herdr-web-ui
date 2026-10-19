@@ -22,6 +22,14 @@ function previewFromState(state: unknown): FilePreview | null {
     } : null;
 }
 
+function backUnderPreview(): Promise<unknown> | undefined {
+  const navigation = window.navigation as Navigation | undefined;
+  const index = navigation?.currentEntry?.index ?? 0;
+  const below = navigation?.entries()[index - 1];
+  if (navigation === undefined || below === undefined) { window.history.back(); return undefined; }
+  return navigation.traverseTo(below.key).committed;
+}
+
 /** Android Back traverses history: a preview must be an entry above the chat, not just a modal. */
 export function useFileViewer() {
   const [viewing, setViewing] = useState(() => previewFromState(window.history.state));
@@ -51,8 +59,7 @@ export function useFileViewer() {
     if (closing.current) return;
     if (previewFromState(window.history.state)) {
       closing.current = true;
-      // X, Escape and scrim clicks consume the same entry as the system Back button.
-      window.history.back();
+      backUnderPreview()?.catch(() => { closing.current = false; });
     } else setViewing(null);
   }, []);
 

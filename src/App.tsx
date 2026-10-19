@@ -29,12 +29,12 @@ import { SidebarResizer } from "./components/SidebarResizer.tsx";
 import { storedSidebarWidth } from "./lib/sidebarWidth.ts";
 import { FilePanelResizer } from "./components/FilePanelResizer.tsx";
 import { FILE_PANEL_DOCK_QUERY, storedFilePanelWidth } from "./lib/filePanelWidth.ts";
-import { filePresentation, type FilePresentation } from "./lib/filePresentation.ts";
+import { openPresentation, type FilePresentation } from "./lib/filePresentation.ts";
 import { MachineDialog } from "./components/MachineDialog.tsx";
 import { RowMenu, type RowMenuItem } from "./components/RowMenu.tsx";
 import { focusWorkspaceListToggle } from "./lib/focus.ts";
 import { headerCrumb, showsChat } from "./lib/headerCrumb.ts";
-import { paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
+import { LOCAL_MACHINE, paneStorageId, type Machine, type MachineEvent } from "../shared/machines.ts";
 import { takeAuthTokenFromUrl } from "./lib/authLink.ts";
 import { applyPaneStatus } from "./lib/snapshot.ts";
 import { applyPaneAttention, isUnread } from "./lib/attention.ts";
@@ -67,6 +67,8 @@ import { TelemetryNotice } from "./components/TelemetryControls.tsx";
 import { FilesDialog } from "./components/FilesDialog.tsx";
 import { folderQueryFor } from "./lib/paletteFolders.ts";
 import { FileViewer } from "./components/FileViewer.tsx";
+import { WebPanel } from "./components/WebPanel.tsx";
+import { panelUrl, WebPanelContext, wantsPanel } from "./lib/webPanel.ts";
 import { RepoDiffViewer } from "./components/RepoDiffViewer.tsx";
 import { OpenFileContext } from "./lib/filePaths.ts";
 import { useFileViewer } from "./lib/useFileViewer.ts";
@@ -429,11 +431,24 @@ export function App() {
   const { viewing, openFile, closeFile, setPresentation, releaseFile } = useFileViewer();
   // a repository diff from the Files dialog's Changes tab, an entry of its own like a file
   const { viewing: diffViewing, openDiff, closeDiff, releaseDiff } = useRepoDiffViewer();
-  const presentation = viewing?.presentation ?? filePresentation(viewing?.path ?? "");
+  const presentation = viewing?.presentation ?? openPresentation(viewing?.path ?? "", settings.fileOpen);
   const fileDocked = filePanelAvailable && presentation === "panel";
   useEffect(() => {
     if (viewing !== null && fileDocked) setFilesOpen(false);
   }, [viewing, fileDocked]);
+  // A local page shares the file panel; docking a file replaces it.
+  const [webPage, setWebPage] = useState<string | null>(null);
+  useEffect(() => {
+    if (viewing !== null && fileDocked) setWebPage(null);
+  }, [viewing, fileDocked]);
+  const openWebPage = useCallback((uri: string, shiftKey: boolean, machineId: string) => {
+    if (machineId !== LOCAL_MACHINE || !wantsPanel(settings.webLinks, shiftKey)) return false;
+    const url = panelUrl(uri, window.location);
+    if (url === null) return false;
+    if (viewing !== null && fileDocked) closeFile();
+    setWebPage(url);
+    return true;
+  }, [settings.webLinks, viewing, fileDocked, closeFile]);
   // the panel is no dialog, so no trap gives the focus back when it closes: what opened the file
   // (a link in the chat, a row of Files) gets it, as it does from the popup
   useFocusReturn(viewing !== null && fileDocked);
@@ -457,17 +472,18 @@ export function App() {
       window.history.go(-2);
     } else setPresentation(next);
   }, [filePanelAvailable, diffViewing, viewing, releaseDiff, openFile, setPresentation]);
-  const reportFileKind = useCallback((presentation: FilePresentation) => {
-    if (viewing !== null && viewing.presentation === undefined && presentation !== filePresentation(viewing.path)) presentFile(presentation);
-  }, [viewing, presentFile]);
+  const reportFileKind = useCallback((kind: FilePresentation) => {
+    const wanted = settings.fileOpen === "panel" ? kind : "popup";
+    if (viewing !== null && viewing.presentation === undefined && wanted !== openPresentation(viewing.path, settings.fileOpen)) presentFile(wanted);
+  }, [viewing, presentFile, settings.fileOpen]);
   const toggleFilePresentation = filePanelAvailable && viewing !== null
     ? () => presentFile(fileDocked ? "popup" : "panel")
     : undefined;
   const viewFile = useCallback((path: string) => {
     // the Files dialog would cover the docked panel the file opens in
-    if (filePanelAvailable && filePresentation(path) === "panel") setFilesOpen(false);
+    if (filePanelAvailable && openPresentation(path, settings.fileOpen) === "panel") setFilesOpen(false);
     openFile({ path, paneId: selectedPaneId, machineId: selectedMachineId });
-  }, [openFile, selectedPaneId, selectedMachineId, filePanelAvailable]);
+  }, [openFile, selectedPaneId, selectedMachineId, filePanelAvailable, settings.fileOpen]);
   // a link to Settings opens it on its page, for that first opening alone
   const [settingsOpen, setSettingsOpen] = useState(() => initialLink?.settings != null);
   const [settingsLinkPage, setSettingsLinkPage] = useState<string | null>(() => initialLink?.settings ?? null);
@@ -1642,6 +1658,7 @@ export function App() {
 
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
+        <WebPanelContext.Provider value={filePanelAvailable ? openWebPage : null}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
         {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
         <UpdateNotice updates={updates} onOpen={() => { setSettingsSection("updates"); setSettingsOpen(true); }} />
@@ -1778,11 +1795,14 @@ export function App() {
           <SplitDropPreview visible={splitDragOn && (paneDragging || tabDrag !== null)} side={dropAt} />
         </div>
         </div>
+        </WebPanelContext.Provider>
         </OpenFileContext.Provider>
         {/* last in the row: the file beside the pane (from 980px), the pane column shrinks and its terminal refits */}
         {viewing !== null && fileDocked && <MachineContext.Provider value={viewing.machineId}>
           <FileViewer key={viewing.path} docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path, presentation })} onKind={reportFileKind} onTogglePresentation={toggleFilePresentation} keyboardActive={!settingsOpen} />
         </MachineContext.Provider>}
+        {webPage !== null && filePanelAvailable && !(viewing !== null && fileDocked) &&
+          <WebPanel key={webPage} url={webPage} onClose={() => setWebPage(null)} panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
       </div>
 
       <MachineContext.Provider value={newSessionMachineId}><NewSessionDialog
@@ -1819,7 +1839,7 @@ export function App() {
       )}
       {diffViewing !== null && <MachineContext.Provider value={diffViewing.machineId}>
         <RepoDiffViewer key={`${diffViewing.scope}:${diffViewing.path}`} target={diffViewing} onClose={closeDiff} onOpenFile={(path) => {
-          const docked = filePanelAvailable && filePresentation(path) === "panel";
+          const docked = filePanelAvailable && openPresentation(path, settings.fileOpen) === "panel";
           if (docked) {
             setFilesOpen(false);
             releaseDiff();

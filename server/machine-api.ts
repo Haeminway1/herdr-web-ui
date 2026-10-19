@@ -8,7 +8,7 @@ import { isJsonObject, jsonResponse } from "./http.ts";
 import { crossSiteFileRead } from "./file-view.ts";
 
 const fail = (code: string, message: string, status: number) => jsonResponse({ error: { code, message } }, status);
-export const MACHINE_PROXY_PATH = /^(?:session|agents|integrations|pane\/(?:read|seen|scroll|find|selection|conversation(?:\/image|\/tool-output)?|commands|files|omo-tasks|plan|prompt|prompt\/answer|input|keys|close|rename|image|split|zoom|swap|resize|clear|focus)|workspace\/(?:create|rename|move|close|directories|diff\/files|diff\/file)|worktree\/(?:create|list|open|remove)|tab\/(?:create|rename|close|move)|layout\/ratio|agent\/rename|plugins\/actions|plugin\/action|fs\/(?:stat|file|favicon))$/;
+export const MACHINE_PROXY_PATH = /^(?:session|agents|integrations|residents|pane\/(?:read|seen|scroll|find|selection|conversation(?:\/image|\/tool-output)?|commands|files|omo-tasks|plan|prompt|prompt\/answer|input|keys|close|rename|image|split|zoom|swap|resize|clear|focus)|workspace\/(?:create|rename|move|close|directories|diff\/files|diff\/file)|worktree\/(?:create|list|open|remove)|tab\/(?:create|rename|close|move)|layout\/ratio|agent\/rename|plugins\/actions|plugin\/action|fs\/(?:stat|file|favicon))$/;
 
 
 /**
@@ -118,6 +118,7 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       // Explicit header allowlist: cookies, browser Authorization, forwarded headers
       // and remote Set-Cookie never cross this boundary. No arbitrary target URLs.
       const headers = new Headers({ authorization: `Bearer ${endpoint.token}` });
+      if (path === "pane/seen" || path === "residents") headers.set("x-herdr-machine", "1");
       const contentType = request.headers.get("content-type");
       if (contentType) headers.set("content-type", contentType);
       // a remote conversation answers 304 when unchanged, as a local one does

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { gjcSdkGenerationCurrent, type GjcSdkGenerationObserver } from "./gjc-sdk-generation.ts";
 
 describe("SDK generation revocation", () => {
@@ -16,14 +17,25 @@ describe("SDK generation revocation", () => {
     expect(await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, { generationStatus: async () => ({ status }) })).toBe(false);
   });
 
-  it("fails closed when discovery or the readonly generation API rejects", async () => {
+  it("reports unavailable without leaking discovery or generation execution failures", async () => {
     const unavailable = Promise.reject<GjcSdkGenerationObserver>(new Error("SDK unavailable"));
-    expect(await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, unavailable)).toBe(false);
-    expect(await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, { generationStatus: async () => { throw new Error("index unavailable"); } })).toBe(false);
+    await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, unavailable)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
+    await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, { generationStatus: async () => { throw new Error("secret index unavailable"); } })).rejects.toEqual(new GjcSdkLookupError("unavailable"));
+  });
+
+  it.each(["ENOENT", "EACCES"])("sanitizes %s discovery and generation API failures", async (code) => {
+    const secret = `private ${code} session credentials`;
+    const unavailable = Promise.reject<GjcSdkGenerationObserver>(Object.assign(new Error(secret), { code }));
+    for (const observer of [unavailable, { generationStatus: async () => { throw Object.assign(new Error(secret), { code }); } }]) {
+      const failure = await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer).catch(error => error);
+      expect(failure).toBeInstanceOf(GjcSdkLookupError);
+      expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(JSON.stringify(failure)).not.toContain(secret);
+    }
   });
 
   it("bounds a hung generation observation without accepting cached broker evidence", async () => {
     const observer: GjcSdkGenerationObserver = { generationStatus: () => new Promise(() => {}) };
-    expect(await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer)).toBe(false);
+    await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer)).rejects.toEqual(new GjcSdkLookupError("timeout"));
   });
 });

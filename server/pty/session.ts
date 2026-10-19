@@ -89,6 +89,10 @@ export class PtySession {
     this.send({ t: "r", c: cols, r: rows });
   }
 
+  winch(): void {
+    this.send({ t: "w" });
+  }
+
   pause(): void {
     if (this.paused || this.closed) return;
     this.paused = true;

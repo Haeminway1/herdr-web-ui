@@ -352,6 +352,21 @@ export async function claudeProcessSession(
   }
 }
 
+export async function claudeForegroundSession(
+  processes: readonly { pid: number; name?: string | null; argv0?: string | null; argv?: readonly string[] | null }[],
+  home = process.env["HOME"] ?? "",
+): Promise<string | null> {
+  const claude = processes.filter((entry) => isClaudeProcess({ name: entry.name ?? undefined, argv0: entry.argv0 ?? undefined, argv: entry.argv ?? undefined }));
+  if (claude.length !== 1) return null;
+  const only = claude[0]!;
+  try {
+    const dir = await processClaudeConfigDir(only.pid, only.argv ?? [only.argv0 ?? only.name ?? ""], home);
+    return await claudeProcessSession(home, only.pid, dir || defaultClaudeConfigDir(home));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The transcript of `session` (a UUID, validated by the caller): under the project of each cwd
  * in turn, else in whichever project holds it. Null when no project does (a session that has not

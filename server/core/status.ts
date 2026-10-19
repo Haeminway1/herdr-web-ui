@@ -22,12 +22,14 @@ import { omoPanes } from "../omo.ts";
 import { OMO_ALIASES, OmoStatus } from "../omo-status.ts";
 import type { PendingInputs } from "../pending-input.ts";
 import { promptWaitEnded } from "../prompt.ts";
+import { ResidentStore } from "../residents.ts";
 import { type AlertTiming, createPushService, defaultStateDir } from "../push.ts";
 import { SessionPlans } from "../session-plan.ts";
 import type { Telemetry } from "../telemetry.ts";
 import type { UsageLoginService } from "../usage-login.ts";
 import type { UsageService } from "../usage.ts";
 import { type Client, send } from "./connections.ts";
+import { labelManagedPanes } from "../managed-sessions.ts";
 
 /** a focus or reconnect re-reads the panes for the daily active message at most this often */
 const VISIT_READ_MS = 10 * 60_000;
@@ -36,6 +38,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   options: {
     stateDir?: string;
     codexHome?: string;
+    protectedManagerFolder?: string;
     telemetry?: Telemetry;
     machines?: boolean;
     herdrProfiles?: () => Promise<HerdrMachineProfile[]>;
@@ -68,6 +71,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   /** `done` for agents herdr loses track of (server/completion.ts), kept across restarts */
   const completions = new CompletionTracker(join(options.stateDir ?? defaultStateDir(), "completions.json"));
   const attention = new AttentionStore(join(options.stateDir ?? defaultStateDir(), "attention.json"), undefined, options.statusNow);
+  const residents = new ResidentStore(join(options.stateDir ?? defaultStateDir(), "residents.json"), { snapshot: sessionSnapshot, managerFolder: options.protectedManagerFolder });
   /** OmO panes get their status from OmO's session files: herdr reports none for them (server/omo-status.ts) */
   const omo = new OmoStatus({
     discover: (panes) => omoPanes(panes),
@@ -110,7 +114,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   });
   /** herdr's snapshot with OmO's and GJC's own status in it: what the completion tracker and web push are given */
   const rawSnapshot = async (): Promise<SessionSnapshot> => {
-    const snapshot = await omoSnapshot();
+    const snapshot = await labelManagedPanes(await omoSnapshot());
     await gjc.refresh(snapshot.panes);
     const named = gjc.apply(omo.apply(snapshot));
     // not waited for: finding a transcript costs process calls, and a snapshot must not wait on them.
@@ -179,6 +183,11 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
         if (updated) broadcastAll({ type: "pane-attention", pane_id: paneId, attention: updated });
       }
     } catch { /* Blocked or unavailable transcripts never select a guessed source. */ }
+  }
+  function markPaneSeen(paneId: string) {
+    const state = attention.markSeen(paneId);
+    if (state) broadcastAll({ type: "pane-attention", pane_id: paneId, attention: state });
+    return state;
   }
   /** A broken state file must cost the alert, never the server (an unhandled rejection would). */
   const logPushError = (error: unknown): void => {
@@ -330,11 +339,11 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
     },
     onPaneEnded: (paneId) => {
       if (usageLogin.ended(paneId)) usage.invalidate();
-      attention.forget(paneId);
       holdPendingPane(paneId, { code: "pane_not_found", message: "The pane ended; its pending messages were not sent" });
       pending.forget(paneId);
       waits.forget(paneId);
       completions.forget(paneId);
+      attention.forget(paneId);
       // the terminal is gone, so is whatever its chat parsed (server/conversation.ts)
       forgetPaneTranscriptState(paneId);
       bridgeAgents?.ended(paneId);
@@ -350,5 +359,5 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   waitTimer.unref?.();
   plans.start();
 
-  return { push, omo, gjc, claudeAgents, plans, attention, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector, waitTimer };
+  return { push, omo, gjc, claudeAgents, plans, clientSnapshot, countVisit, machines, residents, markPaneSeen, broadcastAll, logPushError, collector, waitTimer };
 }

@@ -148,6 +148,115 @@ describe("readPlan (Codex checklist)", () => {
 describe("SessionPlans", () => {
   const pane = (pane_id: string, agent: string, session = "s1"): HerdrPane => ({ pane_id, agent, cwd: "/w", agent_session: { kind: "id", value: session } } as unknown as HerdrPane);
 
+  const omo = async () => {
+    const f = file("omo.jsonl");
+    let sequence = 0;
+    const answer = (text: string, toolName = "todo") => f.add({ type: "message", timestamp: at(++sequence), message: { role: "toolResult", toolName, toolCallId: `t${sequence}`, content: [{ type: "text", text }] } });
+    answer("Overall: 0/2 done\n  Build:\n    - [ ] Read (in progress)\n    - [ ] Fix");
+    const plans = new SessionPlans({ claudePath: () => null, codexPath: async () => null, omoPath: () => f.path, onChange: () => {} });
+    await plans.refresh([pane("omo1", "omo")]);
+    plans.poll();
+    return { plans, answer, f };
+  };
+
+  it("initializes an OmO plan from the todo tool answer", async () => {
+    // Given a native session with a synthetic todo answer.
+    const { plans } = await omo();
+    // When the OmO pane is followed and polled.
+    // Then both the sidebar summary and plan panel receive the list.
+    expect(plans.summaryOf("omo1")).toEqual({ done: 0, total: 2, current: "Read" });
+    expect(plans.planOf(pane("omo1", "omo"))?.map((step) => step.label)).toEqual(["Read", "Fix"]);
+  });
+
+  it("updates OmO progress when another todo answer is appended", async () => {
+    // Given a polled native list.
+    const { plans, answer } = await omo();
+    // When one item finishes and the next starts.
+    answer("Overall: 1/2 done\n  Build:\n    - [X] Read\n    - [ ] Fix (in progress)");
+    plans.poll();
+    // Then progress and step times follow the new answer.
+    expect(plans.summaryOf("omo1")).toEqual({ done: 1, total: 2, current: "Fix" });
+    expect(plans.planOf(pane("omo1", "omo"))).toMatchObject([
+      { label: "Read", status: "completed", started_at: at(1), ended_at: at(2) },
+      { label: "Fix", status: "in_progress", started_at: at(2), ended_at: null },
+    ]);
+  });
+
+  it("retains the completed OmO plan when every task is done", async () => {
+    // Given an initial native list.
+    const { plans, answer } = await omo();
+    // When the full answer marks both tasks done.
+    answer("Overall: 2/2 done\n  Build:\n    - [X] Read\n    - [X] Fix");
+    plans.poll();
+    // Then the sidebar retains a completed count.
+    expect(plans.summaryOf("omo1")).toEqual({ done: 2, total: 2, current: null });
+  });
+
+  it.each(["Todo list is empty.", "Todo list cleared."])("clears OmO progress when the answer says %s", async (empty) => {
+    // Given an existing plan.
+    const { plans, answer } = await omo();
+    // When the native list is cleared.
+    answer(empty);
+    plans.poll();
+    // Then neither surface keeps stale progress.
+    expect(plans.summaryOf("omo1")).toBeNull();
+    expect(plans.planOf(pane("omo1", "omo"))).toBeNull();
+  });
+
+  it.each([
+    "Overall: 1/2 done\n  Build:\n    - [X] Read",
+    "  Build:\n    - [X] Read\n… trimmed",
+  ])("ignores a truncated OmO answer: %s", async (truncated) => {
+    // Given an existing complete plan.
+    const { plans, answer } = await omo();
+    // When a cut-short answer is appended.
+    answer(truncated);
+    plans.poll();
+    // Then its incomplete contents never replace the plan.
+    expect(plans.summaryOf("omo1")).toEqual({ done: 0, total: 2, current: "Read" });
+  });
+
+  it("excludes dropped OmO work while keeping blocked work pending", async () => {
+    // Given an existing plan.
+    const { plans, answer } = await omo();
+    // When one task is dropped and one is blocked.
+    answer("Overall: 0/2 done\n  Build:\n    - [ ] Read (dropped)\n    - [ ] Fix (blocked: waiting)");
+    plans.poll();
+    // Then abandoned work does not inflate completion, and blocked work is not done.
+    expect(plans.summaryOf("omo1")).toEqual({ done: 0, total: 1, current: null });
+    expect(plans.planOf(pane("omo1", "omo"))?.map((step) => step.status)).toEqual(["pending"]);
+  });
+
+  it("ignores quoted OmO todos outside a todo tool result", async () => {
+    // Given an existing plan.
+    const { plans, answer, f } = await omo();
+    // When prose, an assistant call and another tool quote a different list.
+    const text = "  Fake:\n    - [X] Wrong";
+    f.add({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "never-answered", name: "todo", arguments: { op: "done" } }, { type: "text", text }] } });
+    answer(text, "read");
+    plans.poll();
+    // Then the answered todo alone remains authoritative.
+    expect(plans.summaryOf("omo1")).toEqual({ done: 0, total: 2, current: "Read" });
+  });
+
+  it.each(["replaced", "unresolved"])("follows an OmO binding when it becomes %s", async (binding) => {
+    // Given a tracked pane with an unchanged provider session id.
+    const old = file("old.jsonl"), next = file("next.jsonl");
+    const result = (label: string) => ({ type: "message", message: { role: "toolResult", toolName: "todo", content: [{ type: "text", text: `  Work:\n    - [ ] ${label}` }] } });
+    old.add(result("Old work"));
+    next.add(result("New work"));
+    let path: string | null = old.path;
+    const plans = new SessionPlans({ claudePath: () => null, codexPath: async () => null, omoPath: () => path, onChange: () => {} });
+    await plans.refresh([pane("omo1", "omo")]);
+    plans.poll();
+    // When discovery replaces or loses the native binding.
+    path = binding === "replaced" ? next.path : null;
+    await plans.refresh([pane("omo1", "omo")]);
+    plans.poll();
+    // Then the old session is never returned.
+    expect(plans.planOf(pane("omo1", "omo"))?.map((step) => step.label) ?? null).toEqual(binding === "replaced" ? ["New work"] : null);
+  });
+
   it("keeps a remote PC's plan as its frames say", () => {
     const frame = (plan?: PlanSummary | null) => ({ type: "pane-status" as const, pane_id: "p1", agent_status: "working" as const, ...(plan === undefined ? {} : { plan }) });
     const planned = paneAfterStatus({ ...pane("p1", "claude"), background_tasks: 1 }, frame({ done: 1, total: 2, current: "Two" }));
@@ -235,6 +344,32 @@ describe("SessionPlans", () => {
     expect(plans.planOf(pane("p1", "claude"))?.map((step) => step.label)).toEqual(["One"]);
     plans.poll();
     expect(plans.planOf(pane("p1", "claude"))?.map((step) => step.label)).toEqual(["One", "Two"]);
+  });
+
+  it("does not expose a Claude provider child's plan for a managed GJC pane", async () => {
+    // Given a Claude child transcript and the manager identity from verified status
+    const transcript = claude();
+    transcript.create("Provider child plan");
+    const child = pane("p1", "claude", "provider-child");
+    let claudeLookups = 0;
+    const plans = new SessionPlans({
+      claudePath: () => { claudeLookups += 1; return transcript.path; },
+      codexPath: async () => null,
+      onChange: () => {},
+    });
+    await plans.ensure(child, true);
+    plans.poll();
+    expect(plans.planOf(child)?.map((step) => step.label)).toEqual(["Provider child plan"]);
+
+    const managedGjc: HerdrPane = {
+      ...child,
+      managed_session: { id: "managed-nonce", harness: "gjc", generation: 1, state: "ready", reason: null, session_id: "manager-session" },
+    };
+    // When the managed GJC pane asks for its plan
+    await plans.ensure(managedGjc, true);
+    // Then the provider child's plan is hidden and no second Claude lookup occurs
+    expect(plans.planOf(managedGjc)).toBeNull();
+    expect(claudeLookups).toBe(1);
   });
 
   it("tells a plan only for the pane as herdr has it now, in the session its transcript was found for", async () => {

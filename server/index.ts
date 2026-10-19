@@ -14,7 +14,7 @@ import { cameThroughProxy, decideAccess, isLoopbackAddress, isLoopbackBind, isSe
 import { DeviceStore, handleDeviceRequest, type DeviceMatch } from "./devices.ts";
 import { handlePreferencesRequest, PreferenceStore } from "./preferences.ts";
 import { remoteAccess, TailnetIdentitySource } from "./tailscale.ts";
-import { badRequest, errorResponse, jsonResponse, readJsonObject } from "./http.ts";
+import { badRequest, errorResponse, isJsonObject, jsonResponse, readJsonObject } from "./http.ts";
 import { requestOrigin, serveStatic } from "./static.ts";
 import { compressResponse } from "./compress.ts";
 import { claudePaneSession } from "./conversation.ts";
@@ -25,7 +25,7 @@ import { SHELL_AGENTS, shellAgentExecutable } from "./shell-agent.ts";
 import { claudeSessionTempDir } from "./claude-store.ts";
 import { fileResponse, findFile, crossSiteFileRead, forgetPageMedia, pageMediaResponse, pageMediaSource, PAGE_MEDIA_PATH } from "./file-view.ts";
 import { findProjectFavicon } from "./project-favicon.ts";
-import { ResidentStore, handleResidentsRequest } from "./residents.ts";
+import { handleResidentsRequest } from "./residents.ts";
 import {
   agentManifests,
   HerdrError,
@@ -93,7 +93,6 @@ export const SUBMIT_DEADLINE_MS = 45_000;
 const DRAFT_CLEAR_WAIT_MS = 1_500;
 const DRAFT_CLEAR_POLL_MS = 50;
 
-
 const AGENT_LABELS: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex",
@@ -142,8 +141,6 @@ export function createServer(
     token?: string;
     /** where VAPID keys and push subscriptions persist; tests pass a temp dir */
     stateDir?: string;
-    /** Ownership root for the verified Manager pin; isolated fixtures pass their own directory. */
-    protectedManagerFolder?: string;
     /** the PC's own Tailscale login, for the identity check; tests set it, otherwise `tailscale status` says */
     tailscaleOwner?: string | null;
     /** the operator declares `tailscale serve` as this install's only ingress; HERDR_WEB_TAILSCALE_SERVE_ONLY=1 says the same */
@@ -159,6 +156,8 @@ export function createServer(
     devinDbPath?: string;
     /** Native Hermes store; pane process HERMES_HOME wins when this is unset. Tests use an isolated store. */
     hermesHome?: string;
+    /** Ownership root for the verified Manager pin; isolated fixtures pass their own directory. */
+    protectedManagerFolder?: string;
     updates?: UpdateService;
     /** updates herdr itself (server/herdr-update.ts); unset, the app offers no herdr update. Tests pass one that runs a stand-in herdr. */
     herdrUpdate?: HerdrUpdater;
@@ -232,8 +231,7 @@ export function createServer(
   const serveOnly = options.tailscaleServeOnly ?? process.env["HERDR_WEB_TAILSCALE_SERVE_ONLY"] === "1";
 
   const core = createCore({ options, devices, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
-  const { sidecar, serialize, push, logPushError, omo, claudeAgents, plans, attention, clientSnapshot, machines, broadcastAll, collector } = core;
-  const residents = new ResidentStore(join(options.stateDir ?? defaultStateDir(), "residents.json"), { snapshot: sessionSnapshot, managerFolder: options.protectedManagerFolder });
+  const { sidecar, serialize, push, logPushError, omo, claudeAgents, plans, clientSnapshot, machines, residents, markPaneSeen, broadcastAll, collector } = core;
   // started after createCore's Node probe (server/pty/sidecar.ts), which can hold the thread up to 3 s: that wait
   // would count against the read's own 2.5 s limit, and a read cut short leaves the owner unknown for 5 minutes
   identityOf(false, null);
@@ -264,7 +262,7 @@ export function createServer(
       const url = new URL(request.url);
       let { pathname } = url;
       const bridgeAuthorized = isAuthenticated(request, bridgeToken);
-      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === "/api/agents" || pathname === "/api/agent/rename" || pathname === "/api/integrations" || pathname === "/api/plugins/actions" || pathname === "/api/plugin/action" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname === "/api/layout/ratio" || pathname.startsWith("/api/fs/") || pathname === "/ws";
+      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === "/api/residents" || pathname === "/api/agents" || pathname === "/api/agent/rename" || pathname === "/api/integrations" || pathname === "/api/plugins/actions" || pathname === "/api/plugin/action" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname === "/api/layout/ratio" || pathname.startsWith("/api/fs/") || pathname === "/ws";
       const ip = bunServer.requestIP(request);
       const loopback = ip !== null && isLoopbackAddress(ip.address);
       const forwarded = cameThroughProxy(request.headers);
@@ -342,7 +340,7 @@ export function createServer(
         if (pathname.startsWith("/api/machines/local/")) {
           if (!sameOrigin(request) || (request.method !== "GET" && request.headers.get("x-herdr-machine") !== "1")) return jsonResponse({ error: { code: "invalid_origin", message: "Use PC controls from this app" } }, 403);
           pathname = pathname.replace("/api/machines/local/", "/api/");
-          if (!/^\/api\/(session|agents|integrations|pane\/|workspace\/|worktree\/|tab\/|layout\/ratio$|agent\/rename$|plugins\/actions$|plugin\/action$)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
+          if (!/^\/api\/(session|residents$|agents|integrations|pane\/|workspace\/|worktree\/|tab\/|layout\/ratio$|agent\/rename$|plugins\/actions$|plugin\/action$)/.test(pathname)) return badRequest("invalid_route", "Unknown PC endpoint");
           url.pathname = pathname;
         } else {
           // a worktree made with an agent waits on git and then agent.start, up to 150 s on the PC
@@ -472,12 +470,12 @@ export function createServer(
         if (!sameOrigin(request) || request.headers.get("x-herdr-machine") !== "1") return jsonResponse({ error: { code: "invalid_origin", message: "Use pane controls from this app" } }, 403);
         let payload: unknown;
         try { payload = await request.json(); } catch { return badRequest("invalid_json", "request body must be JSON"); }
-        if (typeof payload !== "object" || payload === null || Array.isArray(payload) || typeof (payload as { pane_id?: unknown }).pane_id !== "string" || !(payload as { pane_id: string }).pane_id.trim()) return badRequest("missing_pane_id", "pane_id is required");
+        if (!isJsonObject(payload)) return badRequest("invalid_body", "request body must be a JSON object");
+        if (typeof payload["pane_id"] !== "string" || payload["pane_id"].trim() === "") return badRequest("missing_pane_id", "pane_id is required");
         try {
-          const paneId = (payload as { pane_id: string }).pane_id;
+          const paneId = payload["pane_id"];
           await paneGet(paneId);
-          const state = attention.markSeen(paneId);
-          if (state) broadcastAll({ type: "pane-attention", pane_id: paneId, attention: state });
+          const state = markPaneSeen(paneId);
           return jsonResponse({ attention: state });
         } catch (error) { return errorResponse(error); }
       }

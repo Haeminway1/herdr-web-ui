@@ -6,9 +6,10 @@ import { join } from "node:path";
 import { herdrRpc, herdrSocketPath, sessionSnapshot, workspaceClose, workspaceCreate, paneRead } from "./herdr/client.ts";
 import { ConversationUnavailable, forgetTranscriptState, gjcTranscriptPath, paneConversation } from "./conversation.ts";
 import { isGjcProcess } from "./gjc-runtime.ts";
-import { GjcSdkLookupError, gjcSdkCurrentSessionWithRunner, gjcSdkTranscriptWithRunner } from "./gjc-sdk.ts";
+import { gjcSdkCurrentSessionWithRunner, gjcSdkTranscriptWithRunner } from "./gjc-sdk.ts";
 import { startShellAgent } from "./shell-agent.ts";
 import * as sdkGeneration from "./gjc-sdk-generation.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 
 const home = realpathSync(mkdtempSync(join(tmpdir(), "herdr-gjc-binding-")));
 const agentDir = join(home, ".gjc", "agent");
@@ -277,7 +278,8 @@ it("keeps subprocess-resolved SDK pane bindings across unrelated signed heartbea
     expect(await gjcTranscriptPath(firstPane, home, home)).toBe(firstPath);
     expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(2);
     expect(await gjcTranscriptPath(secondPane, home, home)).toBe(secondPath);
-    expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(4);
+    // The second pane shares discovery, but still resolves its own exact session.
+    expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(3);
 
     let indexSeq = 2;
     for (let wave = 1; wave <= 3; wave += 1) {
@@ -292,7 +294,7 @@ it("keeps subprocess-resolved SDK pane bindings across unrelated signed heartbea
       ));
       expect(await gjcTranscriptPath(firstPane, home, home)).toBe(firstPath);
       expect(await gjcTranscriptPath(secondPane, home, home)).toBe(secondPath);
-      expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(4);
+      expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(3);
     }
 
     writeRegistry([
@@ -308,7 +310,7 @@ it("keeps subprocess-resolved SDK pane bindings across unrelated signed heartbea
       timestamp + registeredSeq,
     ));
     expect(await gjcTranscriptPath(firstPane, home, home)).toBe(freshPath);
-    expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(6);
+    expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(5);
   } finally {
     forgetTranscriptState();
     rmSync(indexDir, { recursive: true, force: true });
@@ -431,7 +433,12 @@ async function expectSdkFailure(scenario: string): Promise<void> {
     else if (scenario === "stale") writeRegistry([sdkRow(pid, home, `failure-${scenario}-a`, { live: false })], paths);
     else writeRegistry([target]);
 
-    await expect(paneConversation(id)).rejects.toBeInstanceOf(scenario === "unavailable" ? GjcSdkLookupError : ConversationUnavailable);
+    if (scenario === "unavailable") {
+      await expect(paneConversation(id)).rejects.toBeInstanceOf(GjcSdkLookupError);
+      await expect(paneConversation(id)).rejects.toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+    } else {
+      await expect(paneConversation(id)).rejects.toBeInstanceOf(ConversationUnavailable);
+    }
   });
 }
 
@@ -446,15 +453,16 @@ it("binds live SDK identity without savedSession while refusing a missing transc
     result: { indexSeq: 7, sessions: [row], savedSession: null, continuationCursor: null },
   });
   const root = async () => null;
-  const current = await gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, runner, root);
+  const generationCurrent = async () => true;
+  const current = await gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, runner, root, undefined, generationCurrent);
   expect(current).toMatchObject({ sessionId: "identity-without-file", pid: 321, endpointGeneration: 1 });
-  expect(await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, root)).toBeNull();
+  expect(await gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner, root, undefined, generationCurrent)).toBeNull();
 });
 
 it.each(["ENOENT", "EACCES"])("returns sanitized typed unavailable for SDK execution %s", async (code) => {
   const runner = async () => { throw Object.assign(new Error("secret user path"), { code }); };
   await expect(gjcSdkCurrentSessionWithRunner([321], home, agentDir, runner, async () => null))
-    .rejects.toMatchObject({ reason: "unavailable", message: "GJC SDK is unavailable" });
+    .rejects.toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
 });
 
 it("pane routing honors an actual named non-GJC agent even when a GJC process is present", async () => withSdkFixture(async () => {

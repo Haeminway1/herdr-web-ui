@@ -7,6 +7,7 @@ export interface PendingIdentity {
   processPid?: number | null;
   processBirth?: number | null;
   omoSession?: string | null;
+  claudeSession?: string | null;
 }
 
 /** An identity learned after enqueue is not a replacement; only mutually known parts disagree. */
@@ -14,6 +15,7 @@ export function samePendingIdentity(before: PendingIdentity, after: PendingIdent
   const changed = <T>(a: T | null | undefined, b: T | null | undefined) => a != null && b != null && a !== b;
   return before.agent === after.agent && before.terminalId === after.terminalId
     && !changed(before.session, after.session) && !changed(before.omoSession, after.omoSession)
+    && !changed(before.claudeSession, after.claudeSession)
     && !changed(before.processPid, after.processPid)
     // macOS derives birth from whole elapsed seconds; reads of one PID drift by up to a second.
     && (before.processBirth == null || after.processBirth == null

@@ -11,7 +11,7 @@ import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jso
 import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, toolOutput } from "./conversation.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { DevinHistoryChanged } from "./devin.ts";
-import { GjcSdkLookupError } from "./gjc-sdk.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { agentRename, HerdrError, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
 import { paneContext } from "./pane-context.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
@@ -233,8 +233,9 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         if (typeof payload.text !== "string") return badRequest("missing_text", "text is required");
         await paneSendText(payload.pane_id, payload.text);
       } else {
-        if (!Array.isArray(payload.keys) || !payload.keys.every((key) => typeof key === "string")) return badRequest("missing_keys", "keys must be an array");
-        await paneSendKeys(payload.pane_id, payload.keys);
+        const keys = payload.keys;
+        if (!Array.isArray(keys) || !keys.every((key: unknown): key is string => typeof key === "string")) return badRequest("missing_keys", "keys must be an array");
+        await paneSendKeys(payload.pane_id, keys);
       }
       return jsonResponse({ ok: true });
     } catch (error) {
@@ -264,10 +265,11 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     const payload = await readJsonObject<{ tab_id?: unknown; path?: unknown; ratio?: unknown }>(request);
     if (payload instanceof Response) return payload;
     if (typeof payload.tab_id !== "string" || !payload.tab_id.trim()) return badRequest("missing_tab_id", "tab_id is required");
-    if (!Array.isArray(payload.path) || !payload.path.every((step) => typeof step === "boolean")) return badRequest("invalid_path", "path must be an array of booleans");
+    const path = payload.path;
+    if (!Array.isArray(path) || !path.every((step: unknown): step is boolean => typeof step === "boolean")) return badRequest("invalid_path", "path must be an array of booleans");
     if (typeof payload.ratio !== "number" || !Number.isFinite(payload.ratio) || payload.ratio < 0.1 || payload.ratio > 0.9) return badRequest("invalid_ratio", "ratio must be a number from 0.1 to 0.9");
     try {
-      await layoutSetSplitRatio(payload.tab_id, payload.path, payload.ratio);
+      await layoutSetSplitRatio(payload.tab_id, path, payload.ratio);
       return jsonResponse({ ok: true });
     } catch (error) { return errorResponse(error); }
   }

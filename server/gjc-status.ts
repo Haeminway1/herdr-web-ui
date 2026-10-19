@@ -135,7 +135,13 @@ export async function gjcPanes(panes: HerdrPane[], deps: GjcDiscovery = {}): Pro
       ? pane
       : { ...pane, tokens: { ...tokens, hm_managed_session: identity.id, hm_managed_generation: String(identity.generation) } };
   };
-  const managed = await Promise.all(panes.filter(declared).map(async (pane) => ({ pane, resolution: await managedSession(lookupPane(pane)) })));
+  const managed = await Promise.all(panes.filter(declared).map(async (pane) => {
+    try {
+      return { pane, resolution: await managedSession(lookupPane(pane)) };
+    } catch {
+      return { pane, resolution: null };
+    }
+  }));
   for (const { pane, resolution } of managed) {
     if (resolution?.identity.state === "ready" && resolution.identity.harness === "gjc" && resolution.sessionFile !== null) {
       found.set(pane.pane_id, { path: resolution.sessionFile, startedAt: null });
