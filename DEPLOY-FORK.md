@@ -1,18 +1,24 @@
 # Fork deployment
 
-The fork keeps its separate plugin identity/config/port 7320, Report colors, the existing classic sidebar with residents, grouping, verified Manager pin and attention inbox, and exact managed-session binding. Preserve upstream features unless they conflict with these explicitly retained behaviors; never remove the classic sidebar or a kept feature to resolve a merge. Stop a conflicting candidate and report the concrete conflict instead.
+The fork keeps its separate plugin identity/config/port 7320, Report colors, classic sidebar with residents, grouping, verified Manager pin and attention inbox, and exact managed-session binding. Preserve upstream features unless they conflict with these behaviors; never remove the classic sidebar or a kept feature to resolve a merge.
 
 ## Automatic sync
 
-`scripts/fork-sync.sh` runs only from a clean `deploy/haemin` checkout. It fast-forwards from `origin/deploy/haemin`, fetches `upstream/main` and compares the actual commit. Each target has a separate candidate worktree and explicit started/failed/validated/contained/released state. Preserve existing merge state and edits; retries reuse the same branch/worktree. A state file or worker exit alone is not validation: verify target ancestry, clean candidate and actual tests.
+`scripts/fork-sync.sh` is a background-only systemd oneshot. It creates no Herdr workspace, pane, terminal or interactive session. The invoked launcher artifact supplies the prompt and policy; `FORK_SYNC_REPO` may point it at an absolute registered `deploy/haemin` worktree. The selected checkout must be clean, then fast-forward from `origin/deploy/haemin` before fetching `upstream/main`.
 
-Automatic sync is authorized only to prepare and validate candidates. Never tag, push, publish, install, deploy or restart services from an automatic sync. Do not change the existing timer/service. The prompt and inventory cannot override the user's retained classic UI. Local candidate validation is not deployment approval.
+The global `sync.lock` is acquired before fetch and held through the foreground `gjc -p --mode json --no-pty` worker, so later timer polls coalesce to the latest upstream commit. The worker uses model, provider and effort resolved from the `implement` route, keeps normal tools and subscription credentials, and runs in the deterministic candidate worktree. Each attempt has a private prompt and log under `.local/state/herdr-web-ui-fork-sync` (or `$XDG_STATE_HOME`). Per-target locks and failed-attempt backoff remain in effect.
+
+Each upstream target has a separate candidate worktree and explicit started/failed/validated/contained/released state. Preserve existing merge state, index and edits; retries reuse the same branch/worktree. Validation requires the on-disk JSON report from `bun run check full`, all seven full-gate steps successful, its tested candidate SHA, actual target ancestry and a clean tree. The status stores the absolute report path; worker exit or a status marker alone is not validation. A validated candidate still awaits containment in `deploy/haemin`.
+
+Automatic sync is authorized only to prepare and validate candidates. Never tag, push, publish, install, deploy or restart services from an automatic sync. Keep automatic installation disabled. Local candidate validation is not deployment approval.
+
+The sync change leaves the existing timer and service configuration untouched.
 
 ## Release gate
 
-Keep automatic installation disabled during stabilization, including after an explicitly approved manual deployment. A hidden browser is not notebook Aside acceptance. The user must confirm the separate fake-data preview in the actual notebook Aside, or explicitly instruct the supervising session to deploy that candidate, before production admission.
+The user must confirm the separate fake-data preview in the actual notebook Aside, or explicitly instruct the supervising session to deploy that candidate, before production admission. A hidden browser is not notebook Aside acceptance.
 
-Use `scripts/fork-release.sh X.Y.Z` only from a clean `deploy/haemin` worktree. First include the latest `origin/deploy/haemin` in the approved candidate's history, deliberately preserving the previewed product source, then fast-forward the deploy worktree. Package and plugin versions must match and exceed published tags. Never reuse withdrawn 0.4.1109.
+Use `scripts/fork-release.sh X.Y.Z` only from a clean `deploy/haemin` worktree after approval. First include the latest `origin/deploy/haemin` in the approved candidate's history while deliberately preserving the previewed product source, then fast-forward the deploy worktree. Package and plugin versions must match and exceed published tags. Never reuse withdrawn 0.4.1109.
 
 The release script must pass locked install, Fast checks, Integration and browser checks, plus the exact commit's hosted Fast checks, Integration and browser, and Native Windows install checks. No failed tests, upstream exceptions, missing gates or unsafe fast-forwards may be bypassed. Only the release script creates and atomically pushes the deployment branch/tag. Never hand-tag, move an existing tag or force-push.
 

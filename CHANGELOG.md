@@ -7,6 +7,32 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.1111] - 2026-10-20
+
+### Added
+- Agent rows show what herdr plugins report on a pane, such as the Quota plugin's usage left or a
+  task's progress, in a small dim line under the row. They follow the `$name` tokens of your herdr
+  `[ui.sidebar.agents]` rows (every token where none are set), change live, and say a long value
+  whole in the tooltip and in a phone's ⋯ sheet. A line a plugin reports for the agent now updates
+  as soon as herdr says it.
+  ([#1341](https://github.com/devswha/herdr-web-ui/pull/1341))
+
+### Fixed
+- Restore automatic fork sync with released-policy fast-forwards and read-only dry runs.
+- Explain pending or blocked managed-session identity inside the chat instead of an empty timeline.
+- Recheck native GJC generations independently of cached listings, retain chat during SDK outages, and keep managed identity independent of saved transcript indexing.
+- Treat broker, process-info, Git and transcript read failures as unavailable instead of a missing session. Keep managed panes pending without authorizing provider children, and distinguish a proven non-worktree directory from Git permission or ownership failures.
+- GJC chat and status reuse their verified session binding when other sessions write heartbeats,
+  instead of restarting the SDK lookup for every pane. Session changes still require SDK validation.
+  ([#1343](https://github.com/devswha/herdr-web-ui/pull/1343))
+- Read managed Claude and Codex transcripts from a user-owned 0775 native store instead of blocking them.
+- Loading the page no longer sends about 33 requests per workspace folder to find its project icon:
+  each folder is asked once (`GET /api/fs/favicon`), and a folder without an icon is an answer, not
+  a 404. A reverse proxy with a rate limit no longer answers 429 to the burst, and the browser
+  console no longer fills with red 404 lines on every load. A 429 is no longer remembered as "no
+  icon" either: the folder is asked again when its row next appears.
+  ([#1339](https://github.com/devswha/herdr-web-ui/pull/1339))
+
 ## [0.4.1110] - 2026-10-18
 
 ### Fixed
@@ -4768,7 +4794,8 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1110...HEAD
+[Unreleased]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1111...HEAD
+[0.4.1111]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1110...v0.4.1111
 [0.4.1110]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1108...v0.4.1110
 [0.4.12]: https://github.com/devswha/herdr-web-ui/compare/v0.4.11...v0.4.12
 [0.4.11]: https://github.com/devswha/herdr-web-ui/compare/v0.4.10...v0.4.11

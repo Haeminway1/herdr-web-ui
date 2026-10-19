@@ -1,4 +1,10 @@
 {
+  "0.4.1111": {
+    "en": { "improved": ["Keep the classic sidebar while adopting the latest upstream changes.", "Run upstream sync as one background job without opening terminal windows."], "fixed": ["Keep cached GJC bindings generation-safe and preserve chat through lookup outages.", "Resolve live managed identities without requiring saved SDK session metadata."] },
+    "ko": { "improved": ["기존 사이드바를 유지하면서 최신 원본의 개선 사항을 반영했습니다.", "새 터미널 창 없이 백그라운드 작업 하나로 원본을 동기화합니다."], "fixed": ["지난 GJC 세션을 차단하고 SDK 조회가 끊겨도 대화를 유지합니다.", "SDK에 저장된 대화 정보가 없어도 실행 중인 관리 세션을 올바르게 인식합니다."] },
+    "ja": { "improved": ["従来のサイドバーを維持しながら、最新の上流の改善を取り込みました。", "新しいターミナルを開かず、同期を一つのバックグラウンド処理で実行します。"], "fixed": ["古い GJC セッションを拒否し、取得障害中も会話を保持します。", "SDK の保存情報がなくても、実行中の管理セッションを正しく識別します。"] },
+    "zh": { "improved": ["保留原有侧栏，同时整合最新上游改进。", "以单个后台任务同步上游，不再打开新的终端窗口。"], "fixed": ["拒绝过期的 GJC 会话，并在查询故障期间保留对话。", "即使 SDK 没有已保存的会话信息，也能正确识别运行中的托管会话。"] }
+  },
   "0.4.1110": {
     "en": { "fixed": ["Restore the existing classic sidebar, residents, Manager pin and attention inbox.", "Fix wheel scrolling without changing the sidebar design.", "Keep other panes available when a managed GJC lookup fails.", "Fix the audio upload filename; automatic sync prepares candidates only."] },
     "ko": { "fixed": ["기존 사이드바, 상주 에이전트, Manager 고정과 주의 목록을 복구했습니다.", "사이드바 디자인을 바꾸지 않고 휠 스크롤을 수정했습니다.", "관리 GJC 조회가 실패해도 다른 창 목록은 유지합니다.", "음성 업로드 파일명을 수정하고 자동 동기화는 후보 작성까지만 허용합니다."] },
