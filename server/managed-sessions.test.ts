@@ -156,6 +156,31 @@ it.each(["timeout", "unavailable"] as const)("retains a typed %s broker failure 
   expect(result?.lookupError).toBe(failure);
 });
 
+for (const code of ["ENOENT", "EACCES"]) it.skipIf(process.platform !== "linux")(`keeps production process identity ${code} failures typed and pending`, async () => {
+  const stat = fs.statSync;
+  const denied = spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+    if (path === "/proc/42") throw Object.assign(new Error("private process evidence"), { code });
+    return Reflect.apply(stat, fs, [path, ...args]);
+  }) as typeof fs.statSync);
+  const productionDeps = { ...deps, processIdentity: undefined };
+  pane.agent_session = { agent: "codex", kind: "id", source: "provider-child", value: "stale-provider-session" };
+  try {
+    expect(await resolveManagedSession(pane, namespace, productionDeps)).toMatchObject({
+      identity: { state: "identity_pending", session_id: null }, sessionFile: null,
+      lookupError: { reason: "unavailable", message: "GJC SDK lookup failed" },
+    });
+    const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+    const projected = await projectPanes(snapshot, namespace, productionDeps);
+    expect(projected.panes[0]).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "identity_pending" } });
+    expect(projected.agents[0]?.agent_session).toBeNull();
+    expect(JSON.stringify(projected)).not.toContain("private process evidence");
+    await expect(readConversation(pane, undefined, undefined, productionDeps)).rejects.toMatchObject({
+      name: "GjcSdkLookupError", reason: "unavailable", message: "GJC SDK lookup failed",
+    });
+  } finally { denied.mockRestore(); }
+  expect((await resolve()).identity.state).toBe("ready");
+});
+
 it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and isolates the whole roster", async reason => {
   const failedNonce = "f".repeat(32);
   const failedPane: HerdrPane = {

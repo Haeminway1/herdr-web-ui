@@ -1267,6 +1267,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
         // This callback runs before that paint: put the view at the end here, then let the list
         // settle its own scroll state.
         node.scrollTop = node.scrollHeight;
+        // Shrinking the draft clamps scrollTop upward. A later scroll event can arrive after
+        // the next draft growth; compare it with this layout, not the old taller draft's end.
+        lastScrollTop.current = node.scrollTop;
         if (timeline.current) timeline.current.scrollToEnd({ animated: false });
       }
       measureEndRef.current();

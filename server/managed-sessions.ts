@@ -23,7 +23,6 @@ function processIdentity(pid: number): ProcessIdentity | null {
   try {
     if (!owned(statSync(`/proc/${pid}`))) return null;
   } catch (error) {
-    if (typeof error === "object" && error !== null && Reflect.get(error, "code") === "ENOENT") return null;
     throw new GjcSdkLookupError("unavailable");
   }
   try {
