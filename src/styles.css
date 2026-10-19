@@ -89,7 +89,7 @@
   --status-blocked-tint: rgba(168, 35, 35, 0.12);
   --status-done-tint: rgba(47, 99, 23, 0.12);
   --danger-tint: rgba(168, 35, 35, 0.1);
-  --danger-text: var(--status-blocked);
+  --danger-text: #951c1c;
   --line-number: var(--text-dim);
   --syntax-function: var(--accent);
   --bubble-border: var(--border);

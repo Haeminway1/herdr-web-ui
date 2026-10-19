@@ -469,7 +469,43 @@ it("retires a cached transcript when native generation retires without authorizi
     live = false;
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
     expect(lookups).toBe(2);
-    expect(generationChecks).toBe(4);
+    expect(generationChecks).toBe(6);
+  } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it.each(["fresh", "cached"])("rejects a %s binding when generation changes during final process info", async (route) => {
+  forgetTranscriptState();
+  const home = tempDir("gjc-final-generation-race-");
+  try {
+    const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+    const project = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+    mkdirSync(cwd); mkdirSync(project, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+    writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId: "old", pid: 200 }));
+    const path = join(project, "main.jsonl");
+    writeFileSync(path, JSON.stringify({ type: "session", id: "old", cwd }) + "\n");
+    let live = true, retireOnFinal = false, reads = 0, lookups = 0;
+    const options = {
+      platform: "linux", processBirth: () => 1000,
+      processInfo: async () => {
+        reads += 1;
+        if (retireOnFinal && reads % 2 === 0) live = false;
+        return { process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } };
+      },
+      generationCurrent: async () => live,
+      sdkTranscript: async () => { lookups += 1; return live ? { sessionId: "old", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["old"] } : null; },
+    };
+    if (route === "cached") {
+      expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+      expect(lookups).toBe(1);
+    }
+    reads = 0;
+    retireOnFinal = true;
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
+    expect(reads).toBe(2);
+    expect(lookups).toBe(1);
+    retireOnFinal = false;
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
+    expect(lookups).toBe(2);
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -652,7 +688,7 @@ it.each(["timeout", "unavailable"] as const)("propagates cached generation %s an
     unavailable = false;
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
     expect(lookups).toBe(2);
-    expect(observations).toBe(3);
+    expect(observations).toBe(5);
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -670,21 +706,22 @@ it.each(["fresh", "cached"] as const)("rejects a %s transcript when the pane cha
       writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
       writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId, pid: 200 }));
       const binding = { path, sessionId, pid: 200, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] };
-      let pid = 200, observations = 0, lookups = 0, reads = 0;
+      let pid = 200, lookups = 0, reads = 0;
+      let holdGeneration = mode === "fresh";
       const options = {
         platform: "linux", now: () => 0,
         processInfo: async () => { reads += 1; return { process_info: { foreground_processes: pid === 0 ? [] : [{ pid, argv: ["gjc"] }] } }; },
         processBirth: () => 1000,
         sdkTranscript: async () => { lookups += 1; return binding; },
         generationCurrent: async () => {
-          observations += 1;
-          if (mode === "fresh" || observations === 2) { entered.resolve(); await gate.promise; }
+          if (holdGeneration) { entered.resolve(); await gate.promise; }
           return true;
         },
       };
       if (mode === "cached") {
         expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
         expect(lookups).toBe(1);
+        holdGeneration = true;
       }
       const pending = gjcTranscriptForPane("pane", cwd, home, options);
       await entered.promise;

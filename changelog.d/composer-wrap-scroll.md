@@ -3,6 +3,8 @@
   collapsing the live input, preserving transcript spacing and the paragraph being read (#1337).
 - The measurement field shares the live input's Korean, Japanese and Chinese line-breaking rules,
   including Korean placeholder wrapping, so localized drafts keep their natural height.
+- Growing a draft after shrinking it keeps the transcript at the end instead of treating the
+  browser's clamped scroll position as the reader scrolling up.
 
 ### Maintenance
 - Composer geometry regressions freeze the demo conversation while keeping it idle, so turn
