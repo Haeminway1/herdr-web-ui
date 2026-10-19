@@ -122,10 +122,12 @@ describe("GJC live identity independent of saved-store indexing", () => {
 
   it.each(["ENOENT", "EACCES", "ETIMEDOUT"])("rejects %s without leaking CLI details or erasing a pending identity", async (code) => {
     const runner: GjcSdkCommandRunner = async () => { throw Object.assign(new Error("secret /home/user/private"), { code }); };
-    const failure = gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, runner);
-    await expect(failure).rejects.toBeInstanceOf(GjcSdkLookupError);
-    await expect(failure).rejects.toMatchObject({ reason: code === "ETIMEDOUT" ? "timeout" : "unavailable" });
-    await expect(failure).rejects.not.toThrow("secret");
+    for (const lookup of [gjcSdkCurrentSessionWithRunner, gjcSdkTranscriptWithRunner]) {
+      const failure = lookup([321], cwd, agentDir, runner);
+      await expect(failure).rejects.toBeInstanceOf(GjcSdkLookupError);
+      await expect(failure).rejects.toMatchObject({ reason: code === "ETIMEDOUT" ? "timeout" : "unavailable" });
+      await expect(failure).rejects.not.toThrow("secret");
+    }
   });
   it("checks generation for a current identity without a saved transcript", async () => {
     const fixture = fakeRunner([page([session()]), page([session()], { savedSession: null })]);

@@ -506,6 +506,41 @@ it("rejects a cached binding revoked without an index change", async () => {
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
+it.each(["timeout", "unavailable"] as const)("propagates cached generation %s and requires fresh authority after recovery", async (reason) => {
+  forgetTranscriptState();
+  const home = tempDir("gjc-sdk-generation-failure-");
+  try {
+    const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+    const store = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+    mkdirSync(cwd); mkdirSync(store, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+    const path = join(store, "session.jsonl"), sessionId = "session";
+    writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
+    writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId, pid: 200 }));
+    const binding = { path, sessionId, pid: 200, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] };
+    const failure = new GjcSdkLookupError(reason);
+    let unavailable = false, lookups = 0, observations = 0;
+    const options = {
+      platform: "linux", now: () => 0,
+      processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+      processBirth: () => 1000,
+      sdkTranscript: async () => { lookups += 1; return binding; },
+      generationCurrent: async () => {
+        observations += 1;
+        if (unavailable) throw failure;
+        return true;
+      },
+    };
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+    unavailable = true;
+    await expect(gjcTranscriptForPane("pane", cwd, home, options)).rejects.toBe(failure);
+    expect(lookups).toBe(1);
+    unavailable = false;
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+    expect(lookups).toBe(2);
+    expect(observations).toBe(3);
+  } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
 it.each(["fresh", "cached"] as const)("rejects a %s transcript when the pane changes while generation is awaited", async (mode) => {
   for (const change of ["exit", "switch"] as const) {
     forgetTranscriptState();
