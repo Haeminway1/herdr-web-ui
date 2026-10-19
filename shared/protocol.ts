@@ -1109,6 +1109,13 @@ export interface InteractivePromptStep {
   current: boolean;
 }
 
+export interface InteractivePromptAnswer {
+  question: string | null;
+  answer: string | null;
+  /** the note typed with the answer (omp) */
+  note?: string;
+}
+
 export interface InteractivePromptOption {
   label: string;
   description: string | null;

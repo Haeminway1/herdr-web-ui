@@ -46,6 +46,10 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   const [custom, setCustom] = useState(() => prompt.default_custom_text ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<UserError | null>(null);
+  // folded to its header, to read the transcript under it; the question still waits, so the card
+  // stays. A typed answer to confirm opens it, and the next prompt's card starts open
+  const [foldedByUser, setFoldedByUser] = useState(false);
+  const folded = foldedByUser && typedAnswer?.option_index === undefined;
   const cardRef = useRef<HTMLElement | null>(null);
   const confirmRef = useRef<HTMLDivElement | null>(null);
   // the control Enter or Space last went down on: the click that follows on it is that key's
@@ -141,7 +145,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   const planFile = prompt.plan_file;
 
   return (
-    <section className="prompt-card" ref={cardRef} role="region" aria-label={t("Agent is asking")}
+    <section className={`prompt-card${folded ? " is-folded" : ""}`} ref={cardRef} role="region" aria-label={t("Agent is asking")}
       onKeyDown={(event) => { down.current = null; keyed.current = event.key === "Enter" || event.key === " " ? event.target : null; }}
       onPointerDown={(event) => {
         keyed.current = null;
@@ -171,6 +175,10 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
             <FileText aria-hidden="true" />{t("View plan")}
           </button>
         )}
+        {/* a typed answer waiting for Confirm keeps the card open, so the fold has nothing to do then */}
+        <button type="button" className="prompt-card-fold" disabled={typedAnswer?.option_index !== undefined} aria-expanded={!folded} aria-label={t(folded ? "Expand question" : "Collapse question")} title={t(folded ? "Expand question" : "Collapse question")} onClick={() => setFoldedByUser(!folded)}>
+          {folded ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+        </button>
       </header>
       {/* a form of several questions (omo): each one, answered or not, and the one asked now */}
       {prompt.steps && (
@@ -218,6 +226,23 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         </p>
       )}
       {/* the reference text (a command, a plan, a diff) is the one part that gives way when the card is short */}
+      {/* a review's answers (Claude, omp): each question over what was picked for it, read as prose */}
+      {prompt.answers && (
+        <dl className="prompt-card-answers">
+          {prompt.answers.map((item, index) => {
+            const answer = item.answer === null ? null : labelOf(item.answer);
+            return (
+              <div key={index} className="prompt-card-answer">
+                {item.question !== null && <dt>{item.question}</dt>}
+                <dd className={answer === null ? "is-empty" : undefined}>
+                  {answer === null ? t("Not answered") : <>{answer.text}{answer.recommended && <> <span className="prompt-card-tag">{t("Recommended")}</span></>}</>}
+                </dd>
+                {item.note !== undefined && <dd className="prompt-card-answer-note">{t("Note: {note}", { note: item.note })}</dd>}
+              </div>
+            );
+          })}
+        </dl>
+      )}
       {prompt.body !== null && prompt.body.length > 0 && <pre className={`prompt-card-body${prompt.body.includes("\n") ? "" : " is-line"}`}>{prompt.body}</pre>}
       {hasChoices && (
         /* busy on the options alone, never on the card: a live region inside an aria-busy subtree is not
