@@ -41,6 +41,7 @@ type Harness = NonNullable<ManagedSessionIdentity["harness"]>;
 export interface ManagedSessionResolution {
   identity: ManagedSessionIdentity;
   sessionFile: string | null;
+  fileIdentity?: FileIdentityPin;
   /** Internal transient failure: roster stays pending, conversation reads must not claim absence. */
   lookupError?: GjcSdkLookupError;
 }
@@ -136,9 +137,11 @@ function bindingKey(record: Record<string, unknown> | null): string {
   return JSON.stringify(["nonce", "generation", "harness", "launcher_harness", "cwd", "pane_id", "workspace_id", "terminal_id", "desired_state", "state", "error", "session_id", "session_file", "session_dir", "child", "file_identity"].map(key => record?.[key]));
 }
 
-function header(path: string, harness: Harness): { id: unknown; cwd: unknown } | null {
+function header(path: string, harness: Harness, expected: FileIdentityPin): { id: unknown; cwd: unknown } | null {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
+    const info = fstatSync(fd);
+    if (!info.isFile() || info.dev !== expected.dev || info.ino !== expected.ino) return null;
     const limit = harness === "codex" ? 1024 * 1024 : 16384;
     let buffer = Buffer.alloc(16385);
     let offset = 0;
@@ -240,7 +243,7 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     if (!info.isFile() || !pinMatches) return blocked("blocked_session_replaced");
     const initialPermission = transcriptPermission(info, identity.harness, pinned !== null && pinMatches, storeInfo);
     if (!initialPermission) return blocked("blocked_session_replaced");
-    const meta = header(sessionFile, identity.harness);
+    const meta = header(sessionFile, identity.harness, info);
     if (!meta || meta.id !== sessionId || typeof meta.cwd !== "string" || !isAbsolute(meta.cwd) || realpathSync(meta.cwd) !== recordCwd) return blocked("blocked_session_header");
     if (identity.harness === "gjc") {
       const child = object(record.child);
@@ -276,11 +279,11 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       && (!privateStore(finalStoreInfo) || realpathSync(store) !== store))
       || !finalAncestorsSafe
       || realpathSync(sessionFile) !== sessionFile || after.dev !== info.dev || after.ino !== info.ino) return blocked("blocked_session_replaced");
-    const currentMeta = header(sessionFile, identity.harness);
+    const currentMeta = header(sessionFile, identity.harness, info);
     if (!currentMeta || currentMeta.id !== sessionId || typeof currentMeta.cwd !== "string" || !isAbsolute(currentMeta.cwd) || realpathSync(currentMeta.cwd) !== recordCwd) return blocked("blocked_session_header");
     identity.state = "ready";
     identity.session_id = sessionId;
-    return { identity, sessionFile };
+    return { identity, sessionFile, fileIdentity: { dev: info.dev, ino: info.ino } };
   } catch (error) {
     if (error instanceof GjcSdkLookupError || unavailableRead(error)) {
       return { ...pending("identity_pending"), lookupError: lookupExecutionError(error) };

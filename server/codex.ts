@@ -1,7 +1,7 @@
 /** Native Codex rollouts contain both display events and model context. Only
  * conversation records belong in chat; developer prompts and terminal chrome do not. */
 import { Database } from "bun:sqlite";
-import { closeSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
+import { constants, closeSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import nodePath, { isAbsolute, join, type PlatformPath } from "node:path";
@@ -12,6 +12,7 @@ import { codexImageParts } from "./codex-images.ts";
 import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
 import { agentGet, paneProcessInfo, paneRead, sessionSnapshot } from "./herdr/client.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -430,14 +431,14 @@ export async function paneCodexHome(paneId: string, configured?: string): Promis
 }
 
 /** The session_meta payload on a rollout's first line, or null when the file is not a rollout. */
-function rolloutHeader(path: string): RecordValue | null {
-  const fd = openSync(path, "r");
+function rolloutHeader(path: string, io?: CodexReadScope): RecordValue | null {
+  const fd = io ? io.fd(path) : openSync(path, "r");
   try {
-    const buffer = Buffer.alloc(256 * 1024);
+    const buffer = Buffer.alloc(io ? 1024 * 1024 : 256 * 1024);
     const length = readSync(fd, buffer, 0, buffer.length, 0);
     const header = record(JSON.parse(buffer.subarray(0, length).toString("utf8").split("\n")[0]!));
     return header.type === "session_meta" ? record(header.payload) : null;
-  } finally { closeSync(fd); }
+  } finally { if (!io) closeSync(fd); }
 }
 
 /**
@@ -542,14 +543,14 @@ export function codexRolloutPath(path: string, codexHome: string): string | null
 }
 
 /** Bytes [start, end) of a file as text; a cut first line is dropped. */
-export function readRange(path: string, start: number, end: number): string {
-  const fd = openSync(path, "r");
+export function readRange(path: string, start: number, end: number, io?: CodexReadScope): string {
+  const fd = io ? io.fd(path) : openSync(path, "r");
   try {
     const buffer = Buffer.alloc(Math.max(0, end - start));
     const length = readSync(fd, buffer, 0, buffer.length, start);
     const text = buffer.subarray(0, length).toString("utf8");
     return start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
-  } finally { closeSync(fd); }
+  } finally { if (!io) closeSync(fd); }
 }
 
 /** A question Codex queued with request_user_input_async; `options` is empty for a free-form one. */
@@ -632,6 +633,43 @@ const readdir = (path: string): string[] => { try { return readdirSync(path); } 
 /** A byte range of rollout history: the file's first `end` bytes. */
 export interface HistorySegment { path: string; end: number }
 
+/** Descriptor ownership for one managed read. No pathname is reopened after validation. */
+export class CodexReadScope {
+  private readonly files = new Map<string, { fd: number; stat: Stats }>();
+  constructor(readonly root: string, readonly store: string, readonly pin: { dev: number; ino: number }, readonly omoPrivate = false) {}
+
+  fd(path: string): number { return this.info(path).fd; }
+  stat(path: string): Stats { return this.info(path).stat; }
+
+  private info(path: string): { fd: number; stat: Stats } {
+    const saved = this.files.get(path);
+    if (saved) return saved;
+    const relative = nodePath.relative(this.store, path);
+    if (!relative || relative === ".." || relative.startsWith(`..${nodePath.sep}`) || nodePath.isAbsolute(relative)
+      || !path.endsWith(".jsonl") || realpathSync(path) !== path || realpathSync(this.store) !== this.store) {
+      throw new GjcSdkLookupError("unavailable");
+    }
+    const before = lstatSync(path);
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || before.dev !== stat.dev || before.ino !== stat.ino
+        || (process.getuid !== undefined && stat.uid !== process.getuid())
+        || ((stat.mode & 0o022) !== 0 && !(this.omoPrivate && path === this.root && (stat.mode & 0o002) === 0))
+        || (path === this.root && (stat.dev !== this.pin.dev || stat.ino !== this.pin.ino))
+        || realpathSync(path) !== path) throw new GjcSdkLookupError("unavailable");
+      const result = { fd, stat };
+      this.files.set(path, result);
+      return result;
+    } catch (error) { closeSync(fd); throw error; }
+  }
+
+  close(): void {
+    for (const { fd } of this.files.values()) closeSync(fd);
+    this.files.clear();
+  }
+}
+
 /**
  * Chains per rollout, newest first. A header never changes, so a complete chain is
  * kept for good; one that stops at a cut no file holds yet is kept a short while,
@@ -668,12 +706,12 @@ export function forgetAllCodexState(): void {
 /** Lines before a cut, per file identity and cut: the bytes before a cut never change. */
 const linesBeforeCut = new Map<string, number>();
 
-function countLines(path: string, end: number): number {
-  const stat = statSync(path);
+function countLines(path: string, end: number, io?: CodexReadScope): number {
+  const stat = io ? io.stat(path) : statSync(path);
   const key = `${stat.dev}:${stat.ino}:${end}`;
-  const known = linesBeforeCut.get(key);
+  const known = io ? undefined : linesBeforeCut.get(key);
   if (known !== undefined) return known;
-  const fd = openSync(path, "r");
+  const fd = io ? io.fd(path) : openSync(path, "r");
   let lines = 0;
   try {
     const buffer = Buffer.alloc(16 * 1024 * 1024);
@@ -683,18 +721,20 @@ function countLines(path: string, end: number): number {
       for (let index = buffer.indexOf(0x0a, 0); index !== -1 && index < length; index = buffer.indexOf(0x0a, index + 1)) lines += 1;
       offset += length;
     }
-  } finally { closeSync(fd); }
-  linesBeforeCut.set(key, lines);
-  if (linesBeforeCut.size > 256) linesBeforeCut.delete(linesBeforeCut.keys().next().value!);
+  } finally { if (!io) closeSync(fd); }
+  if (!io) {
+    linesBeforeCut.set(key, lines);
+    if (linesBeforeCut.size > 256) linesBeforeCut.delete(linesBeforeCut.keys().next().value!);
+  }
   return lines;
 }
 
-function byteAt(path: string, offset: number): number | null {
-  const fd = openSync(path, "r");
+function byteAt(path: string, offset: number, io?: CodexReadScope): number | null {
+  const fd = io ? io.fd(path) : openSync(path, "r");
   try {
     const buffer = Buffer.alloc(1);
     return readSync(fd, buffer, 0, 1, offset) === 1 ? buffer[0]! : null;
-  } finally { closeSync(fd); }
+  } finally { if (!io) closeSync(fd); }
 }
 
 /** A rollout's first ordinal: where the history it continues ends, 0 for a whole history. */
@@ -709,13 +749,13 @@ function firstOrdinal(header: RecordValue): number {
  * `ordinal - first` lines before it (checked on a three-rollout Codex 0.156 chain
  * against the turn offsets in its thread_history_1.sqlite).
  */
-function holdsCut(path: string, ordinal: number, end: number): boolean {
+function holdsCut(path: string, ordinal: number, end: number, io?: CodexReadScope): boolean {
   let header: RecordValue | null;
-  try { header = rolloutHeader(path); } catch { return false; }
+  try { header = rolloutHeader(path, io); } catch (error) { if (io) throw error; return false; }
   if (header === null) return false;
   const lines = ordinal - firstOrdinal(header);
-  if (lines <= 0 || (statSync(path, { throwIfNoEntry: false })?.size ?? 0) < end || byteAt(path, end - 1) !== 0x0a) return false;
-  return countLines(path, end) === lines;
+  if (lines <= 0 || (io ? io.stat(path).size : statSync(path, { throwIfNoEntry: false })?.size ?? 0) < end || byteAt(path, end - 1, io) !== 0x0a) return false;
+  return countLines(path, end, io) === lines;
 }
 
 /** Every rollout of a thread: rollout-<time>-<thread>.jsonl and its rollout-<time>-<thread>_<segment>.jsonl. */
@@ -737,10 +777,11 @@ function threadRollouts(home: string, threadId: string): string[] {
  * guessed from names or sizes. A chain that stops at a cut no file holds shows
  * less history rather than the wrong one, and is looked up again next time.
  */
-function historyChain(path: string, home: string): HistorySegment[] {
-  const cached = historyChains.get(path);
+function historyChain(path: string, home: string, io?: CodexReadScope): HistorySegment[] {
+  const cached = io ? undefined : historyChains.get(path);
   if (cached && (cached.complete || Date.now() - cached.at < INCOMPLETE_CHAIN_MS)) return cached.chain;
   const remember = (chain: HistorySegment[], complete: boolean): HistorySegment[] => {
+    if (io) return chain;
     historyChains.delete(path);
     historyChains.set(path, { chain, complete, at: Date.now() });
     if (historyChains.size > 64) historyChains.delete(historyChains.keys().next().value!);
@@ -750,7 +791,7 @@ function historyChain(path: string, home: string): HistorySegment[] {
   let current = path;
   for (let depth = 0; depth < 32; depth++) {
     let base: RecordValue;
-    try { base = record(rolloutHeader(current)?.history_base); } catch { return remember(chain, false); }
+    try { base = record(rolloutHeader(current, io)?.history_base); } catch (error) { if (io) throw error; return remember(chain, false); }
     const threadId = string(base.thread_id);
     const ordinal = base.end_ordinal_exclusive;
     const end = base.end_byte_offset;
@@ -758,9 +799,10 @@ function historyChain(path: string, home: string): HistorySegment[] {
     if (!UUID.test(threadId) || typeof ordinal !== "number" || !Number.isSafeInteger(ordinal)
       || typeof end !== "number" || !Number.isSafeInteger(end) || end <= 0) return remember(chain, false);
     const holders = threadRollouts(home, threadId).flatMap((candidate) => {
-      const resolved = codexRolloutPath(candidate, home);
+      const resolved = io ? candidate : codexRolloutPath(candidate, home);
       return resolved !== null && resolved !== current && !chain.some((segment) => segment.path === resolved)
-        && holdsCut(resolved, ordinal, end) ? [resolved] : [];
+        && (!io || rolloutHeader(resolved, io)?.id === threadId)
+        && holdsCut(resolved, ordinal, end, io) ? [resolved] : [];
     });
     if (holders.length !== 1) return remember(chain, false);
     chain.push({ path: holders[0]!, end });
@@ -782,8 +824,8 @@ function liveChain(path: string, home: string): HistorySegment[] {
 }
 
 /** A Codex conversation's files oldest first, each with how many of its bytes belong to it. */
-export function codexHistorySegments(path: string, home = defaultCodexHome()): HistorySegment[] {
-  return [...liveChain(path, home)].reverse().concat({ path, end: statSync(path).size });
+export function codexHistorySegments(path: string, home = defaultCodexHome(), io?: CodexReadScope): HistorySegment[] {
+  return [...(io ? historyChain(path, home, io) : liveChain(path, home))].reverse().concat({ path, end: (io ? io.stat(path) : statSync(path)).size });
 }
 
 /**

@@ -2060,6 +2060,156 @@ describe("managed conversation identity", () => {
     expect(answer.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: "parent answer" });
   });
 
+  it.each([300 * 1024, 1024 * 1024])("reads managed Codex history with a %i-byte session header", async (bytes) => {
+    writeHarness("codex");
+    const header = { type: "session_meta", payload: { id: sessionId, cwd: root, padding: "" } };
+    header.payload.padding = "x".repeat(bytes - Buffer.byteLength(JSON.stringify(header) + "\n"));
+    const row = JSON.stringify(header) + "\n";
+    expect(Buffer.byteLength(row)).toBe(bytes);
+    writeFileSync(sessionFile, row + JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "header question" } }) + "\n"
+      + JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "header answer" } }) + "\n");
+    const answer = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(JSON.stringify(answer.turns)).toContain("header answer");
+    expect(answer.managed_session?.state).toBe("ready");
+  });
+
+  it.each(["file", "symlink", "ancestor"] as const)("denies a transient %s swap after managed authorization, then recovers", async (kind) => {
+    writeHarness("claude", [JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "original answer" }] } })]);
+    const original = join(root, "original.jsonl");
+    const replacement = join(root, "replacement.jsonl");
+    const originalDir = join(root, "original-projects");
+    const decoyDir = join(root, "decoy-projects");
+    writeFileSync(replacement, JSON.stringify({ type: "user", sessionId, cwd: root }) + "\n" + JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "injected answer" }] } }) + "\n");
+    if (kind === "ancestor") {
+      mkdirSync(decoyDir);
+      copyFileSync(replacement, join(decoyDir, "exact.jsonl"));
+    }
+    const open = fs.openSync;
+    let headers = 0;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, flags: number, ...args: unknown[]) => {
+      if (path !== sessionFile || ++headers !== 3) return (open as (...args: unknown[]) => number)(path, flags, ...args);
+      swapped = true;
+      const directory = join(root, "claude", "projects");
+      if (kind === "ancestor") {
+        renameSync(directory, originalDir);
+        renameSync(decoyDir, directory);
+      } else {
+        renameSync(sessionFile, original);
+        if (kind === "symlink") symlinkSync(replacement, sessionFile);
+        else renameSync(replacement, sessionFile);
+      }
+      try { return (open as (...args: unknown[]) => number)(path, flags, ...args); }
+      finally {
+        if (kind === "ancestor") { renameSync(directory, decoyDir); renameSync(originalDir, directory); }
+        else { if (kind === "symlink") rmSync(sessionFile); else renameSync(sessionFile, replacement); renameSync(original, sessionFile); }
+      }
+    }) as typeof fs.openSync);
+    try {
+      await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      expect(swapped).toBe(true);
+    } finally { spy.mockRestore(); }
+    const recovered = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(JSON.stringify(recovered.turns)).toContain("original answer");
+    expect(JSON.stringify(recovered.turns)).not.toContain("injected answer");
+  });
+
+  it("rejects a transient replacement inode opened for a managed root header", async () => {
+    writeHarness("claude");
+    const replacement = join(root, "replacement.jsonl");
+    const original = join(root, "original.jsonl");
+    copyFileSync(sessionFile, replacement);
+    const open = fs.openSync;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, flags: number, ...args: unknown[]) => {
+      if (path !== sessionFile || swapped) return (open as (...args: unknown[]) => number)(path, flags, ...args);
+      swapped = true;
+      renameSync(sessionFile, original);
+      renameSync(replacement, sessionFile);
+      try { return (open as (...args: unknown[]) => number)(path, flags, ...args); }
+      finally { renameSync(sessionFile, replacement); renameSync(original, sessionFile); }
+    }) as typeof fs.openSync);
+    try {
+      await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "blocked_session_header" });
+      expect(swapped).toBe(true);
+    } finally { spy.mockRestore(); }
+    expect((await conversationForPane(pane, undefined, {}, managedDeps)).managed_session?.state).toBe("ready");
+  });
+
+  it.each(["image", "tool"] as const)("never returns transient replacement %s bytes after authorization", async (kind) => {
+    const entry = (label: string): string[] => [
+      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from(label).toString("base64") } }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "managed-tool", content: label }] } }),
+    ];
+    writeHarness("claude", entry("original bytes"));
+    const replacement = join(root, "replacement.jsonl");
+    writeFileSync(replacement, [JSON.stringify({ type: "user", sessionId, cwd: root }), ...entry("injected bytes")].join("\n") + "\n");
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    const open = fs.openSync;
+    let headers = 0;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, flags: number, ...args: unknown[]) => {
+      if (path !== sessionFile || ++headers !== 3) return (open as (...args: unknown[]) => number)(path, flags, ...args);
+      swapped = true;
+      const original = join(root, "original.jsonl");
+      renameSync(sessionFile, original);
+      renameSync(replacement, sessionFile);
+      try { return (open as (...args: unknown[]) => number)(path, flags, ...args); }
+      finally { renameSync(sessionFile, replacement); renameSync(original, sessionFile); }
+    }) as typeof fs.openSync);
+    const ref = `managed-${nonce}-1:${kind === "image" ? `${imageId}:0` : "managed-tool"}`;
+    try {
+      if (kind === "image") await expect(conversationImage(pane.pane_id, ref, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      else await expect(toolOutput(pane.pane_id, ref, undefined, undefined, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      expect(swapped).toBe(true);
+    } finally { spy.mockRestore(); }
+    if (kind === "image") expect((await conversationImage(pane.pane_id, ref, undefined, undefined, managedDeps))?.bytes).toEqual(Buffer.from("original bytes"));
+    else expect(await toolOutput(pane.pane_id, ref, undefined, undefined, undefined, undefined, managedDeps)).toBe("original bytes");
+    snapshot.mockRestore();
+  });
+
+  it("pins inherited Codex segment bytes against a transient swap during history chain discovery", async () => {
+    writeHarness("codex");
+    const thread = "11111111-1111-4111-8111-111111111111";
+    const directory = join(root, "codex", "sessions", "2026", "09", "30");
+    mkdirSync(directory, { recursive: true });
+    const parent = join(directory, `rollout-2026-09-30T01-00-00-${thread}.jsonl`);
+    const line = (type: string, payload: unknown): string => JSON.stringify({ type, payload }) + "\n";
+    const header = (extra = {}): string => line("session_meta", { id: sessionId, cwd: root, ...extra });
+    const kept = header({ id: thread })
+      + line("response_item", { type: "function_call", name: "exec_command", call_id: "inherited", arguments: "{}" })
+      + line("response_item", { type: "function_call_output", call_id: "inherited", output: "original inherited bytes" });
+    writeFileSync(parent, kept);
+    writeFileSync(sessionFile, header({ history_base: { thread_id: thread, end_ordinal_exclusive: 3, end_byte_offset: Buffer.byteLength(kept) } }) + line("event_msg", { type: "user_message", message: "current" }));
+    const info = statSync(sessionFile);
+    record.file_identity = { dev: info.dev, ino: info.ino };
+    save();
+    const replacement = join(root, "replacement.jsonl");
+    writeFileSync(replacement, header({ id: thread })
+      + line("response_item", { type: "function_call", name: "exec_command", call_id: "inherited", arguments: "{}" })
+      + line("response_item", { type: "function_call_output", call_id: "inherited", output: "injected inherited bytes" }));
+    const original = join(root, "original-parent.jsonl");
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    const open = fs.openSync;
+    let swapped = false;
+    const spy = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, flags: number, ...args: unknown[]) => {
+      if (path !== parent || swapped) return (open as (...args: unknown[]) => number)(path, flags, ...args);
+      swapped = true;
+      renameSync(parent, original);
+      renameSync(replacement, parent);
+      try { return (open as (...args: unknown[]) => number)(path, flags, ...args); }
+      finally { renameSync(parent, replacement); renameSync(original, parent); }
+    }) as typeof fs.openSync);
+    try {
+      await expect(toolOutput(pane.pane_id, `managed-${nonce}-1:inherited`, undefined, undefined, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      expect(swapped).toBe(true);
+    } finally { spy.mockRestore(); snapshot.mockRestore(); }
+    expect(await conversationForPane(pane, undefined, {}, managedDeps)).toMatchObject({ source: "codex-transcript" });
+    const fresh = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    try { expect(await toolOutput(pane.pane_id, `managed-${nonce}-1:inherited`, undefined, undefined, undefined, undefined, managedDeps)).toBe("original inherited bytes"); }
+    finally { fresh.mockRestore(); }
+  });
+
   it("routes a tagged pane without managed label metadata", async () => {
     writeHarness("gjc", [message("user", "question"), message("assistant", "answer")]);
     const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
@@ -2106,11 +2256,12 @@ describe("managed conversation identity", () => {
   it.each(["ENOENT", "EACCES"])("keeps a managed transcript page read %s distinct from absent history", async (code) => {
     writeHarness("omo", [message("user", "parent prompt"), message("assistant", "parent answer")]);
     const first = await conversationForPane(pane, undefined, {}, managedDeps);
-    const original = fs.statSync;
-    const stat = spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
-      if (path === sessionFile) throw Object.assign(new Error("private fixture path"), { code });
-      return Reflect.apply(original, fs, [path, ...args]);
-    }) as typeof fs.statSync);
+    const original = fs.fstatSync;
+    let calls = 0;
+    const stat = spyOn(fs, "fstatSync").mockImplementation(((fd: number, ...args: unknown[]) => {
+      if (++calls === 4) throw Object.assign(new Error("private fixture descriptor"), { code });
+      return (original as (...args: unknown[]) => fs.Stats)(fd, ...args);
+    }) as typeof fs.fstatSync);
     try {
       await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({
         name: "GjcSdkLookupError", reason: "unavailable", message: "GJC SDK lookup failed",

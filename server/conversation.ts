@@ -40,7 +40,7 @@ import nodePath, { type PlatformPath } from "node:path";
 import type { ConversationMetadata, ConversationPart, ConversationTurn, HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc, paneRead, sessionSnapshot } from "./herdr/client.ts";
 import { resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
-import { codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
+import { CodexReadScope, codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange } from "./codex.ts";
 import { CODEX_IMAGE_REF, codexTranscriptImage } from "./codex-images.ts";
 import { AmbiguousClaudeStore, claudeProcessSession, claudeTranscriptFile, defaultClaudeConfigDir, forgetClaudeSessionFile, forgetClaudeSessions, isClaudeProcess, processClaudeConfigDir } from "./claude-store.ts";
 import { forgetGjcState, gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, storeRelative } from "./gjc-runtime.ts";
@@ -544,6 +544,7 @@ interface TranscriptStream {
   floor: number;
   promptStarts?: number[];
   fd?: number;
+  io?: CodexReadScope;
 }
 
 // In-place rewrites keep the inode. Change the cursor generation when observed,
@@ -559,14 +560,14 @@ function transcriptGeneration(path: string, stat: { dev: number; ino: number; si
   return generation ? `-${generation}` : "";
 }
 
-function transcriptStream(source: StreamSource, path: string, stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }, codexHome: string, agy?: AgyProjection, fd?: number): TranscriptStream {
+function transcriptStream(source: StreamSource, path: string, stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }, codexHome: string, agy?: AgyProjection, fd?: number, io?: CodexReadScope): TranscriptStream {
   // (a chain whose parent was archived since comes back shorter: codexHistorySegments;
   // a pi branch skips the side paths a /tree left behind: piBranchSegments)
   const grok = source === "grok-transcript" ? grokProjection(path, stat) : null;
   const branch = source === "pi-transcript" ? piBranchSegments(path, stat.size) : null;
   if (source === "pi-transcript" && branch === null) throw new ConversationUnavailable("branch_unreadable");
   const segments: { path: string; start: number; end: number }[] = source === "codex-transcript"
-    ? codexHistorySegments(path, codexHome).map((segment) => ({ path: segment.path, start: 0, end: segment.end }))
+    ? codexHistorySegments(path, codexHome, io).map((segment) => ({ path: segment.path, start: 0, end: segment.end }))
     : grok !== null ? grok.segments.map((segment) => ({ path, ...segment }))
     : agy ? agy.segments.map((segment) => ({ path, ...segment }))
     : branch !== null ? branch.map((segment) => ({ path, start: segment.start, end: segment.end }))
@@ -600,12 +601,12 @@ function transcriptStream(source: StreamSource, path: string, stat: { dev: numbe
     chain = `-${createHash("sha256").update(layout).digest("base64url").slice(0, 10)}`;
   } else if (source === "codex-transcript") {
     const earlier = files.slice(0, -1).map((file) => {
-      const identity = statSync(file.path, { throwIfNoEntry: false });
+      const identity = io ? io.stat(file.path) : statSync(file.path, { throwIfNoEntry: false });
       return `${file.path}\0${file.length}\0${identity ? `${identity.dev}:${identity.ino}` : "-"}`;
     });
     chain = earlier.length === 0 ? "" : `-${createHash("sha256").update(earlier.join("\n")).digest("base64url").slice(0, 10)}`;
   }
-  return { id: `${stat.dev.toString(36)}-${stat.ino.toString(36)}${chain}${transcriptGeneration(path, stat)}`, files, length: stream, floor: 0, promptStarts: grok?.promptStarts ?? agy?.promptStarts, fd };
+  return { id: `${io ? "managed-" : ""}${stat.dev.toString(36)}-${stat.ino.toString(36)}${chain}${transcriptGeneration(path, stat)}`, files, length: stream, floor: 0, promptStarts: grok?.promptStarts ?? agy?.promptStarts, fd, io };
 }
 
 function readStream(stream: TranscriptStream, from: number, to: number): Buffer {
@@ -614,12 +615,12 @@ function readStream(stream: TranscriptStream, from: number, to: number): Buffer 
     const low = Math.max(from, file.start);
     const high = Math.min(to, file.start + file.length);
     if (low >= high) continue;
-    const fd = stream.fd ?? openSync(file.path, "r");
+    const fd = stream.io?.fd(file.path) ?? stream.fd ?? openSync(file.path, "r");
     try {
       const buffer = Buffer.alloc(high - low);
       chunks.push(buffer.subarray(0, readSync(fd, buffer, 0, buffer.length, file.offset + (low - file.start))));
     } finally {
-      if (stream.fd === undefined) closeSync(fd);
+      if (stream.fd === undefined && stream.io === undefined) closeSync(fd);
     }
   }
   return Buffer.concat(chunks);
@@ -979,7 +980,7 @@ function codexLiveTurn(path: string, stream: TranscriptStream, start: number, be
 /** Codex settings belong to the live rollout; native clears bound other stores. A model or
  * thinking-level change after the head and before the page follows the head, in order. */
 function metadataHead(path: string, stream: TranscriptStream, source: RecognizedConversation["source"], start: number): string {
-  if (source === "codex-transcript") return readRange(path, 0, METADATA_HEAD_BYTES);
+  if (source === "codex-transcript") return readRange(path, 0, METADATA_HEAD_BYTES, stream.io);
   const end = Math.min(start, stream.floor + METADATA_HEAD_BYTES);
   const later = Object.values(clearScans.get(path)?.settings ?? {})
     // a record the head cuts in two is read whole here
@@ -1324,9 +1325,15 @@ type ManagedResolvedTranscript = {
   source: ManagedSource;
   path: string;
   managed_session: ManagedSessionIdentity;
+  fileIdentity: { dev: number; ino: number };
   codexHome?: string;
   agy?: AgyStore;
 };
+
+function managedReadScope(resolved: ManagedResolvedTranscript): CodexReadScope {
+  const store = resolved.source === "codex-transcript" ? nodePath.join(resolved.codexHome!, "sessions") : nodePath.dirname(resolved.path);
+  return new CodexReadScope(resolved.path, store, resolved.fileIdentity, resolved.source === "omo-transcript");
+}
 
 type ResolvedTranscript =
   | { source: StreamSource; path: string; codexHome?: string; agy?: AgyStore }
@@ -1384,7 +1391,7 @@ async function managedTranscript(pane: HerdrPane, deps: ManagedSessionDeps): Pro
     throw new ConversationUnavailable(identity.reason ?? identity.state, identity);
   }
   const source = MANAGED_SOURCES[identity.harness];
-  const resolved: ManagedResolvedTranscript = { source, path: sessionFile, managed_session: identity };
+  const resolved: ManagedResolvedTranscript = { source, path: sessionFile, managed_session: identity, fileIdentity: resolution.fileIdentity! };
   if (identity.harness === "codex") {
     let directory = nodePath.dirname(sessionFile);
     while (nodePath.basename(directory) !== "sessions" && nodePath.dirname(directory) !== directory) directory = nodePath.dirname(directory);
@@ -1415,7 +1422,8 @@ async function assertManagedTranscriptCurrent(pane: HerdrPane, resolved: Managed
     if (error instanceof ConversationUnavailable) throw new ConversationUnavailable("blocked_managed_identity_changed", error.managedSession);
     throw error;
   }
-  if (current === null || current.path !== resolved.path || !sameManagedIdentity(current.managed_session, resolved.managed_session)) {
+  if (current === null || current.path !== resolved.path || current.fileIdentity.dev !== resolved.fileIdentity.dev
+    || current.fileIdentity.ino !== resolved.fileIdentity.ino || !sameManagedIdentity(current.managed_session, resolved.managed_session)) {
     throw new ConversationUnavailable(current?.managed_session.reason ?? "blocked_managed_identity_changed", current?.managed_session);
   }
 }
@@ -1622,11 +1630,14 @@ export async function conversationForPane(pane: HerdrPane, codexHome?: string, p
   const translated = managedPage(page, identity);
   let answer: RecognizedConversation;
   try {
-    answer = transcriptPage(resolved.source, resolved.path, translated.page, resolved.codexHome ?? codexHome);
+    const io = managedReadScope(resolved);
+    try { answer = transcriptPageRead(resolved.source, resolved.path, translated.page, resolved.codexHome ?? codexHome, undefined, undefined, io); }
+    finally { io.close(); }
   } catch (error) {
     await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
     // A validated managed file becoming unreadable is not proof of an empty history.
     if (error instanceof ConversationUnavailable && error.message === "transcript_missing") throw new GjcSdkLookupError("unavailable");
+    if (!(error instanceof ConversationUnavailable || error instanceof HistoryChanged || error instanceof GjcSdkLookupError)) throw new GjcSdkLookupError("unavailable");
     throw error;
   }
   await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
@@ -1766,16 +1777,16 @@ export function transcriptPage(source: StreamSource, path: string, page: Convers
   return transcriptPageRead(source, path, page, codexHome);
 }
 
-function transcriptPageRead(source: StreamSource, path: string, page: ConversationPage, codexHome?: string, agy?: AgyProjection, fd?: number): RecognizedConversation {
+function transcriptPageRead(source: StreamSource, path: string, page: ConversationPage, codexHome?: string, agy?: AgyProjection, fd?: number, io?: CodexReadScope): RecognizedConversation {
   let stat: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
   try {
-    stat = statSync(path);
+    stat = io ? io.stat(path) : statSync(path);
   } catch {
     throw new ConversationUnavailable("transcript_missing");
   }
   let stream: TranscriptStream;
   try {
-    stream = transcriptStream(source, path, stat, codexHome ?? defaultCodexHome(), agy, fd);
+    stream = transcriptStream(source, path, stat, codexHome ?? defaultCodexHome(), agy, fd, io);
     applyHistoryBoundary(path, stream, source);
   } catch (error) {
     // a branch that cannot be walked says so; a file that went unreadable mid-read has
@@ -1865,12 +1876,15 @@ export async function conversationImage(paneId: string, ref: string, codexHome?:
   if (nativeRef === null || (!IMAGE_REF.test(nativeRef) && !CODEX_IMAGE_REF.test(nativeRef) && !PI_IMAGE_REF.test(nativeRef) && !OPENCODE_IMAGE_REF.test(nativeRef))) return null;
   // OpenCode's store is read per request and keeps nothing for the pane to release
   if (resolved.source === "opencode-transcript") return opencodeImage(resolved.path, resolved.session, nativeRef);
-  const image = resolved.source === "codex-transcript" ? codexTranscriptImage(codexHistorySegments(resolved.path, resolved.codexHome ?? codexHome), nativeRef, pane.cwd)
-    : resolved.source === "pi-transcript" ? piTranscriptImage(resolved.path, nativeRef)
-    : resolved.source === "claude-transcript" ? transcriptImage(resolved.path, nativeRef) : null;
+  const io = "managed_session" in resolved ? managedReadScope(resolved) : undefined;
+  let image: { mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null;
   try {
+    image = resolved.source === "codex-transcript" ? await codexTranscriptImage(codexHistorySegments(resolved.path, resolved.codexHome ?? codexHome, io), nativeRef, pane.cwd, io)
+      : resolved.source === "pi-transcript" ? piTranscriptImage(resolved.path, nativeRef)
+      : resolved.source === "claude-transcript" ? transcriptImage(resolved.path, nativeRef, io) : null;
     if ("managed_session" in resolved) await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
-  } catch (error) { if (error instanceof ConversationUnavailable) return null; throw error; }
+  } catch (error) { if (error instanceof ConversationUnavailable) return null; throw io && !(error instanceof GjcSdkLookupError) ? new GjcSdkLookupError("unavailable") : error; }
+  finally { io?.close(); }
   rememberPaneRead(paneId, resolved.path);
   return image;
 }
@@ -1878,12 +1892,12 @@ export async function conversationImage(paneId: string, ref: string, codexHome?:
 const IMAGE_REF = /^([0-9a-f-]{8,64}):(\d{1,3})$/i;
 
 /** The image an image part's ref names in a Claude transcript file, decoded; null when there is none. */
-export function transcriptImage(path: string, ref: string): { mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null {
+export function transcriptImage(path: string, ref: string, io?: CodexReadScope): { mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null {
   const match = IMAGE_REF.exec(ref);
   if (match === null) return null;
   const [, uuid, index] = match;
   let text: string;
-  try { text = readFileSync(path, "utf8"); } catch { return null; }
+  try { text = io ? readManagedText(io, path) : readFileSync(path, "utf8"); } catch (error) { if (io) throw error; return null; }
   text = activeHistoryText(text, "claude-transcript");
   const needle = JSON.stringify(uuid);
   for (const line of text.split("\n")) {
@@ -1898,6 +1912,18 @@ export function transcriptImage(path: string, ref: string): { mediaType: string;
     return { mediaType, bytes: new Uint8Array(Buffer.from(block.source.data, "base64")) };
   }
   return null;
+}
+
+function readManagedText(io: CodexReadScope, path: string, end = io.stat(path).size): string {
+  const bytes = Buffer.alloc(end);
+  const fd = io.fd(path);
+  let at = 0;
+  while (at < end) {
+    const count = readSync(fd, bytes, at, Math.min(1024 * 1024, end - at), at);
+    if (count === 0) break;
+    at += count;
+  }
+  return bytes.subarray(0, at).toString("utf8");
 }
 
 const TOOL_REF = /^[A-Za-z0-9_:.-]{1,128}$/;
@@ -1927,7 +1953,11 @@ export async function toolOutput(paneId: string, ref: string, codexHome?: string
     return output !== null && output.length > TOOL_OUTPUT_MAX ? `${output.slice(0, TOOL_OUTPUT_MAX)}\n… trimmed` : output;
   }
   if (resolved.source === "hermes-transcript") return hermesToolOutput(resolved.sessionId, resolved.path, nativeRef, TOOL_OUTPUT_MAX);
-  const output = transcriptToolOutput(resolved.source, resolved.path, nativeRef, resolved.codexHome ?? codexHome);
+  const io = "managed_session" in resolved ? managedReadScope(resolved) : undefined;
+  let output: string | null;
+  try { output = transcriptToolOutput(resolved.source, resolved.path, nativeRef, resolved.codexHome ?? codexHome, io); }
+  catch (error) { throw io && !(error instanceof GjcSdkLookupError) ? new GjcSdkLookupError("unavailable") : error; }
+  finally { io?.close(); }
   if (resolved.agy && !sameAgyStore(resolved.agy, await resolveAgyStore(pane))) return null;
   try {
     if ("managed_session" in resolved) await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
@@ -1937,15 +1967,15 @@ export async function toolOutput(paneId: string, ref: string, codexHome?: string
 }
 
 /** The output a transcript file holds for one tool call id, whole (up to TOOL_OUTPUT_MAX). */
-export function transcriptToolOutput(source: StreamSource, path: string, ref: string, codexHome?: string): string | null {
+export function transcriptToolOutput(source: StreamSource, path: string, ref: string, codexHome?: string, io?: CodexReadScope): string | null {
   if (!TOOL_REF.test(ref)) return null;
   if (source === "codex-transcript") {
     let segments: ReturnType<typeof codexHistorySegments>;
-    try { segments = codexHistorySegments(path, codexHome); } catch { return null; }
+    try { segments = codexHistorySegments(path, codexHome, io); } catch (error) { if (io) throw error; return null; }
     for (const segment of segments) {
       let text: string;
       // a rollout may have been archived since resolution: the others still hold theirs
-      try { text = readRange(segment.path, 0, segment.end); } catch { continue; }
+      try { text = readRange(segment.path, 0, segment.end, io); } catch (error) { if (io) throw error; continue; }
       const output = outputInText(source, text, ref);
       if (output !== null) return output;
     }
@@ -1955,7 +1985,7 @@ export function transcriptToolOutput(source: StreamSource, path: string, ref: st
   if (source === "agy-transcript") return agyToolOutput(path, ref);
   if (source === "pi-transcript") return piToolOutput(path, ref);
   let text: string;
-  try { text = readFileSync(path, "utf8"); } catch { return null; }
+  try { text = io ? readManagedText(io, path) : readFileSync(path, "utf8"); } catch (error) { if (io) throw error; return null; }
   return outputInText(source, text, ref);
 }
 

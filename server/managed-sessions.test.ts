@@ -225,32 +225,40 @@ it.each(["ENOENT", "EACCES", "EIO"])("keeps post-validation paging %s failures t
     let validations = 0;
     const countedDeps: ManagedSessionDeps = { ...deps, gjcSession: async () => { validations += 1; return live; } };
     const failure = () => Object.assign(new Error(`private ${sessionFile}`), { code });
-    const stat = fs.statSync;
-    const open = fs.openSync;
-    const denied = phase === "stat"
-      ? spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
-        if (String(path) === sessionFile) throw failure();
-        return Reflect.apply(stat, fs, [path, ...args]);
-      }) as typeof fs.statSync)
-      : spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
-        if (String(path) === sessionFile && args[0] === "r") throw failure();
-        return Reflect.apply(open, fs, [path, ...args]);
-      }) as typeof fs.openSync);
+    const stat = fs.fstatSync;
+    const read = fs.readSync;
+    let stats = 0;
+    let contentFd = -1;
+    let failed = false;
+    const deniedStat = spyOn(fs, "fstatSync").mockImplementation(((fd: number, ...args: unknown[]) => {
+      // Two record and two header descriptors precede the held GJC content descriptor.
+      if (++stats === 5) {
+        contentFd = fd;
+        if (phase === "stat") { failed = true; throw failure(); }
+      }
+      return Reflect.apply(stat, fs, [fd, ...args]);
+    }) as typeof fs.fstatSync);
+    const deniedRead = spyOn(fs, "readSync").mockImplementation(((fd: number, ...args: unknown[]) => {
+      if (fd === contentFd && !failed) { failed = true; throw failure(); }
+      return Reflect.apply(read, fs, [fd, ...args]);
+    }) as typeof fs.readSync);
     try {
       const rejected = await readConversation(pane, undefined, undefined, countedDeps).catch(error => error);
       expect(rejected).toBeInstanceOf(GjcSdkLookupError);
       expect(rejected).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
       expect(JSON.stringify(rejected)).not.toContain(root);
       expect(validations).toBe(2);
-    } finally { denied.mockRestore(); }
+      expect(failed).toBe(true);
+    } finally { deniedRead.mockRestore(); deniedStat.mockRestore(); }
     expect((await conversationForPane(pane)).turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
   }
 });
 
 it("does not hide a generation revocation behind a transient paging error", async () => {
   const open = fs.openSync;
+  let headers = 0;
   const denied = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
-    if (String(path) === sessionFile && args[0] === "r") {
+    if (String(path) === sessionFile && ++headers === 3) {
       record.generation = 2; save();
       throw Object.assign(new Error("private paging failure"), { code: "EACCES" });
     }
