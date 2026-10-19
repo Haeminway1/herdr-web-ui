@@ -14,8 +14,10 @@ import * as agyStore from "./agy-store.ts";
 import * as herdr from "./herdr/client.ts";
 import { forgetHistoryChains } from "./codex.ts";
 import { DevinHistoryChanged } from "./devin.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
 import type { ManagedSessionDeps } from "./managed-sessions.ts";
+import * as gjcRuntime from "./gjc-runtime.ts";
 import * as omo from "./omo.ts";
 import { ConversationUnavailable, conversationForPane, conversationImage, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, resolveTranscript, toolOutput, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 
@@ -1019,9 +1021,36 @@ describe("gjc sessions", () => {
   it("does not infer a session from cwd, even if there is only one file", async () => {
     const home = mkdtempSync(join(tmpdir(), "herdr-gjc-")); roots.push(home);
     const dir = join(home, ".gjc", "agent", "sessions", "v2-abc");
-    session(dir, "only.jsonl", "/home/u/project", "2026-09-20T00:00:00.000Z");
+    const onlySession = session(dir, "only.jsonl", "/home/u/project", "2026-09-20T00:00:00.000Z");
     writeFileSync(join(dir, ".gjc-managed-session-scope.v2.json"), JSON.stringify({ canonicalPath: "/home/u/project" }));
-    await expect(gjcTranscriptPath("w9999:p9999", "/home/u/project", home)).rejects.toThrow(ConversationUnavailable);
+    const lookup = spyOn(gjcRuntime, "gjcTranscriptForPane").mockResolvedValue(null);
+    try {
+      expect(fs.existsSync(onlySession)).toBe(true);
+      await expect(gjcTranscriptPath("w9999:p9999", "/home/u/project", home)).rejects.toMatchObject({
+        name: "ConversationUnavailable", message: "no_session_path",
+      });
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(lookup).toHaveBeenCalledWith("w9999:p9999", "/home/u/project", home);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it("propagates an unavailable SDK lookup through gjcTranscriptPath unchanged", async () => {
+    const home = mkdtempSync(join(tmpdir(), "herdr-gjc-unavailable-")); roots.push(home);
+    const cwd = "/home/u/project";
+    const onlySession = session(join(home, ".gjc", "agent", "sessions", "v2-abc"), "only.jsonl", cwd, "2026-09-20T00:00:00.000Z");
+    const failure = new GjcSdkLookupError("unavailable");
+    const lookup = spyOn(gjcRuntime, "gjcTranscriptForPane").mockRejectedValue(failure);
+    try {
+      expect(fs.existsSync(onlySession)).toBe(true);
+      await expect(gjcTranscriptPath("w9999:p9999", cwd, home)).rejects.toBe(failure);
+      expect(failure).toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(lookup).toHaveBeenCalledWith("w9999:p9999", cwd, home);
+    } finally {
+      lookup.mockRestore();
+    }
   });
 
   it("shows a failed request's error instead of an empty answer", () => {

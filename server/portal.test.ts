@@ -503,15 +503,22 @@ describe("running Portal", () => {
     mkdirSync(portalDir, { recursive: true, mode: 0o700 });
     const identityPath = join(portalDir, "identity.json");
     const scriptPath = join(portalDir, "portal");
-    writeFileSync(scriptPath, "await new Promise(() => {});\n");
+    const readyPath = join(portalDir, "interpreter-ready");
+    writeFileSync(scriptPath, [
+      'const readyPath = process.env["HERDR_PORTAL_FIXTURE_READY"];',
+      'if (readyPath === undefined) throw new Error("missing ready path");',
+      "setInterval(() => {}, 60_000);",
+      'await Bun.write(readyPath, "ready\\n");',
+    ].join("\n") + "\n");
     const unrelated = Bun.spawn([process.execPath, scriptPath, "expose", "--identity-path", identityPath], {
+      env: { ...process.env, HERDR_PORTAL_FIXTURE_READY: readyPath },
       stdin: "ignore", stdout: "ignore", stderr: "ignore",
     });
     writeFileSync(join(portalDir, "state.json"), JSON.stringify({ enabled: true, relay: RELAY, port: 7317, pid: unrelated.pid }));
     const service = new PortalService({ stateDir, fetch: relay() });
     const internals = service as unknown as { processArgv(pid: number): Promise<string[] | null> };
     try {
-      await waitFor(() => alive(unrelated.pid), "unrelated interpreter started");
+      await waitFor(() => existsSync(readyPath), "unrelated interpreter ready");
       expect((await internals.processArgv(unrelated.pid))?.slice(1, 3)).toEqual([scriptPath, "expose"]);
       await service.resume({ port: 7317, tokenSet: false, serveOnly: false });
       expect(alive(unrelated.pid)).toBe(true);
