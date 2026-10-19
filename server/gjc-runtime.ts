@@ -9,7 +9,7 @@ import nodePath, { join, type PlatformPath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { gjcSdkTranscript } from "./gjc-sdk.ts";
-import { lookupExecutionError } from "./gjc-sdk-error.ts";
+import { GjcSdkLookupError, lookupExecutionError } from "./gjc-sdk-error.ts";
 import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 import { captureGjcIndex, gjcIndexUnchanged, type GjcIndexStamp } from "./gjc-index.ts";
 import { herdrRpc } from "./herdr/client.ts";
@@ -46,7 +46,10 @@ export function recentProcessTable(read: () => Promise<ProcessRow[]> = windowsPr
   const entry = { at: now, rows: read() };
   processTable = entry;
   // an empty table is a read that failed: the next poll asks again
-  void entry.rows.then((rows) => { if (rows.length === 0 && processTable === entry) processTable = null; });
+  void entry.rows.then(
+    (rows) => { if (rows.length === 0 && processTable === entry) processTable = null; },
+    () => { if (processTable === entry) processTable = null; },
+  );
   return entry.rows;
 }
 
@@ -393,9 +396,12 @@ async function lookupGjcTranscript(
     if (platform === "win32") {
       const table = fresh ? readProcessTable : () => recentProcessTable(readProcessTable);
       const process = await gjcPidUnderShell(info.process_info.shell_pid, platform, table);
-      if (process === undefined) return null;
+      if (process === undefined) throw lookupExecutionError(undefined);
       if (process === null) return [];
-      if (!Number.isSafeInteger(process.started) || process.started === null) return null;
+      if (!Number.isSafeInteger(process.started) || process.started === null) {
+        processTable = null;
+        throw lookupExecutionError(undefined);
+      }
       return [{ pid: process.pid, birth: process.started }];
     }
 
@@ -408,7 +414,7 @@ async function lookupGjcTranscript(
       if (!isGjcProcess(argv)) continue;
       if (typeof process.pid !== "number" || !Number.isSafeInteger(process.pid) || process.pid <= 0) return null;
       const started = processBirth(process.pid);
-      if (started === null || !Number.isFinite(started)) return null;
+      if (started === null || !Number.isFinite(started)) throw lookupExecutionError(undefined);
       const previous = seen.get(process.pid);
       if (previous !== undefined && !sameBirth(previous, started)) return null;
       if (previous === undefined) {

@@ -172,8 +172,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     try {
       const output = await toolOutput(paneId, ref, options.codexHome, options.opencodeDb, options.hermesHome, options.grokHome);
       if (output === null) return jsonResponse({ error: { code: "output_not_found", message: "no such tool call in this pane's conversation" } }, 404);
-      // a tool call's id names its output for good; OpenCode's ref names a place in a row it rewrites in place
-      const cacheControl = (OPENCODE_TOOL_REF.test(ref) || /^grok:/.test(ref)) ? "private, no-store" : "private, max-age=86400, immutable";
+      // Managed refs revalidate generation; OpenCode and Grok can rewrite an output in place.
+      const cacheControl = (ref.startsWith("managed-") || OPENCODE_TOOL_REF.test(ref) || /^grok:/.test(ref)) ? "private, no-store" : "private, max-age=86400, immutable";
       return new Response(output, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
     } catch (error) {
       return errorResponse(error);
@@ -187,8 +187,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     try {
       const image = await conversationImage(paneId, ref, options.codexHome, options.opencodeDb);
       if (image === null) return jsonResponse({ error: { code: "image_not_found", message: "no such image in this pane's conversation" } }, 404);
-      // Claude embeds immutable bytes; Codex files and OpenCode tool-image ordinals can change.
-      const cacheControl = ref.startsWith("codex-") || ref.startsWith("opencode:") ? "private, no-store" : "private, max-age=86400, immutable";
+      // Managed images must revalidate their generation; Codex files and OpenCode ordinals can change.
+      const cacheControl = ref.startsWith("managed-") || ref.startsWith("codex-") || ref.startsWith("opencode:") ? "private, no-store" : "private, max-age=86400, immutable";
       return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
     } catch (error) {
       return errorResponse(error);
