@@ -2038,6 +2038,65 @@ describe("managed conversation identity", () => {
     } finally { snapshot.mockRestore(); }
   });
 
+  it.each(["timeout", "unavailable"] as const)("propagates managed SDK %s without clearing history or following the provider child", async (reason) => {
+    writeHarness("gjc", [message("user", "parent prompt"), message("assistant", "parent answer")]);
+    const first = await conversationForPane(pane, undefined, {}, managedDeps);
+    const failureDeps: ManagedSessionDeps = {
+      ...managedDeps,
+      gjcSession: async () => { throw new GjcSdkLookupError(reason); },
+    };
+    await expect(conversationForPane(pane, undefined, {}, failureDeps)).rejects.toMatchObject({
+      name: "GjcSdkLookupError", reason, message: "GJC SDK lookup failed",
+    });
+    const recovered = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(recovered.history_id).toBe(first.history_id);
+    expect(recovered.turns).toEqual(first.turns);
+    expect(nativeLookupCalls).toBe(0);
+  });
+
+  it("propagates an SDK outage during final managed identity revalidation", async () => {
+    writeHarness("gjc", [message("user", "parent prompt"), message("assistant", "parent answer")]);
+    let reads = 0;
+    const failureDeps: ManagedSessionDeps = {
+      ...managedDeps,
+      gjcSession: async () => {
+        if (++reads > 1) throw new GjcSdkLookupError("timeout");
+        return live;
+      },
+    };
+    await expect(conversationForPane(pane, undefined, {}, failureDeps)).rejects.toMatchObject({
+      name: "GjcSdkLookupError", reason: "timeout", message: "GJC SDK lookup failed",
+    });
+    expect(reads).toBe(2);
+    expect(nativeLookupCalls).toBe(0);
+  });
+
+  it.each(["ENOENT", "EACCES"])("keeps a managed transcript page read %s distinct from absent history", async (code) => {
+    writeHarness("omo", [message("user", "parent prompt"), message("assistant", "parent answer")]);
+    const first = await conversationForPane(pane, undefined, {}, managedDeps);
+    const original = fs.statSync;
+    const stat = spyOn(fs, "statSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (path === sessionFile) throw Object.assign(new Error("private fixture path"), { code });
+      return Reflect.apply(original, fs, [path, ...args]);
+    }) as typeof fs.statSync);
+    try {
+      await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({
+        name: "GjcSdkLookupError", reason: "unavailable", message: "GJC SDK lookup failed",
+      });
+    } finally { stat.mockRestore(); }
+    expect((await conversationForPane(pane, undefined, {}, managedDeps)).history_id).toBe(first.history_id);
+    expect(nativeLookupCalls).toBe(0);
+  });
+
+  it("propagates a missing managed record without authorizing provider fallback", async () => {
+    writeHarness("gjc");
+    rmSync(recordFile);
+    await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({
+      name: "GjcSdkLookupError", reason: "unavailable", message: "GJC SDK lookup failed",
+    });
+    expect(nativeLookupCalls).toBe(0);
+  });
+
   it.each([
     ["identity_pending", "starting", "identity_pending"],
     ["blocked", "blocked", "blocked_runtime_changed"],

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
 import { gjcSdkCurrentSession } from "./gjc-sdk.ts";
-import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
+import { GjcSdkLookupError, lookupExecutionError } from "./gjc-sdk-error.ts";
 
 interface ProcessIdentity { readonly pid: number; readonly starttime: string; readonly boot: string; readonly cwd: string }
 export interface ManagedSessionDeps {
@@ -13,21 +13,25 @@ export interface ManagedSessionDeps {
 
 function unavailableRead(error: unknown): boolean {
   const code = typeof error === "object" && error !== null ? Reflect.get(error, "code") : undefined;
-  return ["EACCES", "EPERM", "EIO", "EMFILE", "ENFILE", "EAGAIN", "ESTALE", "EBUSY", "ETIMEDOUT"].includes(code);
+  return ["ENOENT", "EACCES", "EPERM", "EIO", "EMFILE", "ENFILE", "EAGAIN", "ESTALE", "EBUSY", "ETIMEDOUT"].includes(code);
 }
 
 function processIdentity(pid: number): ProcessIdentity | null {
+  if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
-    if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid <= 0 || !owned(statSync(`/proc/${pid}`))) return null;
+    if (!owned(statSync(`/proc/${pid}`))) return null;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && Reflect.get(error, "code") === "ENOENT") return null;
+    throw new GjcSdkLookupError("unavailable");
+  }
+  try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(") ") + 2).trim().split(/\s+/);
     const starttime = fields[19];
     if (fields[0] === "Z" || starttime === undefined || !/^[0-9]+$/.test(starttime)) return null;
     return { pid, starttime, boot: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), cwd: realpathSync(readlinkSync(`/proc/${pid}/cwd`)) };
   } catch (error) {
-    if (unavailableRead(error)) throw new GjcSdkLookupError("unavailable");
-    if (error instanceof Error) return null;
-    throw error;
+    throw new GjcSdkLookupError("unavailable");
   }
 }
 
@@ -35,6 +39,8 @@ type Harness = NonNullable<ManagedSessionIdentity["harness"]>;
 export interface ManagedSessionResolution {
   identity: ManagedSessionIdentity;
   sessionFile: string | null;
+  /** Internal transient failure: roster stays pending, conversation reads must not claim absence. */
+  lookupError?: GjcSdkLookupError;
 }
 
 export function managedNamespace(): string {
@@ -180,7 +186,6 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
   identity.id = nonce;
   if (typeof generation !== "string" || !/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(Number(generation))) return blocked("blocked_managed_generation");
   identity.generation = Number(generation);
-  let recordBound = false;
   try {
     const rootInfo = lstatSync(namespace);
     if (!rootInfo.isDirectory() || !owned(rootInfo) || !safeAncestors(namespace, rootInfo)) return blocked("blocked_record_root");
@@ -196,7 +201,6 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       || !pane.terminal_id || record.terminal_id !== pane.terminal_id) return blocked("blocked_pane_identity");
     const recordCwd = record.cwd;
     identity.harness = recordHarness;
-    recordBound = true;
     if (record.desired_state !== "running") return blocked("blocked_session_stopped");
     if (record.state === "blocked") return blocked(typeof record.error === "string" && REASON.test(record.error) ? record.error : "blocked_record_state");
     if (["intent", "registered", "starting", "identity_pending"].includes(String(record.state))) {
@@ -243,7 +247,12 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       const readIdentity = deps.processIdentity ?? processIdentity;
       const before = readIdentity(child.pid);
       if (!before || before.starttime !== child.starttime || before.boot !== child.boot || before.cwd !== recordCwd) return blocked("blocked_runtime_identity");
-      const live = await (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
+      let live: Awaited<ReturnType<typeof gjcSdkCurrentSession>>;
+      try {
+        live = await (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
+      } catch (error) {
+        throw lookupExecutionError(error);
+      }
       const after = readIdentity(before.pid);
       if (!after || after.pid !== before.pid || after.starttime !== before.starttime || after.boot !== before.boot || after.cwd !== before.cwd) return blocked("blocked_runtime_identity");
       const rootAfter = lstatSync(namespace);
@@ -271,8 +280,9 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     identity.session_id = sessionId;
     return { identity, sessionFile };
   } catch (error) {
-    const code = typeof error === "object" && error !== null ? Reflect.get(error, "code") : undefined;
-    if (error instanceof GjcSdkLookupError || unavailableRead(error) || (recordBound && code === "ENOENT")) return pending("identity_pending");
+    if (error instanceof GjcSdkLookupError || unavailableRead(error)) {
+      return { ...pending("identity_pending"), lookupError: lookupExecutionError(error) };
+    }
     return blocked("blocked_managed_record_unavailable");
   }
 }

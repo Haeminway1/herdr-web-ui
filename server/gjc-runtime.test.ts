@@ -726,6 +726,7 @@ it.each(["timeout", "unavailable"] as const)("caches status %s briefly while cha
       processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
       processBirth: () => 1000,
       sdkTranscript: async () => { lookups += 1; entered.resolve(); await gate.promise; throw failure; },
+      generationCurrent: async () => true,
     };
     const status = () => gjcTranscriptForPane("pane", home, home, { ...options, purpose: "status" });
     const first = status();
@@ -764,6 +765,7 @@ it("keeps unresolved status lookups briefly but a successful chat retry clears t
       sdkTranscript: async () => ++lookups === 1 ? null : ({
         sessionId: "retry", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["retry"],
       }),
+      generationCurrent: async () => true,
     };
     const status = () => gjcTranscriptForPane("pane", home, home, { ...options, purpose: "status" });
     expect(await status()).toBeNull();
@@ -794,8 +796,11 @@ it.each(["RPC unavailable", "RPC exception", "no foreground"] as const)("does no
         lookups += 1;
         return { sessionId: "ready", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["ready"] };
       },
+      generationCurrent: async () => true,
     };
-    expect(await gjcTranscriptForPane("pane", home, home, options)).toBeNull();
+    if (missing === "RPC exception") {
+      await expect(gjcTranscriptForPane("pane", home, home, options)).rejects.toMatchObject({ reason: "unavailable" });
+    } else expect(await gjcTranscriptForPane("pane", home, home, options)).toBeNull();
     expect(lookups).toBe(0);
     ready = true; clock = 25_000;
     expect(await gjcTranscriptForPane("pane", home, home, options)).toBe(path);
@@ -819,6 +824,7 @@ it("does not cache a status miss from transcript validation after SDK resolution
         lookups += 1;
         return { sessionId: "ready", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["ready"] };
       },
+      generationCurrent: async () => true,
     };
     expect(await gjcTranscriptForPane("pane", home, home, options)).toBeNull();
     header("ready");
@@ -848,6 +854,7 @@ it.each(["pid", "birth", "cwd", "pane", "index", "foreground gap", "RPC gap"] as
           writeFileSync(path, JSON.stringify({ type: "session", id: "ready", cwd }) + "\n");
           return { sessionId: "ready", pid, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["ready"] };
         },
+        generationCurrent: async () => true,
       };
       const read = () => gjcTranscriptForPane(pane, cwd, home, options).catch((error: unknown) => error);
       expect(await read()).toBe(result === "timeout" ? failure : null);
@@ -886,6 +893,7 @@ it("retries a failed Windows status lookup with the fresh foreground process, no
         asked.push([...pids]);
         return asked.length === 1 ? null : { sessionId: "ready", pid, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["ready"] };
       },
+      generationCurrent: async () => true,
     };
     expect(await gjcTranscriptForPane("pane", home, home, options)).toBeNull();
     pid = 201;
@@ -916,6 +924,7 @@ it.each(["null", "timeout"] as const)("does not reinstate an older status %s aft
         }
         return { sessionId: "ready", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["ready"] };
       },
+      generationCurrent: async () => true,
     };
     const status = () => gjcTranscriptForPane("pane", home, home, { ...options, purpose: "status" });
     const older = status().catch((error: unknown) => error);
@@ -1056,6 +1065,60 @@ it("uses a fresh Windows process tree for the final process identity check", asy
   } finally { rmSync(home, { recursive: true, force: true }); forgetTranscriptState(); }
 });
 
+it.each(["initial", "cached"] as const)("does not treat an unobservable %s process birth as absence or reuse stale authority", async phase => {
+  forgetTranscriptState();
+  const home = tempDir("gjc-birth-unavailable-");
+  try {
+    const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+    const store = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+    mkdirSync(cwd); mkdirSync(store, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+    writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId: "live", pid: 200 }));
+    const path = join(store, "main.jsonl");
+    writeFileSync(path, JSON.stringify({ type: "session", id: "live", cwd }) + "\n");
+    let birth: number | null = 1000, errorCode: string | null = null, lookups = 0;
+    const options = {
+      platform: "linux",
+      processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+      processBirth: () => {
+        if (errorCode) throw Object.assign(new Error("private proc detail"), { code: errorCode });
+        return birth;
+      },
+      sdkTranscript: async () => { lookups += 1; return { sessionId: "live", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["live"] }; },
+      generationCurrent: async () => true,
+    };
+    if (phase === "cached") expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+    for (const outage of [null, "EACCES", "ENOENT"] as const) {
+      birth = outage === null ? null : 1000;
+      errorCode = outage;
+      const failure = await gjcTranscriptForPane("pane", cwd, home, options).catch(error => error);
+      expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(JSON.stringify(failure)).not.toContain("private proc detail");
+    }
+    birth = 2000; errorCode = null;
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+    expect(lookups).toBe(phase === "cached" ? 2 : 1);
+  } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it("does not treat a known Windows GJC process with unknown birth as absence", async () => {
+  forgetTranscriptState();
+  const home = tempDir("gjc-windows-birth-unavailable-");
+  try {
+    let started: number | undefined;
+    let lookups = 0;
+    const options = {
+      platform: "win32",
+      processInfo: async () => ({ process_info: { shell_pid: 100 } }),
+      readProcessTable: async () => [{ pid: 200, parent: 100, path: "C:\\gjc.exe", commandLine: "C:\\gjc.exe", started }],
+      sdkTranscript: async () => { lookups += 1; return null; },
+    };
+    await expect(gjcTranscriptForPane("pane", home, home, options)).rejects.toMatchObject({ reason: "unavailable" });
+    started = 1000;
+    expect(await gjcTranscriptForPane("pane", home, home, options)).toBeNull();
+    expect(lookups).toBe(1);
+  } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
 it("asks the Windows process table once for the polls of a few seconds", async () => {
   forgetTranscriptState();
   const rows = [{ pid: 100, parent: 4, path: null, commandLine: "powershell.exe" }];
@@ -1072,4 +1135,27 @@ it("asks the Windows process table once for the polls of a few seconds", async (
   await recentProcessTable(unreadable, 20_000);
   await recentProcessTable(unreadable, 20_001);
   expect(failed).toBe(2);
+  let rejected = 0;
+  const unavailable = async (): Promise<typeof rows> => { rejected += 1; throw new Error("private process table"); };
+  await expect(recentProcessTable(unavailable, 30_000)).rejects.toThrow("private process table");
+  await expect(recentProcessTable(unavailable, 30_001)).rejects.toThrow("private process table");
+  expect(rejected).toBe(2);
+});
+
+it("reports an unreadable Windows process table as unavailable rather than process absence", async () => {
+  forgetTranscriptState();
+  const home = tempDir("gjc-windows-unavailable-");
+  try {
+    const cwd = join(home, "work");
+    mkdirSync(cwd);
+    let sdkCalls = 0;
+    const options = {
+      platform: "win32",
+      processInfo: async () => ({ process_info: { shell_pid: 100 } }),
+      readProcessTable: async () => [],
+      sdkTranscript: async () => { sdkCalls += 1; return null; },
+    };
+    await expect(gjcTranscriptForPane("pane", cwd, home, options)).rejects.toMatchObject({ reason: "unavailable" });
+    expect(sdkCalls).toBe(0);
+  } finally { rmSync(home, { recursive: true, force: true }); forgetTranscriptState(); }
 });

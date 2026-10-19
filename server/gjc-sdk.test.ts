@@ -1,6 +1,6 @@
 /// <reference lib="es2024.sharedmemory" />
 import { afterAll, describe, expect, it, jest } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -289,7 +289,7 @@ describe("GJC SDK transcript identity binding", () => {
       page([], { continuationCursor: "next-page" }),
       broker({ indexSeq: 12, sessions: [session()] }),
     ]);
-    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, conflicting.runner)).resolves.toBeNull();
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, conflicting.runner)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
     expect(conflicting.calls).toHaveLength(2);
   });
 
@@ -457,6 +457,8 @@ describe("GJC SDK transcript identity binding", () => {
   });
 
   it("fails closed for multiple live rows competing for one pane process", async () => {
+    const otherCwd = join(cwd, "other");
+    mkdirSync(otherCwd, { recursive: true });
     const { calls, runner } = fakeRunner([page([session(), session({ sessionId: "session-2" })])]);
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
     expect(calls).toHaveLength(1);
@@ -465,7 +467,7 @@ describe("GJC SDK transcript identity binding", () => {
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, malformed.runner)).resolves.toBeNull();
     expect(malformed.calls).toHaveLength(1);
 
-    const conflictingCwd = fakeRunner([page([session(), session({ locator: { ...locator(), cwd: join(cwd, "other") } })])]);
+    const conflictingCwd = fakeRunner([page([session(), session({ locator: { ...locator(), cwd: otherCwd } })])]);
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, conflictingCwd.runner)).resolves.toBeNull();
     expect(conflictingCwd.calls).toHaveLength(1);
   });
@@ -495,6 +497,8 @@ describe("GJC SDK transcript identity binding", () => {
   });
 
   it("ignores stale, deleted, terminal, legacy, uncertain, and unrelated rows", async () => {
+    const otherCwd = join(cwd, "other");
+    mkdirSync(otherCwd, { recursive: true });
     const invalidRows: Record<string, unknown>[] = [
       { live: false },
       { deleted: true },
@@ -505,7 +509,7 @@ describe("GJC SDK transcript identity binding", () => {
       { endpointGeneration: 0 },
       { hostIncarnation: " " },
       { pid: 999 },
-      { locator: { ...locator(), cwd: join(cwd, "other") } },
+      { locator: { ...locator(), cwd: otherCwd } },
     ];
     for (const invalid of invalidRows) {
       const { calls, runner } = fakeRunner([page([session(invalid)])]);
@@ -515,10 +519,12 @@ describe("GJC SDK transcript identity binding", () => {
   });
 
   it("rechecks the full locator, generation, and host incarnation before returning a path", async () => {
+    const otherState = join(cwd, "other-state");
+    mkdirSync(otherState, { recursive: true });
     const changedRows = [
       session({ endpointGeneration: 5 }),
       session({ hostIncarnation: "linux:next" }),
-      session({ locator: { ...locator(), stateRoot: join(cwd, "other-state") } }),
+      session({ locator: { ...locator(), stateRoot: otherState } }),
     ];
     for (const changed of changedRows) {
       const { calls, runner } = fakeRunner([page([session()]), saved(changed)]);
@@ -530,7 +536,7 @@ describe("GJC SDK transcript identity binding", () => {
   it("rejects an exact lookup from an older broker index sequence", async () => {
     const older = broker({ indexSeq: 10, sessions: [session()], savedSession: { id: "session-1", path: savedPath } });
     const { calls, runner } = fakeRunner([page([session()]), older]);
-    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
     expect(calls).toHaveLength(2);
   });
 
@@ -552,7 +558,7 @@ describe("GJC SDK transcript identity binding", () => {
       page([session()]),
       page([session()], { continuationCursor: "incomplete", savedSession: { id: "session-1", path: savedPath } }),
     ]);
-    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
   });
 
   it("resolves a cold two-call lookup past eight seconds within the ten-second total", async () => {
@@ -673,7 +679,7 @@ describe("GJC SDK transcript identity binding", () => {
     expect(error).not.toHaveProperty("stderr");
   });
 
-  it("propagates typed unavailability on an execution failure during exact session resolution", async () => {
+  it("reports an execution failure during exact session resolution as unavailable", async () => {
     const { calls, runner } = fakeRunner((_args, call) => {
       if (call === 0) return page([session()]);
       throw Object.assign(new Error("SDK executable unavailable"), { code: "ENOENT" });
@@ -710,11 +716,6 @@ describe("GJC SDK transcript identity binding", () => {
   });
 
   it("rejects malformed broker output and repeated or over-budget pagination", async () => {
-    for (const output of ["not json", broker({ indexSeq: 1, sessions: {} })]) {
-      const { runner } = fakeRunner([output]);
-      await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, runner)).resolves.toBeNull();
-    }
-
     const secret = "private broker credentials";
     for (const code of ["ENOENT", "EACCES"]) {
       const output = JSON.stringify({ type: "broker_response", ok: false, error: { code, message: secret } });
@@ -727,18 +728,82 @@ describe("GJC SDK transcript identity binding", () => {
     }
 
     const repeated = fakeRunner([page([], { continuationCursor: "same" }), page([], { continuationCursor: "same" })]);
-    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, repeated.runner)).resolves.toBeNull();
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, repeated.runner)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
     expect(repeated.calls).toHaveLength(2);
 
     for (const cursor of ["", "  ", 7, { token: "cursor" }]) {
       const malformed = fakeRunner([page([], { continuationCursor: cursor })]);
-      await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, malformed.runner)).resolves.toBeNull();
+      await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, malformed.runner)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
       expect(malformed.calls).toHaveLength(1);
     }
 
     const pages = fakeRunner((_args, call) => page([], { continuationCursor: `cursor-${call}` }));
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, pages.runner)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "timeout" });
     expect(pages.calls).toHaveLength(6); // the global spawn budget precedes the larger page ceiling
+  });
+
+  it("classifies oversized discovery and exact broker pages as unavailable", async () => {
+    const oversized = page(Array.from({ length: 101 }, () => session()));
+    for (const phase of ["discovery", "exact"] as const) {
+      for (const lookup of [gjcSdkTranscriptWithRunner, gjcSdkCurrentSessionWithRunner]) {
+        const fixture = fakeRunner(phase === "exact" ? [page([session()]), oversized] : [oversized]);
+        await expect(lookup([321], cwd, agentDir, fixture.runner)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
+        expect(fixture.calls).toHaveLength(phase === "exact" ? 2 : 1);
+      }
+    }
+  });
+
+  it.each(["discovery", "exact"] as const)("reports malformed %s broker responses as sanitized unavailable on both APIs", async phase => {
+    for (const output of [
+      "not json /private/secret",
+      JSON.stringify({ type: "broker_response", ok: true }),
+      broker({ indexSeq: 11, sessions: {} }),
+      broker({ sessions: [session()] }),
+    ]) {
+      for (const lookup of [gjcSdkTranscriptWithRunner, gjcSdkCurrentSessionWithRunner]) {
+        const fixture = fakeRunner(phase === "exact" ? [page([session()]), output] : [output]);
+        const failure = await lookup([321], cwd, agentDir, fixture.runner).catch((error: unknown) => error);
+        expect(failure).toEqual(new GjcSdkLookupError("unavailable"));
+        expect(JSON.stringify(failure)).not.toContain("secret");
+        expect(fixture.calls).toHaveLength(phase === "exact" ? 2 : 1);
+      }
+    }
+  });
+
+  it("keeps a valid empty roster as a null identity on both APIs", async () => {
+    for (const lookup of [gjcSdkTranscriptWithRunner, gjcSdkCurrentSessionWithRunner]) {
+      const fixture = fakeRunner([page([])]);
+      await expect(lookup([321], cwd, agentDir, fixture.runner)).resolves.toBeNull();
+      expect(fixture.calls).toHaveLength(1);
+    }
+  });
+
+  it.each(["ENOENT", "EACCES"] as const)("reports %s canonicalization outages as unavailable on both APIs", async code => {
+    const missingCwd = join(cwd, `unreadable-${code}`);
+    const native = realpathSync.native;
+    const probe = jest.spyOn(realpathSync, "native").mockImplementation(((path: Parameters<typeof realpathSync.native>[0]) => {
+      if (path === missingCwd) throw Object.assign(new Error("secret canonicalization failure"), { code });
+      return native(path);
+    }) as typeof realpathSync.native);
+    try {
+      for (const lookup of [gjcSdkTranscriptWithRunner, gjcSdkCurrentSessionWithRunner]) {
+        const fixture = fakeRunner([page([session()]), saved()]);
+        const failure = await lookup([321], missingCwd, agentDir, fixture.runner).catch((error: unknown) => error);
+        expect(failure).toEqual(new GjcSdkLookupError("unavailable"));
+        expect(JSON.stringify(failure)).not.toContain("secret");
+        expect(fixture.calls).toHaveLength(0);
+      }
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it("reports unreadable broker locator canonicalization without hiding it as identity mismatch", async () => {
+    for (const lookup of [gjcSdkTranscriptWithRunner, gjcSdkCurrentSessionWithRunner]) {
+      const fixture = fakeRunner([page([session({ locator: { ...locator(), cwd: join(cwd, "missing-broker-cwd") } })])]);
+      await expect(lookup([321], cwd, agentDir, fixture.runner)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
+      expect(fixture.calls).toHaveLength(1);
+    }
   });
 
   it.each(["discovery", "exact"] as const)("reports %s broker failures as sanitized unavailable and never caches them", async phase => {
@@ -867,11 +932,7 @@ describe("GJC SDK session.list cache", () => {
         return page([session()]);
       });
 
-      if (firstResult === "failed") {
-        await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
-      } else {
-        await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toBeNull();
-      }
+      await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
       await expect(gjcSdkCurrentSessionWithRunner([321], cwd, agentDir, fixture.runner)).resolves.toEqual({
         sessionId: "session-1",
         pid: 321,
@@ -915,12 +976,16 @@ describe("GJC SDK session.list cache", () => {
   it("bounds starts across agent roots, fails closed at the deadline, and recovers at the next window", async () => {
     let now = 0;
     const clock = () => now;
-    const fixture = fakeRunner(() => page([session()]));
+    const fixture = fakeRunner((_args, call) => call % 2 === 0 ? page([session()]) : saved());
     const lookup = (root: number) => gjcSdkCurrentSessionWithRunner([321], cwd, join(cwd, `budget-agent-${root}`), fixture.runner, testWorktreeRootResolver, clock);
-    for (const root of [1, 2, 3]) await expect(lookup(root)).resolves.toMatchObject({ sessionId: "session-1" });
+    await expect(gjcSdkTranscriptWithRunner([321], cwd, join(cwd, "budget-agent-1"), fixture.runner, testWorktreeRootResolver, clock))
+      .resolves.toMatchObject({ sessionId: "session-1" });
+    for (const root of [2, 3]) await expect(lookup(root)).resolves.toMatchObject({ sessionId: "session-1" });
     await expect(lookup(4)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "timeout" });
     await expect(lookup(4)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "timeout" });
     expect(fixture.calls).toHaveLength(6);
+    expect(fixture.calls.slice(0, 2).map(({ options }) => options.timeout)).toEqual([5_000, 5_000]);
+    expect(fixture.calls.slice(2).map(({ options }) => options.timeout)).toEqual([2_000, 2_000, 2_000, 2_000]);
     now = 10_050;
     await expect(lookup(4)).resolves.toMatchObject({ sessionId: "session-1" });
     expect(fixture.calls).toHaveLength(8);

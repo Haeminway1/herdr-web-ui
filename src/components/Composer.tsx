@@ -450,7 +450,7 @@ export function Composer({
       element.style.height = `${manualHeight}px`;
       return;
     }
-    // Measure off-flow so an automatic resize never clamps the transcript's scroll.
+    // Measuring the live field at auto height enlarges the transcript and clamps its scroll.
     element.style.height = `${measurement.scrollHeight}px`;
     const height = Math.round(element.getBoundingClientRect().height);
     setAutoHeight((current) => current === height ? current : height);
