@@ -53,8 +53,10 @@ import { isAppShortcut } from "../lib/shortcuts.ts";
 import { plainPageDirection } from "../lib/pageScroll.ts";
 import { keyboardHoldsGrid, keyboardUp } from "../lib/keyboard.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
+import { WebPanelContext } from "../lib/webPanel.ts";
 import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "../lib/terminalGlyphs.ts";
+import { keepDeleteRepeatText, keyboardNeedsText, restoreDeleteRepeatCaret } from "../lib/deleteRepeat.ts";
 import { terminalLabel } from "../lib/terminalLabel.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
@@ -62,6 +64,7 @@ import { modalOpen } from "../lib/focus.ts";
 import { pinchFontSize } from "../lib/pinchFontSize.ts";
 import { narrowPaneFontSize } from "../lib/narrowPaneFont.ts";
 import { finalStep, HERDR_MOUSE_SCROLL_LINES, wheelSteps } from "../lib/wheelSteps.ts";
+import { attachTerminalWheel } from "../lib/terminalWheel.ts";
 
 /** How long a resize must rest before the grid refits and the pty follows it. */
 const RESIZE_SETTLE_MS = 120;
@@ -188,7 +191,10 @@ export function PaneTerminal({
   const openFile = useContext(OpenFileContext);
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
+  const openWebPage = useContext(WebPanelContext);
   const machineId = useMachineId();
+  const openWebRef = useRef((uri: string, shiftKey: boolean) => openWebPage?.(uri, shiftKey, machineId) ?? false);
+  openWebRef.current = (uri, shiftKey) => openWebPage?.(uri, shiftKey, machineId) ?? false;
   const branchWord = usePaneBranch(machineId, workspaceId);
   const machineSessions = useMachineSessions();
   const sessionRef = useRef<MachineSession | null>(null);
@@ -232,8 +238,8 @@ export function PaneTerminal({
   // what the grid's region announces: the pane's own name, or the grid's kind while none is open
   const terminalName = terminalLabel(paneId, title, t);
   /** read by the wheel handler, which is attached once for the terminal's life */
-  const wheelSpeedRef = useRef(terminalWheelSpeed);
-  wheelSpeedRef.current = terminalWheelSpeed;
+  const wheelStateRef = useRef({ speed: terminalWheelSpeed, omoQuestion: false });
+  wheelStateRef.current = { speed: terminalWheelSpeed, omoQuestion: agent === "omo" && agentStatus === "blocked" };
   const hostRef = useRef<HTMLDivElement | null>(null);
   const pinchBadgeRef = useRef<HTMLSpanElement | null>(null);
   const pinchStatusRef = useRef<HTMLSpanElement | null>(null);
@@ -241,6 +247,7 @@ export function PaneTerminal({
   const baseFontRef = useRef(terminalFontSize);
   const stackRef = useRef<HTMLDivElement | null>(null);
   const pageScroll = useRef<((direction: -1 | 1) => void) | null>(null);
+  const lineScroll = useRef<((lines: number) => void) | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   /** OSC 8 links this app cannot open are not drawn (#739); its state ends with `term.reset()` */
@@ -578,7 +585,7 @@ export function PaneTerminal({
           if (!linkPressed(event)) return;
           const path = fileUriPath(uri);
           if (path !== null) openFileRef.current?.(path);
-          else if (isWebLink(uri)) openWebLink(uri);
+          else if (isWebLink(uri) && !openWebRef.current(uri, event.shiftKey)) openWebLink(uri);
         },
         allowNonHttpProtocols: true,
       },
@@ -606,7 +613,7 @@ export function PaneTerminal({
     term.loadAddon(fit);
     matchHerdrWidths(term);
     // the same policy as the linkHandler above: an http(s) address or nothing (S10)
-    term.loadAddon(new WebLinksAddon((_event, uri) => { if (isWebLink(uri)) openWebLink(uri); }));
+    term.loadAddon(new WebLinksAddon((event, uri) => { if (isWebLink(uri) && !openWebRef.current(uri, event.shiftKey)) openWebLink(uri); }));
     term.registerLinkProvider(terminalFileLinkProvider(() => term.buffer.active, (path, event) => { if (linkPressed(event)) openFileRef.current?.(path); }));
     term.open(host);
     let compositionEndTimer: number | null = null;
@@ -630,6 +637,19 @@ export function PaneTerminal({
     };
     host.addEventListener("compositionstart", compositionStart);
     host.addEventListener("compositionend", compositionEnd);
+    // iOS repeats a held ⌫ only while the field has text and wraps (#862). These run after
+    // xterm's own capturing listeners on its textarea, so they refill it once xterm emptied it.
+    const textarea = term.textarea;
+    const keepText = (event: Event): void => {
+      if (!textarea || composingRef.current) return;
+      if ((event instanceof KeyboardEvent || event instanceof InputEvent) && event.isComposing) return;
+      if (event.type === "focus" || event.type === "keydown") restoreDeleteRepeatCaret(textarea);
+      if (event instanceof KeyboardEvent && event.keyCode === 229) return;
+      keepDeleteRepeatText(textarea);
+    };
+    const keepTextOn = textarea && keyboardNeedsText(navigator) ? ["focus", "keydown", "input"] : [];
+    for (const type of keepTextOn) textarea?.addEventListener(type, keepText, true);
+    if (textarea && keepTextOn.length) textarea.style.whiteSpace = "pre-wrap";
     const stopGlyphs = adjustTerminalGlyphs(term);
     // Let the browser emit a paste event, which xterm already handles (including
     // bracketed paste). Otherwise Ctrl+V becomes 0x16, triggering the agent's
@@ -686,35 +706,10 @@ export function PaneTerminal({
       }
       return true;
     });
-    // herdr reads the wheel as mouse reports. Were reporting ever off, xterm would turn
-    // a wheel into arrow keys, which walk an agent's prompt history instead of scrolling.
-    // A selecting drag takes the wheel itself (see below); after one, a wheel scrolls the
-    // highlight's text away, so the highlight goes with it.
-    // xterm sends one mouse report per wheel event whatever its delta, so herdr scrolls
-    // the same few lines per notch: at a wheel speed above 1 a real wheel is replayed to send
-    // that many reports. The replays and the touch translation below are untrusted, so neither
-    // repeats. A replay is the same event, keys held included: xterm ignores a wheel with
-    // Shift down, and a replay without it scrolled where the wheel itself did not.
-    term.attachCustomWheelEventHandler((event) => {
-      if (drag) {
-        dragWheel(event);
-        return false;
-      }
-      // an adopted grid sends herdr nothing: the wheel is the browser's, and pans the mount
-      if (adopted()) return false;
-      if (term.hasSelection()) term.clearSelection();
-      const reporting = term.modes.mouseTrackingMode !== "none";
-      // a trackpad pinch arrives as a wheel with Ctrl down: it is not scrolling, and goes once as before
-      if (reporting && event.isTrusted && event.target && !event.ctrlKey) {
-        for (let sent = 1; sent < wheelSpeedRef.current; sent += 1) {
-          event.target.dispatchEvent(new WheelEvent("wheel", {
-            bubbles: true, cancelable: true, deltaX: event.deltaX, deltaY: event.deltaY, deltaMode: event.deltaMode,
-            clientX: event.clientX, clientY: event.clientY,
-            ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey, metaKey: event.metaKey,
-          }));
-        }
-      }
-      return reporting;
+    attachTerminalWheel(term, wheelStateRef, {
+      drag: (event) => { if (!drag) return false; dragWheel(event); return true; },
+      adopted: () => adopted(),
+      scroll: (lines) => lineScroll.current?.(lines),
     });
     termRef.current = term;
     setTerminal(term);
@@ -1696,6 +1691,10 @@ export function PaneTerminal({
     };
     /** `steps` line-mode wheel reports at the finger, each one herdr scroll step in the sign's direction */
     const sendTouchWheels = (steps: number): void => {
+      if (wheelStateRef.current.omoQuestion) {
+        lineScroll.current?.(-steps * HERDR_MOUSE_SCROLL_LINES);
+        return;
+      }
       const target = term.element ?? host;
       for (let sent = 0; sent < Math.abs(steps); sent += 1) {
         target.dispatchEvent(new WheelEvent("wheel", {
@@ -1999,6 +1998,7 @@ export function PaneTerminal({
       document.removeEventListener("visibilitychange", onVisibility);
       onModifiedEnter.dispose();
       onCommandBackspace.dispose();
+      for (const type of keepTextOn) textarea?.removeEventListener(type, keepText, true);
       host.removeEventListener("keydown", onCommandArrow);
       onData.dispose();
       host.removeEventListener("paste", onPaste, true);
@@ -2016,6 +2016,7 @@ export function PaneTerminal({
       stopGlyphs();
       host.removeEventListener("compositionstart", compositionStart);
       host.removeEventListener("compositionend", compositionEnd);
+      for (const type of keepTextOn) textarea?.removeEventListener(type, keepText, true);
       if (compositionEndTimer !== null) window.clearTimeout(compositionEndTimer);
       compositionCommitPendingRef.current = false;
       // A replacement mount must not share its host with the retiring terminal.
@@ -2893,6 +2894,7 @@ export function PaneTerminal({
         <span className="visually-hidden" ref={pinchStatusRef} aria-live="polite" />
         {paneId !== null && <TerminalViewportTools key={paneId} viewportIntent={viewportIntent} terminal={terminal} paneId={paneId}
           pageScroll={chatView ? undefined : pageScroll}
+          lineScroll={chatView ? undefined : lineScroll}
           onApplicationPage={sendApplicationPage}
           enabled={presented && connected && outputReady && !chatView && !held && !ended && !released && !unsupported}
           interactive={!observing && !secretActive && !viewportSearching} search={searchState} onError={setInputError} />}
