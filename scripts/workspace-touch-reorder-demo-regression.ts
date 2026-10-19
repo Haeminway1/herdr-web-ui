@@ -63,11 +63,19 @@ async function checkPinned(page: Page, cdp?: CDPSession): Promise<void> {
   assert.deepEqual(await pinnedRows(page), ids);
   const restRows = () => page.locator(".machine-workspaces .sidebar-list > .workspace-list:not(.workspace-list-pinned) > .workspace-group").evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.workspace));
   const restBefore = await restRows();
-  const drag = async (source: string, target: string) => {
-    if (cdp) await stroke(page, cdp, await centerOf(page, source), await centerOf(page, target), 1);
+  const drag = async (source: string, target: string, expectPinnedDrop = false) => {
+    if (cdp) await stroke(page, cdp, await centerOf(page, source), await centerOf(page, target), 1, async () => {
+      if (!expectPinnedDrop) return;
+      const hover = await page.locator(".workspace-list-pinned .workspace-group").evaluateAll((rows) => rows.map((row) => {
+        const rect = row.getBoundingClientRect();
+        return { id: (row as HTMLElement).dataset.workspace, drop: (row as HTMLElement).dataset.drop,
+          lifted: row.classList.contains("is-lifted"), top: rect.top, bottom: rect.bottom, transform: (row as HTMLElement).style.transform };
+      }));
+      assert.ok(hover.some((row) => row.id === target && row.drop === "after"), `the pinned finger hovers its intended drop target before release: ${JSON.stringify(hover)}`);
+    });
     else await row(source).dragTo(row(target));
   };
-  await drag(ids[0]!, ids[1]!);
+  await drag(ids[0]!, ids[1]!, true);
   const expected = [ids[1], ids[0]];
   // CDP's touchEnd acknowledges the event before React necessarily commits the saved pin order.
   try {
