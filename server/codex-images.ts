@@ -4,6 +4,7 @@ import { open } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { ConversationPart } from "../shared/protocol.ts";
+import type { CodexReadScope } from "./codex.ts";
 
 type ImagePart = Extract<ConversationPart, { kind: "image" }>;
 type RecordValue = Record<string, unknown>;
@@ -69,11 +70,11 @@ async function imageBytes(value: string, cwd: string): Promise<Buffer | null> {
 }
 
 /** Scan the bound history only, including inherited rollouts but excluding backtracked bytes. */
-export async function codexTranscriptImage(segments: { path: string; end: number }[], ref: string, cwd: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
+export async function codexTranscriptImage(segments: { path: string; end: number }[], ref: string, cwd: string, io?: CodexReadScope): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
   if (!CODEX_IMAGE_REF.test(ref)) return null;
   for (const segment of segments) {
     if (segment.end === 0) continue;
-    const stream = createReadStream(segment.path, { end: segment.end - 1, encoding: "utf8" });
+    const stream = createReadStream(segment.path, { fd: io?.fd(segment.path), autoClose: io === undefined, start: 0, end: segment.end - 1, encoding: "utf8" });
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
     try {
       for await (const line of lines) {
@@ -86,7 +87,7 @@ export async function codexTranscriptImage(segments: { path: string; end: number
           return bytes && mediaType ? { mediaType, bytes: new Uint8Array(bytes) } : null;
         }
       }
-    } catch { return null; }
+    } catch (error) { if (io) throw error; return null; }
     finally { lines.close(); stream.destroy(); }
   }
   return null;

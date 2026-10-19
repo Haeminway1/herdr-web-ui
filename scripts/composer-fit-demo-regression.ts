@@ -928,7 +928,10 @@ try {
           for (const [kind, text] of [["soft-wrapped", wrapped], ["explicit-newline", "First line\nSecond line\nThird line"]] as const) {
             await box.fill(text);
             await page.waitForFunction((height) => document.querySelector(".composer-text")!.clientHeight > height, initial.height);
-            await atBottom();
+            await atBottom().catch(async (error) => {
+              console.error("Draft growth displaced the transcript", { width, kind, initial, current: await geometry(), frames: await samples.evaluate(({ resizeFrames }) => resizeFrames) });
+              throw error;
+            });
             const grown = await geometry();
             assert.ok(grown.viewport < initial.viewport, `${kind}: a taller draft reduces the transcript viewport`);
             assert.ok(Math.abs(grown.spacing - initial.spacing) <= 1, `${kind}: growth preserves the output/input gap`);
