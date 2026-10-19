@@ -288,19 +288,19 @@ try {
       if (!finishCase || finishCase === "previous-answer") {
         for (const source of ["claude-transcript", "codex-transcript", "pi-transcript", "omp-transcript", "omo-transcript", "gjc-transcript", "opencode-transcript", "grok-transcript", "devin-transcript", "hermes-transcript", "agy-transcript"] as const) {
           await withPage(browser, {}, async (page) => {
-            await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}`);
-            await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.omp);
+            await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
+            await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.infra);
             const first: ConversationResponse = { source, history_id: "finish-proof", turns: [
               { role: "assistant", ts: "2026-10-19T00:00:00Z", parts: [{ kind: "text", text: "First completed answer", phase: "final_answer" }] },
             ] };
-            await page.evaluate(({ id, first }) => window.sidebarFixture.conversation(id, first), { id: panes.omp, first });
-            await page.evaluate((id) => window.sidebarFixture.frame({ type: "conversation-changed", pane_id: id, signature: "first-finish" }), panes.omp);
+            await page.evaluate(({ id, first }) => window.sidebarFixture.conversation(id, first), { id: panes.infra, first });
+            await page.evaluate((id) => window.sidebarFixture.frame({ type: "conversation-changed", pane_id: id, signature: "first-finish" }), panes.infra);
             await page.getByText("First completed answer", { exact: true }).waitFor();
-            await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
+            await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
             await waitStatus(page, INFRA, "idle");
-            const count = await page.evaluate((id) => window.sidebarFixture.reads[id] ?? 0, panes.omp);
-            await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 102), panes.omp);
-            await page.waitForFunction(({ id, count }) => (window.sidebarFixture.reads[id] ?? 0) > count, { id: panes.omp, count });
+            const count = await page.evaluate((id) => window.sidebarFixture.reads[id] ?? 0, panes.infra);
+            await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 102), panes.infra);
+            await page.waitForFunction(({ id, count }) => (window.sidebarFixture.reads[id] ?? 0) > count, { id: panes.infra, count });
             await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
             assert.equal(await agent(page, INFRA).locator(".sidebar-status").getAttribute("data-status"), "done",
               `${source}: a previous completed answer cannot acknowledge the new finish`);
@@ -311,7 +311,7 @@ try {
             await page.evaluate(({ id, second }) => {
               window.sidebarFixture.conversation(id, second);
               window.sidebarFixture.frame({ type: "conversation-changed", pane_id: id, signature: "second-finish" });
-            }, { id: panes.omp, second });
+            }, { id: panes.infra, second });
             await page.getByText("Second completed answer", { exact: true }).waitFor();
             await waitStatus(page, INFRA, "idle");
           });
@@ -320,17 +320,17 @@ try {
       }
       if (!finishCase || finishCase === "resume-replay") {
         await withPage(browser, {}, async (page) => {
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}&view=terminal`);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}&view=terminal`);
           await page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]").waitFor();
           const retained = await page.locator(".pane-frame.is-current .terminal-stack").elementHandle();
-          await page.evaluate((id) => window.sidebarFixture.frame({ type: "input-ready", pane_id: id, ready: false }), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "input-ready", pane_id: id, ready: false }), panes.infra);
           await agent(page, API).locator(".agent-select").click();
           await page.evaluate((id) => {
             // Also accept the previous bridge's replay-before-ready order on resume.
             window.sidebarFixture.replay(id, true, "quiet recovered replay\r\n", true);
             window.sidebarFixture.block(id, "loading");
             return window.sidebarFixture.finish(id, "done", 103);
-          }, panes.omp);
+          }, panes.infra);
           await agent(page, INFRA).locator(".agent-select").click();
           await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
           await waitStatus(page, INFRA, "idle");
@@ -342,22 +342,22 @@ try {
       }
       if (!finishCase || finishCase === "recovery") {
         for (const observing of [false, true]) await withPage(browser, {}, async (page) => {
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}&view=terminal`);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}&view=terminal`);
           const content = page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]");
           await content.waitFor();
           await page.evaluate(({ id, observing }) => {
             if (observing) window.sidebarFixture.frame({ type: "role-ack", mode: "observe" });
             window.sidebarFixture.frame({ type: "input-ready", pane_id: id, ready: false });
-          }, { id: panes.omp, observing });
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
+          }, { id: panes.infra, observing });
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
           await waitStatus(page, INFRA, "done");
           assert.equal(await content.count(), 0, "attachment loss revokes the old screen's presentation");
-          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "old attachment tail\r\n" }), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "old attachment tail\r\n" }), panes.infra);
           await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           assert.equal(await content.count(), 0, "output before recovery cannot re-arm presentation");
-          await page.evaluate((id) => window.sidebarFixture.frame({ type: "input-ready", pane_id: id }), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "input-ready", pane_id: id }), panes.infra);
           assert.equal(await content.count(), 0, "recovery alone must wait for new output");
-          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "recovered screen\r\n" }), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "recovered screen\r\n" }), panes.infra);
           await waitStatus(page, INFRA, "idle");
           await content.waitFor();
           await page.evaluate(async (id) => {
@@ -365,28 +365,28 @@ try {
             window.sidebarFixture.frame({ type: "input-ready", pane_id: id, ready: false });
             window.sidebarFixture.frame({ type: "input-ready", pane_id: id });
             await window.sidebarFixture.finish(id, "done", 102);
-          }, panes.omp);
+          }, panes.infra);
           await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           await waitStatus(page, INFRA, "done");
           assert.equal(await content.count(), 0, "a pre-loss parse callback cannot re-arm a recovered attachment");
-          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "fresh after queued parse\r\n" }), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "fresh after queued parse\r\n" }), panes.infra);
           await waitStatus(page, INFRA, "idle");
         });
         console.log("PASS attachment recovery needs fresh output for owners and observers");
       }
       if (!finishCase || finishCase === "transcript-finish") {
         for (const source of ["claude-transcript", "codex-transcript"] as const) await withPage(browser, {}, async (page) => {
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}`);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
           const pending: ConversationResponse = { source, history_id: "pending-fixture", turns: [
             { role: "user", ts: "2026-10-19T01:00:00Z", parts: [{ kind: "text", text: "Current request" }] },
             { role: "assistant", ts: "2026-10-19T01:00:01Z", parts: [{ kind: "text", text: "Still working", phase: "commentary" }] },
           ] };
-          await page.evaluate(({ id, pending }) => window.sidebarFixture.conversation(id, pending), { id: panes.omp, pending });
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.omp);
+          await page.evaluate(({ id, pending }) => window.sidebarFixture.conversation(id, pending), { id: panes.infra, pending });
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.infra);
           await page.getByText("Still working", { exact: true }).waitFor({ state: "attached" });
-          const before = await page.evaluate((id) => window.sidebarFixture.reads[id] ?? 0, panes.omp);
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
-          await page.waitForFunction(({ id, before }) => (window.sidebarFixture.reads[id] ?? 0) > before, { id: panes.omp, before });
+          const before = await page.evaluate((id) => window.sidebarFixture.reads[id] ?? 0, panes.infra);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
+          await page.waitForFunction(({ id, before }) => (window.sidebarFixture.reads[id] ?? 0) > before, { id: panes.infra, before });
           await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           assert.equal(await agent(page, INFRA).locator(".sidebar-status").getAttribute("data-status"), "done",
             "a read after DONE without the final answer is still unread");
@@ -395,7 +395,7 @@ try {
           await page.evaluate(({ id, finished }) => {
             window.sidebarFixture.conversation(id, finished);
             window.sidebarFixture.frame({ type: "conversation-changed", pane_id: id, signature: "final-answer" });
-          }, { id: panes.omp, finished });
+          }, { id: panes.infra, finished });
           await page.getByText("Final answer arrived", { exact: true }).waitFor();
           await waitStatus(page, INFRA, "idle");
         });
@@ -406,15 +406,15 @@ try {
           if (finishCase && finishCase !== kind) continue;
           await withPage(browser, {}, async (page) => {
             await page.emulateMedia({ reducedMotion: "reduce" });
-            await page.evaluate((id) => window.sidebarFixture.pad(id, 30), panes.omp);
-            await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}`);
-            await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.omp);
+            await page.evaluate((id) => window.sidebarFixture.pad(id, 30), panes.infra);
+            await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
+            await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.infra);
             const log = page.getByRole("log");
             await page.evaluate(() => document.fonts.ready);
             await page.waitForFunction((id) => [...document.querySelectorAll("[data-pane-content]")].some((node) => {
               const key = JSON.parse(node.getAttribute("data-pane-content") ?? "null");
               return key?.[1] === id && key[5] === 100;
-            }), panes.omp);
+            }), panes.infra);
             await page.waitForFunction(() => {
               const node = document.querySelector('[role="log"]');
               return node && node.scrollHeight > node.clientHeight + 200 && node.scrollHeight - node.clientHeight - node.scrollTop <= 1;
@@ -429,7 +429,7 @@ try {
               });
               await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
               assert.equal(await page.locator(".chat-new-messages").count(), 1, "a mutation at the old endpoint must respect the pending older jump");
-              await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
+              await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
               await waitStatus(page, INFRA, "done");
               assert.equal(await page.locator(".chat-frame[data-pane-content]").count(), 0);
               await log.evaluate((node) => { Reflect.deleteProperty(node, "scrollTo"); });
@@ -450,8 +450,8 @@ try {
           const terminal = kind === "held" || kind === "unattached";
           await page.evaluate(({ id, kind }) => {
             if (kind !== "crash" && kind !== "refresh") window.sidebarFixture.block(id, kind);
-          }, { id: panes.omp, kind });
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}&view=${terminal ? "terminal" : "chat"}${kind === "crash" ? "&crash=pane" : ""}`);
+          }, { id: panes.infra, kind });
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}&view=${terminal ? "terminal" : "chat"}${kind === "crash" ? "&crash=pane" : ""}`);
           if (kind !== "crash") await page.locator(".conn-live").waitFor({ state: "attached" });
           if (kind === "crash") await page.getByRole("alert").filter({ hasText: "This pane can't be shown." }).waitFor();
           if (kind === "loading") await page.waitForFunction(() => window.sidebarFixture.blockedReads > 0);
@@ -459,12 +459,12 @@ try {
           if (kind === "held") await page.getByText("Another app has this pane open.", { exact: false }).first().waitFor();
           if (kind === "refresh") {
             await page.locator(".chat-turn").first().waitFor();
-            await page.evaluate((id) => window.sidebarFixture.block(id, "loading"), panes.omp);
+            await page.evaluate((id) => window.sidebarFixture.block(id, "loading"), panes.infra);
           }
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
           await waitStatus(page, INFRA, "done");
           assert.equal(await page.evaluate((id) => Object.keys(localStorage).some((key) =>
-            key.startsWith("herdr-web-ui:finish:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.omp), false,
+            key.startsWith("herdr-web-ui:finish:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.infra), false,
           `${kind}: content not presented must leave no seen record`);
           const evidence = process.env["UI_EVIDENCE_DIR"];
           if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `finish-${kind}.png`) }); }
@@ -479,22 +479,22 @@ try {
       for (const kind of ["composer", "composer-files-failed"] as const) {
         if (finishCase && finishCase !== kind) continue;
         await withPage(browser, {}, async (page) => {
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}`);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
           await page.locator(".conn-live").waitFor({ state: "attached" });
           const input = page.getByRole("textbox", { name: "Message", exact: true });
-          if (kind === "composer-files-failed") await page.evaluate((id) => window.sidebarFixture.block(id, "files"), panes.omp);
+          if (kind === "composer-files-failed") await page.evaluate((id) => window.sidebarFixture.block(id, "files"), panes.infra);
           await input.fill(kind === "composer" ? "/" : "@missing");
           await page.locator(".menu.composer-menu").waitFor();
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
           // The answer has actually arrived for this finish. Otherwise readiness alone could
           // keep the dot briefly and let this test pass without the popup coverage gate.
           await page.waitForFunction((id) => [...document.querySelectorAll("[data-pane-content]")].some((node) => {
             const key = JSON.parse(node.getAttribute("data-pane-content") ?? "null");
             return key?.[1] === id && key[5] === 101;
-          }), panes.omp);
+          }), panes.infra);
           await agent(page, INFRA).locator('.sidebar-status[data-status="done"]').waitFor({ state: "attached" });
           assert.equal(await page.evaluate((id) => Object.keys(localStorage).some((key) =>
-            key.startsWith("herdr-web-ui:finish:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.omp), false);
+            key.startsWith("herdr-web-ui:finish:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.infra), false);
           const evidence = process.env["UI_EVIDENCE_DIR"];
           if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `finish-${kind}-phone.png`) }); }
           await input.fill("");
@@ -505,14 +505,14 @@ try {
       }
       if (!finishCase || finishCase === "drawer") {
         await withPage(browser, {}, async (page) => {
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}&sidebar=shown`);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}&sidebar=shown`);
           await page.locator(".sidebar.is-open").waitFor();
           await page.locator(".agents-sidebar .agent-section-toggle").tap();
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.infra);
           await waitStatus(page, INFRA, "working");
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
           await waitStatus(page, INFRA, "done");
-          assert.equal(await page.locator(`.workspace-select[data-pane="${panes.omp}"] .sidebar-status`).getAttribute("data-status"), "done",
+          assert.equal(await page.locator(`.workspace-select[data-pane="${panes.infra}"] .sidebar-status`).getAttribute("data-status"), "done",
             "a finish behind the phone drawer stays unread in the workspace roll-up");
           assert.equal(await page.locator(".sidebar.is-open").count(), 1);
           const evidence = process.env["UI_EVIDENCE_DIR"];
@@ -527,14 +527,14 @@ try {
       }
       if (!finishCase || finishCase === "hidden-composer") {
         await withPage(browser, {}, async (page) => {
-          await page.evaluate(({ a, b }) => window.sidebarFixture.split(b, a), { a: panes.omp, b: panes.api });
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}`);
+          await page.evaluate(({ a, b }) => window.sidebarFixture.split(b, a), { a: panes.infra, b: panes.api });
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
           await page.getByRole("textbox", { name: "Message", exact: true }).fill("/");
           await page.locator(".menu.composer-menu").waitFor();
           // The same tab keeps the first pane mounted. Selecting through its real sidebar
           // handler avoids navigating/reloading, which would silently discard the popup.
           await agent(page, API).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
-          const hidden = page.locator(`[data-layout-pane="${panes.omp}"].is-hidden`);
+          const hidden = page.locator(`[data-layout-pane="${panes.infra}"].is-hidden`);
           await hidden.waitFor({ state: "attached" });
           assert.equal(await hidden.locator(".menu.composer-menu").count(), 1);
           await page.locator(`[data-layout-pane="${panes.api}"]:not(.is-hidden)`).waitFor();
@@ -561,14 +561,14 @@ try {
           await page.evaluate(async ({ hidden, focused }) => {
             await window.sidebarFixture.finish(hidden, "done", 100);
             await window.sidebarFixture.zoom(hidden, focused);
-          }, { hidden: panes.omp, focused: panes.api });
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}`);
+          }, { hidden: panes.infra, focused: panes.api });
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
           await page.locator(`[data-layout-pane="${panes.api}"]:not(.is-hidden)`).waitFor();
           await page.waitForFunction((id) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === id, panes.api);
-          assert.equal(await page.locator(`[data-layout-pane="${panes.omp}"].is-hidden`).count(), 1);
+          assert.equal(await page.locator(`[data-layout-pane="${panes.infra}"].is-hidden`).count(), 1);
           await waitStatus(page, INFRA, "done");
           const recorded = await page.evaluate((id) => Object.keys(localStorage).some((key) =>
-            key.startsWith("herdr-web-ui:finish:local:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.omp);
+            key.startsWith("herdr-web-ui:finish:local:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.infra);
           assert.equal(recorded, false, "a redirected deep link never acknowledges the hidden pane");
         });
         console.log("PASS a deep link into a zoomed tab acknowledges only the presented pane");
@@ -578,12 +578,12 @@ try {
           await page.evaluate(async ({ opened, unread }) => {
             await window.sidebarFixture.finish(opened, "done", 100);
             await window.sidebarFixture.finish(unread, "done", 100);
-          }, { opened: panes.omp, unread: panes.api });
+          }, { opened: panes.infra, unread: panes.api });
           await waitStatus(page, INFRA, "done");
           await agent(page, INFRA).locator(".agent-select").click();
           await waitStatus(page, INFRA, "idle");
-          await page.locator(`.workspace-select[data-pane="${panes.hermes}"]`).click();
-          await page.waitForFunction((id) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === id, panes.hermes);
+          await page.locator(`.workspace-select[data-pane="${panes.docs}"]`).click();
+          await page.waitForFunction((id) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === id, panes.docs);
           await waitStatus(page, INFRA, "idle");
           await waitStatus(page, API, "done");
           await page.reload();
@@ -592,8 +592,8 @@ try {
             const { machines } = await (await fetch("/api/machines")).json() as { machines: Machine[] };
             return machines[0]?.snapshot?.agents.filter((agent) => ids.includes(agent.pane_id))
               .map((agent) => [agent.pane_id, agent.agent_status, agent.state_change_seq]);
-          }, [panes.omp, panes.api]);
-          assert.deepEqual(raw?.sort(), [[panes.omp, "done", 100], [panes.api, "done", 100]].sort(),
+          }, [panes.infra, panes.api]);
+          assert.deepEqual(raw?.sort(), [[panes.infra, "done", 100], [panes.api, "done", 100]].sort(),
             "reload preserves the same raw DONE and counter for both the opened pane and unread control");
           await waitStatus(page, INFRA, "idle");
           await waitStatus(page, API, "done");
@@ -611,16 +611,16 @@ try {
       }
       if (!finishCase || finishCase === "overlay") {
         await withPage(browser, {}, async (page) => {
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}`);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
           await page.locator(".conn-live").waitFor({ state: "attached" });
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.infra);
           // A deep-linked file mounts the real full-screen viewer even when the demo cannot
           // serve its contents. It covers the selected pane until the user dismisses it.
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}&file=${encodeURIComponent("/tmp/finish.txt")}`);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}&file=${encodeURIComponent("/tmp/finish.txt")}`);
           await page.locator(".file-viewer").waitFor();
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
           await agent(page, INFRA).locator('.sidebar-status[data-status="done"]').waitFor({ state: "attached" });
-          const key = `herdr-web-ui:finish:local:${encodeURIComponent("sidebar-fixture:local:1")}:${encodeURIComponent(panes.omp)}`;
+          const key = `herdr-web-ui:finish:local:${encodeURIComponent("sidebar-fixture:local:1")}:${encodeURIComponent(panes.infra)}`;
           assert.equal(await page.evaluate((key) => localStorage.getItem(key), key), null,
             "a phone file viewer does not acknowledge the finish underneath");
           const evidence = process.env["UI_EVIDENCE_DIR"];
@@ -639,12 +639,12 @@ try {
         if (process.env["SIDEBAR_SCROLL_ARRIVAL"] && process.env["SIDEBAR_SCROLL_ARRIVAL"] !== arrival) continue;
         await withPage(browser, {}, async (page) => {
           await page.emulateMedia({ reducedMotion: "reduce" });
-          await page.evaluate((id) => window.sidebarFixture.pad(id, 30), panes.omp);
-          await page.goto(`${url}?pane=${encodeURIComponent(panes.omp)}`);
+          await page.evaluate((id) => window.sidebarFixture.pad(id, 30), panes.infra);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
           await page.locator(".chat-turn").first().waitFor();
           // the phone's drawer is closed: its rows are in the page, not on screen
           const statusIs = (status: string) => agent(page, INFRA).locator(`.sidebar-status[data-status="${status}"]`).waitFor({ state: "attached", timeout: 10_000 });
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "working", 100), panes.infra);
           await statusIs("working");
           // Reading older turns: the end, where this finish's answer lands, is out of view.
           const log = page.getByRole("log");
@@ -661,7 +661,7 @@ try {
             }, true));
             await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
             await page.locator(".chat-turn").first().waitFor();
-            await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
+            await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
             await statusIs("idle");
             assert.equal(await log.evaluate((node) => node.scrollTop), 0);
             assert.ok(await log.evaluate((node) => node.scrollHeight <= node.clientHeight));
@@ -669,14 +669,14 @@ try {
               "restoring a saved non-end position does not leave a fully visible chat away");
             return;
           }
-          const before = await page.evaluate((id) => window.sidebarFixture.reads[id] ?? 0, panes.omp);
-          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.omp);
+          const before = await page.evaluate((id) => window.sidebarFixture.reads[id] ?? 0, panes.infra);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
           await statusIs("done");
           // The read for this finish has come back and two frames have drawn it: without the
           // reading-position gate, the finish would be recorded by now.
-          await page.waitForFunction(([id, count]) => (window.sidebarFixture.reads[id as string] ?? 0) > (count as number), [panes.omp, before] as const);
+          await page.waitForFunction(([id, count]) => (window.sidebarFixture.reads[id as string] ?? 0) > (count as number), [panes.infra, before] as const);
           await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-          const key = `herdr-web-ui:finish:local:${encodeURIComponent("sidebar-fixture:local:1")}:${encodeURIComponent(panes.omp)}`;
+          const key = `herdr-web-ui:finish:local:${encodeURIComponent("sidebar-fixture:local:1")}:${encodeURIComponent(panes.infra)}`;
           assert.equal(await page.evaluate((key) => localStorage.getItem(key), key), null,
             "a finish whose end is scrolled out of view is not recorded as seen");
           assert.equal(await agent(page, INFRA).locator(".sidebar-status").getAttribute("data-status"), "done");
@@ -996,17 +996,17 @@ try {
         // opening it here reads it: its DONE draws as ready, and stays so once another pane is open
         // and after a reload (the record is this browser's)
         await agent(page, INFRA).locator(".agent-select").click();
-        await page.waitForFunction((paneId) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === paneId, panes.omp, { timeout: 5_000 });
+        await page.waitForFunction((paneId) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === paneId, panes.infra, { timeout: 5_000 });
         await waitStatus(page, INFRA, "idle");
         assert.equal((await agentTitles(page))[1], INFRA, "reading a finish does not move it");
-        await page.locator(".machine-workspaces .workspace-select", { hasText: "flaky-retry-test" }).first().click();
+        await page.locator(`.machine-workspaces .workspace-select[data-pane="${panes.shell}"]`).click();
         await waitStatus(page, INFRA, "idle");
         // a later finish not looked at gets its dot again
         await agent(page, INFRA).locator(".agent-select").click();
         await page.locator(".composer-text").fill("One more check");
         await page.locator(".composer-text").press("Enter");
         await waitStatus(page, INFRA, "working");
-        await page.locator(".machine-workspaces .workspace-select", { hasText: "flaky-retry-test" }).first().click();
+        await page.locator(`.machine-workspaces .workspace-select[data-pane="${panes.shell}"]`).click();
         await waitStatus(page, INFRA, "done");
       });
       console.log("PASS Activity pins blocked and follows recency; an opened DONE reads as ready after switching until the next finish");

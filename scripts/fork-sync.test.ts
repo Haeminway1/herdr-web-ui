@@ -278,6 +278,8 @@ exit 77
     ...process.env,
     HOME: home,
     XDG_STATE_HOME: stateHome,
+    // A sync worker inherits its real deploy root. Fixtures must never use that checkout.
+    FORK_SYNC_REPO: work,
     ROUTE_CALLS: routeCalls,
     FORK_SYNC_ROUTE_BIN: route,
     FORK_SYNC_GJC_BIN: gjc,
@@ -293,7 +295,7 @@ exit 77
       ...baseEnv,
       HERDR_FORK_SYNC_RETRY_SECONDS: String(options.retryDelay ?? 0),
       FAKE_GJC_MODE: options.mode ?? "success",
-      ...(options.repo ? { FORK_SYNC_REPO: options.repo } : {}),
+      FORK_SYNC_REPO: options.repo ?? "",
       ...(options.ready ? { FAKE_GJC_READY: options.ready } : {}),
       ...(options.releaseFifo ? { FAKE_GJC_RELEASE_FIFO: options.releaseFifo } : {}),
       ...(options.oldLauncherCalls ? { OLD_LAUNCHER_CALLS: options.oldLauncherCalls } : {}),
@@ -380,6 +382,23 @@ function advanceOrigin(work: string, origin: string) {
   cmd(peer, "git", "push", "origin", "deploy/haemin");
   return cmd(peer, "git", "rev-parse", "HEAD");
 }
+
+test("fixture ignores an inherited production repository override", () => {
+  const previous = process.env.FORK_SYNC_REPO;
+  process.env.FORK_SYNC_REPO = "/fixture-production-must-not-be-read";
+  try {
+    const { home, upstream, run, state, herdrCallCount } = fixture();
+    advanceUpstream(home, upstream, 1);
+    const result = run({ dry: true });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("would be checked");
+    expect(existsSync(state)).toBe(false);
+    expect(herdrCallCount()).toBe(0);
+  } finally {
+    if (previous === undefined) delete process.env.FORK_SYNC_REPO;
+    else process.env.FORK_SYNC_REPO = previous;
+  }
+});
 
 test("dry-run leaves checkout, refs, fetch metadata, state and worktrees untouched", () => {
   const { home, work, upstream, state, run, herdrCallCount } = fixture();

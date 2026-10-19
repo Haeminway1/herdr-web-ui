@@ -432,9 +432,20 @@ ${rows.map((row) => `│ ${row.padEnd(52)}│`).join("\n")}
     expect(prompt).toMatchObject({
       kind: "menu", title: "Review answers", question: "Submit these answers?", custom_option_index: null,
     });
-    expect(prompt?.body).toContain("1. Transport: Remote relay");
-    expect(prompt?.body).toContain("2. Targets: ARM server");
+    expect(prompt?.answers).toEqual([
+      { question: "Transport", answer: "Remote relay" },
+      { question: "Targets", answer: "ARM server" },
+    ]);
+    expect(prompt?.body).toBeNull();
     expect(labels(prompt)).toEqual(["Submit", "Cancel"]);
+    const noted = parseInteractivePrompt("omp", screen
+      .replace("│ 1. Transport: Remote relay                                      │\n", "│ 1 unanswered question; Enter still submits.                     │\n│                                                                 │\n│ 1. Transport: Remote relay                                      │\n│    Note: keep the old relay                                     │\n")
+      .replace("2. Targets: ARM server        ", "2. Targets:                    "));
+    expect(noted?.answers).toEqual([
+      { question: "Transport", answer: "Remote relay", note: "keep the old relay" },
+      { question: "Targets", answer: null },
+    ]);
+    expect(noted?.body).toBe("1 unanswered question; Enter still submits.");
     expect(answerKeys(prompt!, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
     expect(answerKeys(prompt!, { option_index: 1 })).toEqual([{ keys: ["esc"] }]);
     expect(() => answerKeys(prompt!, { custom_text: "submit now" })).toThrow();
@@ -618,7 +629,11 @@ Ready to submit your answers?
 `);
     // a menu: a typed pick submits every answer at once, so the chat asks for Confirm
     expect(review).toMatchObject({ kind: "menu", title: "Review your answers", question: "Ready to submit your answers?", custom_option_index: null });
-    expect(review?.body).toContain("→ Repo owner");
+    expect(review?.answers).toEqual([
+      { question: "Which way should the PR go?", answer: "Log in as owner" },
+      { question: "Who should author the commits?", answer: "Repo owner" },
+    ]);
+    expect(review?.body).toBeNull();
     expect(labels(review)).toEqual(["Submit answers", "Cancel"]);
 
     const bash = parseInteractivePrompt("claude", `
@@ -1422,16 +1437,77 @@ ${rule}
       const card = parseInteractivePrompt("claude", withRule(rows));
       expect(card).toMatchObject({ kind: "menu", title: "Review your answers", question: "Ready to submit your answers?", custom_option_index: null });
       expect(labels(card)).toEqual(["Submit answers", "Cancel"]);
-      expect(card?.body).toContain("→ Repo owner");
+      expect(card?.answers?.map((item) => item.question)).toEqual([
+        "Which way should the PR go?", "Who should author the commits?", "What should the release notes say?",
+      ]);
+      expect(card?.answers?.[1]).toEqual({ question: "Who should author the commits?", answer: "Repo owner" });
       expect(answerKeys(card!, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
     }
+  });
+
+  test("reads a question the pane wrapped as one line, not as the terminal broke it", () => {
+    const card = parseInteractivePrompt("claude", `
+←  ☒ Names  ☒ Replay  ✔ Submit  →
+
+Review your answers
+
+ ● What should the two top-level rows be called?
+   → Fictional repo names (Recommended)
+ ● The demo's terminal replay (git log, bun test, the pretend shell) lives in the 'release' shell workspace. What
+ happens to it?
+   → Second tab in a repo (Recommended)
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+`);
+    expect(card?.answers).toEqual([
+      { question: "What should the two top-level rows be called?", answer: "Fictional repo names (Recommended)" },
+      { question: "The demo's terminal replay (git log, bun test, the pretend shell) lives in the 'release' shell workspace. What happens to it?", answer: "Second tab in a repo (Recommended)" },
+    ]);
+    expect(card?.body).toBeNull();
+  });
+
+  test("keeps Claude's own warning out of the answers, and marks what the top cut off", () => {
+    // Claude Code 2.1.302 draws the warning at the panel's edge, the answers indented
+    const card = parseInteractivePrompt("claude", `
+←  ☐ Names  ☒ Replay  ✔ Submit  →
+
+Review your answers
+
+⚠ You have not answered all questions
+
+ ● The demo's terminal replay lives in the 'release' shell workspace. What happens to it?
+   → Second tab in a repo
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+`);
+    expect(card?.answers).toEqual([{ question: "The demo's terminal replay lives in the 'release' shell workspace. What happens to it?", answer: "Second tab in a repo" }]);
+    expect(card?.body).toBe("⚠ You have not answered all questions");
+
+    // the pane's top cut an answer: its rest is shown as a rest, not as a question
+    const cut = parseInteractivePrompt("claude", tall.replace(/^[\s\S]*?(?=   the chat my own words typed in the chat\n)/, "\n"));
+    expect(cut?.answers?.[0]).toEqual({ question: null, answer: "…the chat my own words typed in the chat" });
+    expect(cut?.answers?.[1]?.answer).toBe("Once a day");
   });
 
   test("reads a review cut off at the top of the pane, its tabs and heading out of view", () => {
     const card = parseInteractivePrompt("claude", tall);
     expect(card).toMatchObject({ kind: "menu", title: "Review your answers", question: "Ready to submit your answers?" });
     expect(labels(card)).toEqual(["Submit answers", "Cancel"]);
-    expect(card?.body).toContain("→ Once a day");
+    // the wrapped lines of a question and of an answer read as one line each
+    expect(card?.answers).toEqual([
+      {
+        question: "The PC splits traffic between the main server and the reserve almost evenly, because both servers sit in the same city and answer equally fast. Which way should we go?",
+        answer: "my own words typed in the chat ".repeat(5).trim(),
+      },
+      { question: "After every subscription update the client restarts the tunnel. How often should the subscription be updated?", answer: "Once a day" },
+      { question: "The client has no leak protection. What should we do?", answer: `${"my own words typed in the chat ".repeat(3)}my own words typed in my own words typed in the chat my o` },
+    ]);
   });
 
   test("does not take an answered review above later output and the session's rule for an open one", () => {
@@ -2186,6 +2262,47 @@ describe("Claude's suggested next prompt", () => {
     expect(claudeInputDraft(strip(screen('\u276f Try "x"')), screen('\u276f Try "x"'))).toBe(true);
     // colors not verified to show the live screen prove nothing
     expect(claudeInputDraft(strip(tip), null)).toBe(true);
+  });
+
+  test("Claude's IDE pill after the ❯ is no draft and hides no suggestion (#1096)", () => {
+    // Claude Code 2.1.302, from its bundle (not a captured screen): with an editor connected the input's
+    // leading pill `[⧉ N lines selected] ` or `[⧉ In <file>] ` is painted in the theme's IDE color, not
+    // dim, before the placeholder (its first character inverse, the rest dim)
+    const strip = (ansi: string) => ansi.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+    const pill = (label: string) => `\u001b[38;2;71;130;200m[⧉ ${label}] \u001b[39m`;
+    const grey = (text: string) => `\u001b[7m${text[0]}\u001b[27m\u001b[2m${text.slice(1)}\u001b[22m`;
+    const read = (row: string) => {
+      const ansi = screen(row);
+      const live = strip(ansi);
+      return { draft: claudeInputDraft(live, ansi), empty: claudeInputEmpty(live, ansi), clearable: claudeClearableDraft(live, ansi) };
+    };
+    const empty = { draft: false, empty: true, clearable: null };
+    expect(read(`❯ ${pill("1 line selected")}${grey('Try "refactor this function"')}`)).toEqual(empty);
+    expect(read(`❯ ${pill("In src/foo.ts")}${grey('Try "refactor this function"')}`)).toEqual(empty);
+    expect(read(`❯ ${pill("1 line selected")}\u001b[7m \u001b[27m`)).toEqual(empty);
+    expect(read(`❯ ${pill("12 lines selected")}`)).toEqual(empty);
+    expect(read(`❯ ${grey('Try "refactor this function"')}`)).toEqual(empty);
+    // a pill alone needs no colors to read as empty
+    expect(claudeInputDraft(strip(screen(`❯ ${pill("12 lines selected")}`)), null)).toBe(false);
+    // typed text after the pill is a draft, offered for clearing without the pill
+    expect(read(`❯ ${pill("1 line selected")}hello there\u001b[7m \u001b[27m`)).toEqual({ draft: true, empty: false, clearable: "hello there " });
+    expect(read(`❯ ${pill("In src/foo.ts")}\u001b[7mr\u001b[27mun`)).toEqual({ draft: true, empty: false, clearable: "run" });
+    // Claude's suggestion after the pill is still offered, its tip still is not
+    expect(parseClaudeSuggestion(screen(`❯ ${pill("3 lines selected")}${grey("run the tests again")}`))).toBe("run the tests again");
+    expect(parseClaudeSuggestion(screen(`❯ ${pill("3 lines selected")}${grey('Try "refactor this function"')}`))).toBeNull();
+    expect(parseClaudeSuggestion(screen(`❯ ${pill("3 lines selected")}typed`))).toBeNull();
+    // the chat's own message restored after the pill is that message
+    const restored = screen(`❯ ${pill("1 line selected")}run the tests`);
+    expect(claudeRestoredDraft(strip(restored), restored, "run the tests")).toBe("run the tests");
+    // drawn without colors (NO_COLOR): the pill and the tip after it are no draft, typed words are
+    const plainRule = "\u2500".repeat(60);
+    const colorless = (row: string) => ["", plainRule, row, plainRule, "  \u23f5\u23f5 auto mode on (shift+tab to cycle)"].join("\r\n");
+    const tip = colorless('❯ [⧉ 1 line selected] \u001b[7mT\u001b[27mry "refactor this function"');
+    expect(claudeInputDraft(strip(tip), tip)).toBe(false);
+    expect(claudeInputEmpty(strip(tip), tip)).toBe(true);
+    const typed = colorless("❯ [⧉ 1 line selected] Try this instead");
+    expect(claudeInputDraft(strip(typed), typed)).toBe(true);
+    expect(claudeClearableDraft(strip(typed), typed)).toBe("Try this instead");
   });
 
   test("OmO's box while it works, under a rule its status labels, is read like Claude's", () => {
@@ -3648,6 +3765,7 @@ describe("Codex's model lists", () => {
 describe("an answer and the menu it was made for", () => {
   interface Pane {
     agent: string; status: string; screen: string; sent: string[]; onSent?: (sent: string) => void;
+    managed?: { id: string | null; harness: "gjc" | "omo" | "codex" | "claude" | null; generation: number | null; state: "ready" | "identity_pending" | "blocked"; reason: string | null; session_id: string | null };
     /** the pane's folder and its Codex rollout, for a prompt named by the agent's own call */
     cwd?: string; rollout?: string;
     /** how long herdr takes over each screen read from now on */
@@ -3686,7 +3804,7 @@ describe("an answer and the menu it was made for", () => {
         const answer = (result: unknown) => socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
         const snapshotDelay = request.method === "session.snapshot" ? pane.nextSnapshotDelay : undefined;
         if (snapshotDelay !== undefined) pane.nextSnapshotDelay = undefined;
-        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}) })), layouts: [] } }), snapshotDelay ?? 0);
+        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.managed ? { managed_session: pane.managed } : {}), ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}) })), layouts: [] } }), snapshotDelay ?? 0);
         if (request.method === "pane.read") {
           pane.onRead?.();
           const once = pane.nextRead;
@@ -3731,6 +3849,55 @@ describe("an answer and the menu it was made for", () => {
     const body = await response.json() as { error?: { code: string } };
     return { status: response.status, code: body.error?.code };
   }
+
+  const readyManaged = () => ({ id: "a".repeat(32), harness: "claude" as const, generation: 1, state: "ready" as const, reason: null, session_id: "session-one" });
+
+  test("binds identical managed menus to nonce, generation and session identity", async () => {
+    await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
+      pane.managed = readyManaged();
+      const first = (await card())!;
+      pane.managed = { ...pane.managed, generation: 2 };
+      expect((await card())!.id).not.toBe(first.id);
+      expect(await answer(first.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      const second = (await card())!;
+      pane.managed = { ...pane.managed, session_id: "session-two" };
+      expect((await card())!.id).not.toBe(second.id);
+      expect(await answer(second.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      const third = (await card())!;
+      pane.managed = { ...pane.managed, id: "b".repeat(32) };
+      expect((await card())!.id).not.toBe(third.id);
+      expect(await answer(third.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      const current = (await card())!;
+      expect(await answer(current.id, { option_index: 0 })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["enter"]);
+    });
+  });
+
+  test("pending and blocked managed panes refuse misleading provider menus", async () => {
+    await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
+      for (const state of ["identity_pending", "blocked"] as const) {
+        pane.managed = { ...readyManaged(), state, harness: null, session_id: null };
+        expect(await card()).toBeNull();
+        expect(await answer("provider-menu", { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      }
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test("stops later managed answer keys when the generation changes after menu reads", async () => {
+    await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
+      pane.managed = readyManaged();
+      const current = (await card())!;
+      pane.onSent = (sent) => {
+        if (sent === "down") {
+          pane.screen = claudeBackgroundApproval(1);
+          pane.managed = { ...pane.managed!, generation: 2 };
+        }
+      };
+      expect(await answer(current.id, { option_index: 1 })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down"]);
+    });
+  });
 
   const omoRule = "─".repeat(100);
   const omoWidget = (box = "❯") => `? Question pending (1 unanswered) · 30m
