@@ -1404,4 +1404,7 @@ export const ZH: Record<string, string> = {
   "Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way.": "只有这台 PC 提供的页面（例如 localhost 上的开发服务器）会在窗格旁打开。按住 Shift 点击则以另一种方式打开。",
   "Beside the pane": "在窗格旁",
   "In a new tab": "在新标签页中",
+  "Change PC": "切换电脑",
+  "This is the demo. Go back to the app's list of PCs to open yours.": "这是演示。回到应用的电脑列表即可打开你自己的电脑。",
+  "This app shows {address}. Go back to its list of PCs to open another.": "此应用正在显示 {address}。回到电脑列表可打开其他电脑。",
 };

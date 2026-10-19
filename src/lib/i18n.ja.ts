@@ -1402,4 +1402,7 @@ export const JA: Record<string, string> = {
   "Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way.": "localhost の開発サーバーなど、この PC が配信するページだけがペインの横に開きます。Shift キーを押しながらクリックすると、もう一方で開きます。",
   "Beside the pane": "ペインの横",
   "In a new tab": "新しいタブ",
+  "Change PC": "PCを切り替え",
+  "This is the demo. Go back to the app's list of PCs to open yours.": "これはデモです。アプリのPC一覧に戻って、ご自分のPCを開いてください。",
+  "This app shows {address}. Go back to its list of PCs to open another.": "このアプリは {address} を表示しています。PC一覧に戻ると別のPCを開けます。",
 };

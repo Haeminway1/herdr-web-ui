@@ -1,5 +1,5 @@
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { afterAll, describe, expect, it, spyOn } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -405,6 +405,31 @@ describe("GJC SDK transcript identity binding", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it.each(["ENOENT", "EACCES"])("keeps %s canonical anchor failures typed on both identity paths", async code => {
+    const root = join(cwd, `anchor-${code}`);
+    mkdirSync(root);
+    for (const target of [cwd, root]) {
+      for (const lookup of [gjcSdkCurrentSessionWithRunner, gjcSdkTranscriptWithRunner]) {
+        const row = session({ locator: { ...locator(), worktreeRoot: root } });
+        const fixture = fakeRunner([page([row]), saved(row)]);
+        const native = realpathSync.native;
+        const denied = spyOn(realpathSync, "native").mockImplementation(((value: string, ...args: unknown[]) => {
+          if (String(value) === target) throw Object.assign(new Error(`secret ${target}`), { code });
+          return Reflect.apply(native, realpathSync, [value, ...args]);
+        }) as typeof realpathSync.native);
+        try {
+          const failure = await lookup([321], cwd, agentDir, fixture.runner, async () => root).catch(error => error);
+          expect(failure).toBeInstanceOf(GjcSdkLookupError);
+          expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+          expect(JSON.stringify(failure)).not.toContain(target);
+          expect(fixture.calls).toHaveLength(0);
+        } finally { denied.mockRestore(); }
+        await expect(lookup([321], cwd, agentDir, fixture.runner, async () => root)).resolves.toMatchObject({ sessionId: "session-1" });
+        expect(fixture.calls).toHaveLength(2);
+      }
+    }
+  });
+
   it("distinguishes two same-cwd panes by each pane's supplied GJC pid", async () => {
     const rows = [session(), session({ sessionId: "session-2", pid: 322 })];
     const { runner } = fakeRunner((args) => {
@@ -436,7 +461,9 @@ describe("GJC SDK transcript identity binding", () => {
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, malformed.runner)).resolves.toBeNull();
     expect(malformed.calls).toHaveLength(1);
 
-    const conflictingCwd = fakeRunner([page([session(), session({ locator: { ...locator(), cwd: join(cwd, "other") } })])]);
+    const other = join(cwd, "other");
+    mkdirSync(other, { recursive: true });
+    const conflictingCwd = fakeRunner([page([session(), session({ locator: { ...locator(), cwd: other } })])]);
     await expect(gjcSdkTranscriptWithRunner([321], cwd, agentDir, conflictingCwd.runner)).resolves.toBeNull();
     expect(conflictingCwd.calls).toHaveLength(1);
   });
