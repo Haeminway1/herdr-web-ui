@@ -433,7 +433,7 @@ async function expectSdkFailure(scenario: string): Promise<void> {
     else if (scenario === "stale") writeRegistry([sdkRow(pid, home, `failure-${scenario}-a`, { live: false })], paths);
     else writeRegistry([target]);
 
-    if (scenario === "unavailable") {
+    if (scenario === "unavailable" || scenario === "malformed") {
       await expect(paneConversation(id)).rejects.toBeInstanceOf(GjcSdkLookupError);
       await expect(paneConversation(id)).rejects.toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
     } else {
