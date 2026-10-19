@@ -8,6 +8,7 @@ import { ConversationUnavailable, forgetTranscriptState, gjcTranscriptPath, pane
 import { isGjcProcess } from "./gjc-runtime.ts";
 import { startShellAgent } from "./shell-agent.ts";
 import * as sdkGeneration from "./gjc-sdk-generation.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 
 const home = realpathSync(mkdtempSync(join(tmpdir(), "herdr-gjc-binding-")));
 const agentDir = join(home, ".gjc", "agent");
@@ -276,7 +277,8 @@ it("keeps subprocess-resolved SDK pane bindings across unrelated signed heartbea
     expect(await gjcTranscriptPath(firstPane, home, home)).toBe(firstPath);
     expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(2);
     expect(await gjcTranscriptPath(secondPane, home, home)).toBe(secondPath);
-    expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(4);
+    // The second pane shares discovery, but still resolves its own exact session.
+    expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(3);
 
     let indexSeq = 2;
     for (let wave = 1; wave <= 3; wave += 1) {
@@ -291,7 +293,7 @@ it("keeps subprocess-resolved SDK pane bindings across unrelated signed heartbea
       ));
       expect(await gjcTranscriptPath(firstPane, home, home)).toBe(firstPath);
       expect(await gjcTranscriptPath(secondPane, home, home)).toBe(secondPath);
-      expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(4);
+      expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(3);
     }
 
     writeRegistry([
@@ -307,7 +309,7 @@ it("keeps subprocess-resolved SDK pane bindings across unrelated signed heartbea
       timestamp + registeredSeq,
     ));
     expect(await gjcTranscriptPath(firstPane, home, home)).toBe(freshPath);
-    expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(6);
+    expect(readFileSync(callsPath, "utf8").split("\n").filter(Boolean)).toHaveLength(5);
   } finally {
     forgetTranscriptState();
     rmSync(indexDir, { recursive: true, force: true });
@@ -430,7 +432,12 @@ async function expectSdkFailure(scenario: string): Promise<void> {
     else if (scenario === "stale") writeRegistry([sdkRow(pid, home, `failure-${scenario}-a`, { live: false })], paths);
     else writeRegistry([target]);
 
-    await expect(paneConversation(id)).rejects.toBeInstanceOf(ConversationUnavailable);
+    if (scenario === "unavailable") {
+      await expect(paneConversation(id)).rejects.toBeInstanceOf(GjcSdkLookupError);
+      await expect(paneConversation(id)).rejects.toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+    } else {
+      await expect(paneConversation(id)).rejects.toBeInstanceOf(ConversationUnavailable);
+    }
   });
 }
 

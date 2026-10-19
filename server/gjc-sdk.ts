@@ -96,10 +96,9 @@ const gitWorktreeRoot: GjcSdkWorktreeRootResolver = async (cwd, timeoutMs) => {
     const { stdout } = await execution;
     return stdout.endsWith("\r\n") ? stdout.slice(0, -2) : stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout;
   } catch (error) {
-    // Git uses 128 outside a worktree. The broker independently validates the null anchor,
-    // so an unrelated Git error cannot authorize a workspace with the wrong identity.
+    // Git uses 128 outside a worktree; execution failures cannot prove a null anchor.
     if (isRecord(error) && error.code === 128) return null;
-    throw error;
+    throw lookupExecutionError(error);
   }
 };
 
@@ -128,7 +127,7 @@ export interface GjcSdkSessionIdentity {
   readonly endpointGeneration: number;
 }
 
-type ResolvedSession = GjcSdkSessionIdentity & { readonly savedSession: unknown };
+type ResolvedSession = GjcSdkSessionIdentity & { readonly savedSession: unknown; readonly guardSessionIds: string[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -459,19 +458,19 @@ async function resolveWorktreeRoot(
   deadline: number,
 ): Promise<string | null | undefined> {
   const timeoutMs = Math.min(COMMAND_TIMEOUT_MS, deadline - Date.now());
-  if (timeoutMs <= 0) return undefined;
+  if (timeoutMs <= 0) throw new GjcSdkLookupError("timeout");
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const root = await Promise.race([
       Promise.resolve().then(() => resolver(cwd, timeoutMs)),
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), timeoutMs);
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new GjcSdkLookupError("timeout")), timeoutMs);
       }),
     ]);
     return root === null ? null : canonicalPath(root) ?? undefined;
-  } catch {
-    return undefined;
+  } catch (error) {
+    throw lookupExecutionError(error);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

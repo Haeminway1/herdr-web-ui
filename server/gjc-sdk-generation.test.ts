@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { gjcSdkGenerationCurrent, type GjcSdkGenerationObserver } from "./gjc-sdk-generation.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
+import { gjcSdkGenerationCurrent, type GjcSdkGenerationObserver } from "./gjc-sdk-generation.ts";
 
 describe("SDK generation revocation", () => {
   it("rechecks the exact native generation on every read rather than caching a positive proof", async () => {
@@ -21,6 +21,17 @@ describe("SDK generation revocation", () => {
     const unavailable = Promise.reject<GjcSdkGenerationObserver>(new Error("SDK unavailable"));
     await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, unavailable)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
     await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, { generationStatus: async () => { throw new Error("secret index unavailable"); } })).rejects.toEqual(new GjcSdkLookupError("unavailable"));
+  });
+
+  it.each(["ENOENT", "EACCES"])("sanitizes %s discovery and generation API failures", async (code) => {
+    const secret = `private ${code} session credentials`;
+    const unavailable = Promise.reject<GjcSdkGenerationObserver>(Object.assign(new Error(secret), { code }));
+    for (const observer of [unavailable, { generationStatus: async () => { throw Object.assign(new Error(secret), { code }); } }]) {
+      const failure = await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer).catch(error => error);
+      expect(failure).toBeInstanceOf(GjcSdkLookupError);
+      expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(JSON.stringify(failure)).not.toContain(secret);
+    }
   });
 
   it("bounds a hung generation observation without accepting cached broker evidence", async () => {

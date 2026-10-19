@@ -20,7 +20,7 @@ import { comboKey, LEGACY_COMBOS } from "./theme-baseline.ts";
 // HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-settings-demo-"));
 const PAGES = ["Appearance", "Chat", "Terminal", "Alerts", "Voice input", "Subscription usage", "Shortcuts", "Phone & devices", "Remote PCs", "Agent integrations", "About"];
-const SETTINGS = { language: "en", showUsage: true, voiceInput: true, showQuickReplies: true, darkTheme: "amber", lightTheme: "amber", sidebarLayout: "upstream" };
+const SETTINGS = { language: "en", showUsage: true, voiceInput: true, showQuickReplies: true, darkTheme: "amber", lightTheme: "amber", sidebarLayout: "upstream", fileOpen: "panel" };
 
 const dialogOf = (page: Page) => page.getByRole("dialog", { name: "Settings", exact: true });
 const openSettings = async (page: Page): Promise<void> => {
@@ -120,7 +120,16 @@ try {
               const body = page.locator(".settings-body:not([hidden])");
               assert.equal(await body.locator("[role='alert']").count(), 0, "the integrations page shows no error");
               const install = (target: string): string => `herdr integration install ${target}`;
-              const shown = await body.locator(".settings-row").evaluateAll((nodes) => nodes.map((node) => ({
+              const launchModes = await body.locator('.settings-section[data-section="launch-modes"] .settings-row').evaluateAll((nodes) => nodes.map((node) => ({
+                label: node.querySelector(".settings-label")?.textContent ?? "",
+                description: node.querySelector(".settings-description")?.textContent ?? "",
+                value: node.querySelector("select")?.value ?? null,
+              })));
+              assert.deepEqual(launchModes, [
+                { label: "Claude Code", description: label("Permission mode"), value: "default" },
+                { label: "Codex", description: label("Sandbox and approvals"), value: "default" },
+              ], "the new-agent launch mode selectors keep their upstream defaults");
+              const shown = await body.locator('.settings-section:not([data-section="launch-modes"]) .settings-row').evaluateAll((nodes) => nodes.map((node) => ({
                 label: node.querySelector(".settings-label")?.textContent ?? "",
                 description: node.querySelector(".settings-description")?.textContent ?? "",
                 command: node.querySelector("code")?.textContent ?? null,
@@ -138,7 +147,7 @@ try {
                 { label: "cursor", description: missing + install("cursor"), command: install("cursor"), copy: copyLabel("cursor") },
                 { label: "antigravity-cli", description: missing + install("antigravity-cli"), command: install("antigravity-cli"), copy: copyLabel("antigravity-cli") },
               ], "every fixture integration, with its state and install command");
-              assert.deepEqual(await body.locator("h3").allTextContents(), [label("Not found on this PC")]);
+              assert.deepEqual(await body.locator("h3").allTextContents(), [label("New agents"), label("Not found on this PC")]);
               const copy = body.getByRole("button", { name: copyLabel("codex"), exact: true });
               await copy.tap();
               await body.getByRole("button", { name: copyLabel("codex"), exact: true }).filter({ hasText: label("Copied") }).waitFor();

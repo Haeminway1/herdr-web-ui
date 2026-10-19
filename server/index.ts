@@ -1,6 +1,7 @@
 import { handleWorkspaceRequest } from "./workspace-routes.ts";
 import { connectionData, createCore, type SocketData } from "./core/index.ts";
 import { handlePaneRequest, paneContext } from "./pane-routes.ts";
+import { handleResidentsRequest } from "./residents.ts";
 import { randomBytes } from "node:crypto";
 import { readHerdrProfiles, type HerdrMachineProfile } from "./herdr-profiles.ts";
 import { accessSync, constants, readFileSync } from "node:fs";
@@ -24,7 +25,6 @@ import { SHELL_AGENTS, shellAgentExecutable } from "./shell-agent.ts";
 import { claudeSessionTempDir } from "./claude-store.ts";
 import { fileResponse, findFile, crossSiteFileRead, forgetPageMedia, pageMediaResponse, pageMediaSource, PAGE_MEDIA_PATH } from "./file-view.ts";
 import { findProjectFavicon } from "./project-favicon.ts";
-import { handleResidentsRequest } from "./residents.ts";
 import {
   agentManifests,
   HerdrError,
@@ -91,7 +91,6 @@ export const SUBMIT_DEADLINE_MS = 45_000;
 /** How long a cleared Claude input box may take to read empty before the send is refused after all. */
 const DRAFT_CLEAR_WAIT_MS = 1_500;
 const DRAFT_CLEAR_POLL_MS = 50;
-
 
 const AGENT_LABELS: Record<string, string> = {
   claude: "Claude Code",

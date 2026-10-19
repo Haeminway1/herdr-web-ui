@@ -117,6 +117,7 @@ const DEFAULT_DEPS: StatusCollectorDeps = {
 export interface StatusCollector {
   /** Initial baselines are reconciled after the status subscription has started. */
   ready: Promise<void>;
+  trackPane: (paneId: string) => void;
   stop: () => void;
 }
 
@@ -190,6 +191,7 @@ function resilientSubscription(
   onEvent: (frame: EventFrame) => void,
   onRestart: () => void,
   isStopped: () => boolean,
+  onFirstStart?: () => void,
 ): { close: () => void } {
   let subscription: Subscription | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -206,6 +208,7 @@ function resilientSubscription(
       onStarted: () => {
         delay = deps.reconnectMinMs;
         if (retry) onRestart();
+        else onFirstStart?.();
       },
       onError: logSubscriptionError,
       onClose: () => {
@@ -262,6 +265,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
   const heard = new Map<string, { status: AgentStatus; agent: string | null }>();
   /** when a pane last ended or closed, counted as events are: a snapshot asked for before that is no news of it */
   const actedOn = new Map<string, number>();
+  const trackedPanes = new Map<string, number>();
   /** when a pane last came to the front: no replay from a snapshot asked for before that. A resync still corrects it */
   const focusedAt = new Map<string, number>();
   /** the status subscription was closed for another pane set, or refused: a change since then may have had no event */
@@ -395,6 +399,14 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
         handlers.onStructureChange();
       }
       const paneIds = snapshot.panes.map((pane) => pane.pane_id);
+      for (const [paneId, seq] of trackedPanes) {
+        if (seq <= askedAt && !paneIds.includes(paneId)) {
+          trackedPanes.delete(paneId);
+          actedOn.set(paneId, ++statusEvents);
+          heard.delete(paneId);
+          handlers.onPaneEnded(paneId);
+        }
+      }
       const sameSet =
         paneIds.length === subscribedPaneIds.size && paneIds.every((id) => subscribedPaneIds.has(id));
       // the live subscription is about to be closed for another pane set: what this snapshot
@@ -490,6 +502,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       const parsed = parseStructureFrame(frame);
       if (!parsed) return;
       if (parsed.kind === "pane-ended") {
+        trackedPanes.delete(parsed.paneId);
         // a snapshot already on its way still holds the pane: it is no news of it
         actedOn.set(parsed.paneId, ++statusEvents);
         heard.delete(parsed.paneId);
@@ -526,6 +539,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       void reconcile();
     },
     () => stopped,
+    () => { if (trackedPanes.size > 0) void reconcile(); },
   );
 
   // Its own connection: a focus type an older herdr refuses must not cost pane exits.
@@ -555,6 +569,10 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
 
   return {
     ready: ready.promise,
+    trackPane(paneId) {
+      trackedPanes.set(paneId, ++statusEvents);
+      void reconcile();
+    },
     stop() {
       stopped = true;
       if (reconcileTimer !== null) clearTimeout(reconcileTimer);

@@ -46,8 +46,11 @@
   overflow: auto;
 }
 
+/* Keep fullwidth punctuation at its cell width while xterm measures and draws it. */
 .pane-terminal .xterm {
   padding: var(--space-2) var(--space-2) 0;
+  text-spacing-trim: space-all;
+  text-autospace: no-autospace;
 }
 
 /* the mount's own box: everything that may overlay the pty (the chat lens) is

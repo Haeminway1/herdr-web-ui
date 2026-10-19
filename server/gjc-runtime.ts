@@ -97,14 +97,14 @@ export function storeRelative(root: string, file: string, paths: PlatformPath = 
   return parts[0] === ".." ? null : parts;
 }
 
-/** GJC's native terminal-sessions key, not the most recently written cwd session. */
-export function gjcTerminal(pid: number): GjcTerminal | null {
+/** GJC's native terminal-sessions key; an injected environment avoids a second /proc read. */
+export function gjcTerminal(pid: number, environ?: readonly string[] | null): GjcTerminal | null {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try {
     if (process.platform === "linux") {
       const startedAt = processStartedAt(pid);
       if (startedAt === null) return null;
-      const env = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
+      const env = environ === undefined ? readFileSync(`/proc/${pid}/environ`, "utf8").split("\0") : environ ?? [];
       const tmux = env.find((word) => word.startsWith("TMUX="))?.slice(5);
       const pane = env.find((word) => word.startsWith("TMUX_PANE="))?.slice(10);
       if (tmux && pane && /^%\d+$/.test(pane)) return { id: `tmux-${pane}`, startedAt };
@@ -197,14 +197,14 @@ export function terminalBreadcrumb(agentDir: string, cwd: string, terminalId: st
  * active session; never infer ownership from cwd or session recency. `path` is null unless
  * exactly one transcript qualifies; `found` says how many did.
  */
-export function heldTranscript(agentDir: string, cwd: string, pids: readonly number[]): { path: string | null; found: number } {
+export function heldTranscript(agentDir: string, cwd: string, pids: readonly number[], environOf?: (pid: number) => readonly string[] | null | undefined): { path: string | null; found: number } {
   let root: string;
   try { root = realpathSync(join(agentDir, "sessions")); }
   catch { return { path: null, found: 0 }; }
   const open = new Set<string>();
   const breadcrumbs = new Set<string>();
   for (const pid of pids) {
-    const terminal = gjcTerminal(pid);
+    const terminal = gjcTerminal(pid, environOf?.(pid));
     if (terminal) {
       const path = terminalBreadcrumb(agentDir, cwd, terminal.id, terminal.startedAt);
       if (path) breadcrumbs.add(path);
@@ -322,10 +322,7 @@ export function gjcTranscriptForPane(
   const key = JSON.stringify([paneId, cwd, home, options.platform ?? process.platform]);
   const flights = transcriptFlights.get(key) ?? new Set<{ options: GjcTranscriptOptions; flight: Promise<string | null> }>();
   for (const shared of flights) {
-    if (shared.options.processInfo === options.processInfo
-      && shared.options.processBirth === options.processBirth
-      && shared.options.sdkTranscript === options.sdkTranscript
-      && sameLookupContext(shared.options, options)) return shared.flight;
+    if (sameLookupContext(shared.options, options)) return shared.flight;
   }
   const flight: Promise<string | null> = lookupGjcTranscript(key, paneId, cwd, home, options).finally(() => {
     flights.delete(entry);
@@ -395,7 +392,7 @@ async function lookupGjcTranscript(
 
   try {
     const initialInfo = await readProcessInfo(paneId);
-    if (!initialInfo) return null;
+    if (!initialInfo) return forget();
     const initial = await processes(initialInfo, false);
     if (!initial || initial.length === 0) return forget();
     // Read before the lookup: a write that lands during it then makes the next read ask again.
@@ -410,10 +407,15 @@ async function lookupGjcTranscript(
         && gjcIndexUnchanged(agentDir, kept.indexStamp, indexStamp, kept.processes.map(({ pid }) => pid), guardSessionIds)
         && await generationCurrent(agentDir, kept.binding.sessionId, kept.binding.endpointGeneration)) {
         const path = validateGjcSdkTranscript(kept.binding, cwd, agentDir);
-        if (path) {
+        if (path && await generationCurrent(agentDir, kept.binding.sessionId, kept.binding.endpointGeneration)) {
+          const finalInfo = await readProcessInfo(paneId);
+          const final = await processes(finalInfo, true);
+          if (!final || !sameProcesses(final, kept.processes)) return forget();
+          if (validateGjcSdkTranscript(kept.binding, cwd, agentDir) !== path) return forget();
           kept.indexStamp = indexStamp;
           return path;
         }
+        if (path) return forget();
       }
     }
     transcriptBindings.delete(key);
@@ -424,10 +426,12 @@ async function lookupGjcTranscript(
     const path = validateGjcSdkTranscript(binding, cwd, agentDir);
     if (!path) return null;
 
+    if (!await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration)) return null;
     const finalInfo = await readProcessInfo(paneId);
     if (!finalInfo) return null;
     const final = await processes(finalInfo, true);
     if (!final?.some((process) => process.pid === owner.pid && sameBirth(process.birth, owner.birth))) return null;
+    if (validateGjcSdkTranscript(binding, cwd, agentDir) !== path) return null;
     if (indexStamp !== null) {
       for (const [other, entry] of transcriptBindings) if (checkedAt - entry.at >= BINDING_TTL_MS) transcriptBindings.delete(other);
       // aged from before the lookup, when the index stamp was read

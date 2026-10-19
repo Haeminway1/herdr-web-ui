@@ -234,13 +234,7 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       const readIdentity = deps.processIdentity ?? processIdentity;
       const before = readIdentity(child.pid);
       if (!before || before.starttime !== child.starttime || before.boot !== child.boot || before.cwd !== recordCwd) return blocked("blocked_runtime_identity");
-      let live;
-      try {
-        live = await (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
-      } catch (error) {
-        if (error instanceof GjcSdkLookupError) return pending("identity_pending");
-        throw error;
-      }
+      const live = await (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
       const after = readIdentity(before.pid);
       if (!after || after.pid !== before.pid || after.starttime !== before.starttime || after.boot !== before.boot || after.cwd !== before.cwd) return blocked("blocked_runtime_identity");
       const rootAfter = lstatSync(namespace);
@@ -267,7 +261,8 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     identity.state = "ready";
     identity.session_id = sessionId;
     return { identity, sessionFile };
-  } catch {
+  } catch (error) {
+    if (error instanceof GjcSdkLookupError) return pending("identity_pending");
     return blocked("blocked_managed_record_unavailable");
   }
 }
