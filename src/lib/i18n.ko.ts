@@ -1400,4 +1400,7 @@ export const KO: Record<string, string> = {
   "Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way.": "localhost 개발 서버처럼 이 PC가 여는 페이지만 창 옆에 열립니다. Shift-클릭하면 반대쪽으로 엽니다.",
   "Beside the pane": "창 옆에",
   "In a new tab": "새 탭에서",
+  "Change PC": "PC 바꾸기",
+  "This is the demo. Go back to the app's list of PCs to open yours.": "데모 화면입니다. 앱의 PC 목록으로 돌아가 내 PC를 여세요.",
+  "This app shows {address}. Go back to its list of PCs to open another.": "이 앱은 {address}를 보여 주고 있습니다. PC 목록으로 돌아가 다른 PC를 열 수 있습니다.",
 };
