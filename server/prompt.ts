@@ -1,12 +1,20 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { HerdrPane, InteractivePrompt, PromptAnswer } from "../shared/protocol.ts";
+import type { HerdrPane, InteractivePrompt, InteractivePromptAnswer, InteractivePromptOption, ManagedSessionIdentity, PromptAnswer, SessionSnapshot } from "../shared/protocol.ts";
 import { codexTranscriptPath, paneCodexHome, unansweredCodexQuestions, type QueuedQuestion } from "./codex.ts";
 import { HerdrError, paneRead, paneScrollInfo, paneSendKeys, paneSendText, sessionSnapshot } from "./herdr/client.ts";
 import { omoTranscriptForPane } from "./omo.ts";
 import { OmoAskReader, omoAsksAfter, type OmoAskCall, type OmoAsks } from "./omo-ask.ts";
 import { badRequest, errorResponse, jsonResponse } from "./http.ts";
 import { claudePlanFile } from "./claude-plan.ts";
+import {
+  listPendingQuestionForms,
+  readOpenCodeService,
+  replyOpenCodeForm,
+  type OpenCodeFormFieldOption,
+  type OpenCodeFormInfo,
+} from "./opencode-service.ts";
+import { opencodeSessionId } from "./opencode.ts";
 
 const ANSI_RE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const SELECTED_RE = /^[❯›>]\s*/;
@@ -142,6 +150,7 @@ type Responder =
   | "hermes-question"
   | "hermes-input"
   | "omp-submit"
+  | "opencode-question"
   | "fallback-menu"
   | "fallback-gjc-menu"
   | "fallback-keys";
@@ -150,6 +159,17 @@ type ParsedPrompt = InteractivePrompt & {
   responder: Responder;
   /** Stable question identity across the folded widget and the expanded form. */
   omoQuestion?: { call: string; index: number };
+  openCodeForm?: {
+    formId: string;
+    fieldKey: string;
+    stepIndex: number;
+    totalSteps: number;
+    options: OpenCodeFormFieldOption[];
+    sessionID: string;
+    state: OpenCodePromptEntry;
+    revision: number;
+    available: boolean;
+  };
   menuLabels: string[];
   selectedIndex: number;
   checkedOptionIndices: number[];
@@ -428,6 +448,11 @@ function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
     custom_option_index: parsed.custom_option_index,
     ...(parsed.queued ? { queued: parsed.queued } : {}),
     ...(parsed.steps ? { steps: parsed.steps } : {}),
+    ...(parsed.answers ? { answers: parsed.answers } : {}),
+    ...(parsed.can_step_back ? { can_step_back: parsed.can_step_back } : {}),
+    ...(parsed.default_option_index !== undefined && parsed.default_option_index !== null ? { default_option_index: parsed.default_option_index } : {}),
+    ...(parsed.default_option_indices ? { default_option_indices: parsed.default_option_indices } : {}),
+    ...(parsed.default_custom_text ? { default_custom_text: parsed.default_custom_text } : {}),
     ...(parsed.fallback ? { fallback: true as const } : {}),
   };
   parsedByPublicPrompt.set(prompt, parsed);
@@ -3076,6 +3101,87 @@ function contentId(prompt: InteractivePrompt | null): string | undefined {
 const formsAnswered = new Map<string, number>();
 const FORM_SETTLE_MS = 3_000;
 
+interface OpenCodeFormDraft {
+  formId: string;
+  stepIndex: number;
+  answers: Record<string, string | string[]>;
+  updatedAt: number;
+}
+
+interface OpenCodePromptEntry {
+  sessionID: string;
+  form: string | null;
+  listed: OpenCodeFormInfo | null;
+  available: boolean;
+  draft?: OpenCodeFormDraft;
+  revision: number;
+  issued: number;
+  applied: number;
+  updatedAt: number;
+}
+
+/** Owned by one server; reads cannot overwrite progress made after they started. */
+export class OpenCodePromptState {
+  readonly entries = new Map<string, OpenCodePromptEntry>();
+  private snapshotIssued = 0;
+  private snapshotApplied = 0;
+  private latestSnapshot: SessionSnapshot | null = null;
+  constructor(readonly now: () => number = Date.now) {}
+
+  checkpoint(): Map<string, { entry: OpenCodePromptEntry; revision: number }> {
+    return new Map([...this.entries].map(([id, entry]) => [id, { entry, revision: entry.revision }]));
+  }
+
+  async snapshot(timeoutMs?: number): Promise<SessionSnapshot> {
+    const issued = ++this.snapshotIssued;
+    const snapshot = await sessionSnapshot(undefined, timeoutMs);
+    if (issued > this.snapshotApplied) {
+      this.snapshotApplied = issued;
+      this.latestSnapshot = snapshot;
+    }
+    if (!this.latestSnapshot || issued === this.snapshotApplied) return snapshot;
+    // Only native OpenCode drafts need this ordering. Other agents' screen readers keep the
+    // snapshot that accompanies their own read, including a newer status in a delayed reply.
+    const nativeIds = new Set([...snapshot.panes, ...this.latestSnapshot.panes]
+      .filter((pane) => pane.agent === "opencode").map((pane) => pane.pane_id));
+    return { ...snapshot, panes: [
+      ...snapshot.panes.filter((pane) => !nativeIds.has(pane.pane_id)),
+      ...this.latestSnapshot.panes.filter((pane) => nativeIds.has(pane.pane_id)),
+    ] };
+  }
+
+  prune(): void {
+    for (const [id, entry] of this.entries) if (this.now() - entry.updatedAt >= 30 * 60_000) this.entries.delete(id);
+  }
+
+  reconcile(panes: readonly HerdrPane[], before = this.checkpoint()): void {
+    this.prune();
+    for (const [id, entry] of this.entries) {
+      const observed = before.get(id);
+      if (observed?.entry !== entry || observed.revision !== entry.revision) continue;
+      const pane = panes.find((pane) => pane.pane_id === id);
+      if (!pane || opencodeSessionId(pane) !== entry.sessionID || pane.agent !== "opencode") this.entries.delete(id);
+    }
+  }
+
+  begin(paneId: string, sessionID: string): OpenCodePromptEntry {
+    this.prune();
+    let entry = this.entries.get(paneId);
+    if (!entry || entry.sessionID !== sessionID) {
+      entry = { sessionID, form: null, listed: null, available: false, revision: 0, issued: 0, applied: 0, updatedAt: this.now() };
+      this.entries.delete(paneId);
+      this.entries.set(paneId, entry);
+      if (this.entries.size > 64) this.entries.delete(this.entries.keys().next().value!);
+    }
+    return entry;
+  }
+
+  forget(paneId: string): void { this.entries.delete(paneId); }
+  clear(): void { this.entries.clear(); }
+}
+
+const defaultOpenCodeState = new OpenCodePromptState();
+
 /** Each pane's rollout, resolved for its collapsed queue: a poll every 2s would otherwise redo it. */
 const queueRollouts = new Map<string, { path: string | null; at: number }>();
 const QUEUE_ROLLOUT_MS = 15_000;
@@ -3458,28 +3564,58 @@ export async function claudeHeldIsGrey(paneId: string, prompt: InteractivePrompt
     .then((read) => same(claudeGreyInput(read.text)), () => false);
 }
 
-async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[] }> {
-  const { panes } = await sessionSnapshot();
+function managedDeclared(pane: HerdrPane): boolean {
+  return pane.managed_session !== undefined || Object.hasOwn(pane.tokens ?? {}, "hm_managed_session") || Object.hasOwn(pane.tokens ?? {}, "hm_managed_generation");
+}
+
+function managedBinding(pane: HerdrPane): string | null {
+  const identity: ManagedSessionIdentity | undefined = pane.managed_session;
+  if (!identity || identity.state !== "ready" || !identity.id || !/^[0-9a-f]{32}$/.test(identity.id) || !identity.harness
+    || !Number.isSafeInteger(identity.generation) || identity.generation === null || identity.generation <= 0 || !identity.session_id
+    || pane.agent !== identity.harness) return null;
+  const tokens = pane.tokens ?? {};
+  if ((Object.hasOwn(tokens, "hm_managed_session") || Object.hasOwn(tokens, "hm_managed_generation"))
+    && (tokens.hm_managed_session !== identity.id || tokens.hm_managed_generation !== String(identity.generation))) return null;
+  return JSON.stringify([identity.id, identity.harness, identity.generation, identity.session_id]);
+}
+
+async function sameManagedBinding(paneId: string, binding: string | null): Promise<boolean> {
+  if (binding === null) return true;
+  const pane = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
+  return !!pane && managedBinding(pane) === binding;
+}
+
+function bindManagedPrompt(prompt: InteractivePrompt | null, binding: string | null): InteractivePrompt | null {
+  return prompt && binding ? { ...prompt, id: createHash("sha256").update(JSON.stringify([prompt.id, binding])).digest("hex") } : prompt;
+}
+
+async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?: string, openCodeState = defaultOpenCodeState, signal?: AbortSignal): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[]; binding: string | null; stale?: boolean }> {
+  const before = openCodeState.checkpoint();
+  const { panes } = await openCodeState.snapshot();
   // a closed pane's wait has ended too
   for (const logged of fallbackLogged) if (!panes.some((candidate) => candidate.pane_id === logged)) fallbackLogged.delete(logged);
   for (const known of askings.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) askings.delete(known);
   for (const known of answerTurns.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) answerTurns.delete(known);
   for (const known of heldCandidates.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) heldCandidates.delete(known);
   for (const known of chatSent.keys()) if (!panes.some((candidate) => candidate.pane_id === known)) chatSent.delete(known);
+  openCodeState.reconcile(panes, before);
   const pane = panes.find((candidate) => candidate.pane_id === paneId);
   if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
+  const binding = managedDeclared(pane) ? managedBinding(pane) : null;
   const agent = pane.agent ?? "";
   const status = pane.agent_status;
+  if (managedDeclared(pane) && binding === null) return { agent, status, prompt: null, pane, panes, binding };
   // counted right before the screen is read, after the snapshot: what matters is whether an
   // answer ran while the screen was being read
   const turns = answerTurns.get(paneId) ?? 0;
-  const known = await readKnownPrompt(paneId, pane, agent, codexHome, panes);
+  const known = await readKnownPrompt(paneId, pane, agent, codexHome, panes, openCodeStateDir, openCodeState, signal);
+  if (known.stale) return { agent, status, prompt: null, pane, panes, binding, stale: true };
   // an omo form just answered has closed, while herdr still reports the wait for a moment: that
   // is no screen to answer, and its fallback card would flash up after the form's last answer
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
   if (known.prompt !== null || status !== "blocked" || !agent || settling) {
     fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes };
+    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes, binding };
   }
   // herdr says the agent waits on the user and no reader knows the screen: the fallback card
   const screen = known.screen ?? await liveScreen(paneId);
@@ -3488,14 +3624,14 @@ async function readPrompt(paneId: string, codexHome?: string): Promise<{ agent: 
   // (claudeModelListWaits, codexModelListWaits)
   if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexModelListWaits(screen))) || claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE)) {
     fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, null, turns), pane, panes };
+    return { agent, status, prompt: asked(paneId, null, turns), pane, panes, binding };
   }
   const prompt = asked(paneId, parseFallbackPrompt(agent, screen), turns)!;
   if (!fallbackLogged.has(paneId) && fallbackLogged.size < FALLBACK_LOGGED_MAX) {
     fallbackLogged.add(paneId);
     console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
   }
-  return { agent, status, prompt, pane, panes };
+  return { agent, status, prompt, pane, panes, binding };
 }
 
 /**
@@ -3521,11 +3657,149 @@ async function omoAsksFor(paneId: string, cwd: string, panes: HerdrPane[]): Prom
 
 async function readKnownPrompt(
   paneId: string,
-  pane: { cwd?: string | null; agent_status?: string },
+  pane: { cwd?: string | null; agent_status?: string; agent_session?: HerdrPane["agent_session"] },
   agent: string,
   codexHome?: string,
   panes: HerdrPane[] = [],
-): Promise<{ prompt: InteractivePrompt | null; screen?: string }> {
+  openCodeStateDir?: string,
+  openCodeState = defaultOpenCodeState,
+  signal?: AbortSignal,
+): Promise<{ prompt: InteractivePrompt | null; screen?: string; stale?: boolean }> {
+  if (agent === "opencode") {
+    const sessionID = opencodeSessionId(pane);
+    if (!sessionID) return { prompt: null };
+    const state = openCodeState.begin(paneId, sessionID);
+    const config = readOpenCodeService(openCodeStateDir);
+    const revision = state.revision;
+    const issued = ++state.issued;
+    const forms = config ? await listPendingQuestionForms(config, sessionID, signal) : null;
+    if (signal?.aborted || openCodeState.entries.get(paneId) !== state) return { prompt: null, stale: true };
+    if (state.revision === revision && issued >= state.applied) {
+      state.applied = issued;
+      state.available = forms !== null;
+      // Failure is not evidence of settlement. Keep the last native card and its identity.
+      if (forms !== null) {
+        state.listed = forms[0] ?? null;
+        if (state.listed === null && state.form !== null) {
+          state.draft = undefined;
+          state.form = null;
+          state.revision++;
+        }
+      }
+    }
+    // A late read renders the newer applied form and draft, never a synthetic empty card.
+    const form = state.listed;
+    if (!form) return { prompt: null };
+    if (form.fields.length === 0) return { prompt: null };
+
+    // Schema changes under a reused form id are a replacement too.
+    const identity = JSON.stringify(form);
+    if (state.form !== identity) {
+      state.draft = undefined;
+      state.form = identity;
+      state.revision++;
+      state.updatedAt = openCodeState.now();
+    }
+    const draft = state.draft;
+    let stepIndex = 0;
+    if (draft && draft.formId === form.id) {
+      stepIndex = Math.min(draft.stepIndex, form.fields.length - 1);
+    }
+
+    const field = form.fields[stepIndex]!;
+    const multiSelect = field.type === "multiselect";
+    const rawOptions = field.options ?? [];
+    const customAllowed = field.custom === true || rawOptions.length === 0;
+
+    let options: InteractivePromptOption[];
+    let customOptionIndex: number | null = null;
+
+    if (rawOptions.length === 0) {
+      options = [{ label: "Type your answer", description: null }];
+      customOptionIndex = 0;
+    } else {
+      options = rawOptions.map((opt) => ({
+        label: opt.label || opt.value,
+        description: opt.description ?? null,
+      }));
+      if (customAllowed) {
+        options.push({ label: "Type your own answer", description: null });
+        customOptionIndex = options.length - 1;
+      }
+    }
+
+    const title = field.title && field.title !== field.description ? field.title : (form.title || "Question");
+    const question = field.description || field.title || form.title || "";
+    const steps = form.fields.length > 1
+      ? form.fields.map((f, i) => ({
+          label: f.title || `Question ${i + 1}`,
+          answered: i < stepIndex,
+          current: i === stepIndex,
+        }))
+      : undefined;
+
+    let defaultOptionIndex: number | null = null;
+    let defaultOptionIndices: number[] | undefined;
+    let defaultCustomText: string | undefined;
+
+    const savedAnswer = draft?.answers[field.key];
+    if (savedAnswer !== undefined) {
+      if (Array.isArray(savedAnswer)) {
+        defaultOptionIndices = savedAnswer
+          .map((val) => rawOptions.findIndex((opt) => opt.value === val))
+          .filter((idx) => idx >= 0);
+        if (customAllowed) defaultCustomText = savedAnswer.filter((value) => !rawOptions.some((option) => option.value === value)).join("\n") || undefined;
+      } else if (typeof savedAnswer === "string") {
+        const optIdx = rawOptions.findIndex((opt) => opt.value === savedAnswer);
+        if (optIdx >= 0) {
+          defaultOptionIndex = optIdx;
+        } else if (customAllowed) {
+          defaultCustomText = savedAnswer;
+        }
+      }
+    }
+
+    const parsed = finishPrompt(
+      "opencode",
+      {
+        kind: "question",
+        title,
+        question,
+        body: null,
+        options,
+        multi_select: multiSelect,
+        custom_option_index: customOptionIndex,
+        steps,
+        can_step_back: stepIndex > 0,
+        default_option_index: defaultOptionIndex,
+        default_option_indices: defaultOptionIndices,
+        default_custom_text: defaultCustomText,
+      },
+      {
+        responder: "opencode-question",
+        menuLabels: [],
+        selectedIndex: 0,
+        checkedOptionIndices: [],
+        customMenuIndex: customOptionIndex,
+        rejectWithEscapeIndex: null,
+        openCodeForm: {
+          formId: form.id,
+          fieldKey: field.key,
+          stepIndex,
+          totalSteps: form.fields.length,
+          options: rawOptions,
+          sessionID,
+          state,
+          revision: state.revision,
+          available: state.available,
+        },
+      },
+      { call: `${sessionID}:${identity}:${field.key}:${stepIndex}` },
+    );
+
+    return { prompt: publicPrompt(parsed) };
+  }
+
   if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", ""].includes(agent)) return { prompt: null };
   const screen = await liveScreen(paneId);
   // omo's form reads its text from the session's call, the screen showing where the form stands
@@ -3567,7 +3841,7 @@ async function readKnownPrompt(
  * id of the one just answered, which can still be on screen for a moment). alt+↓ elsewhere,
  * on the main prompt or an approval, changes nothing (checked on Codex 0.156.1).
  */
-async function closeQueue(paneId: string, answered: string): Promise<void> {
+async function closeQueue(paneId: string, answered: string, binding: string | null = null): Promise<void> {
   const since = Date.now();
   for (let attempt = 0; attempt < 10; attempt += 1) {
     await Bun.sleep(100);
@@ -3577,7 +3851,7 @@ async function closeQueue(paneId: string, answered: string): Promise<void> {
       // the question just answered, a moment ago; still there after 600ms, it is its twin
       // (Codex takes the Enter at once, and questions may repeat a title and options)
       if (shown.id === answered && Date.now() - since < 600) continue;
-      await paneSendKeys(paneId, [KEY.closeQueue]);
+      if (await sameManagedBinding(paneId, binding)) await paneSendKeys(paneId, [KEY.closeQueue]);
       return;
     }
     if (queuedQuestionCount(screen) > 0 || shown === null) return;
@@ -3600,10 +3874,10 @@ function sameText(shown: string, asked: string): boolean {
  * chat's next read shows the question actually waiting (a skip can leave the rollout's
  * guess behind); a queue that does not open is left alone.
  */
-async function openQueuedQuestion(paneId: string, queued: ParsedPrompt, givenUp: () => boolean = () => false, opens: (open: boolean) => void = () => undefined): Promise<InteractivePrompt | null> {
+async function openQueuedQuestion(paneId: string, queued: ParsedPrompt, givenUp: () => boolean = () => false, opens: (open: boolean) => void = () => undefined, binding: string | null = null): Promise<InteractivePrompt | null> {
   // the key only once the screen still shows the questions' count, nothing of the user's queued,
   // and while somebody still waits for the answer (asked after the read, which takes its time)
-  if (queuedQuestionCount(await liveScreen(paneId)) === 0 || givenUp()) return null;
+  if (queuedQuestionCount(await liveScreen(paneId)) === 0 || givenUp() || !(await sameManagedBinding(paneId, binding))) return null;
   // told before the key goes: it may be pressed and its reply still be lost
   opens(true);
   await paneSendKeys(paneId, [KEY.openQueue]);
@@ -3623,14 +3897,14 @@ async function openQueuedQuestion(paneId: string, queued: ParsedPrompt, givenUp:
   // close of this request's opening, told before it is tried: if its reply is lost, nobody
   // closes a second time what another client may have opened since
   opens(false);
-  await closeOpenQuestion(paneId);
+  await closeOpenQuestion(paneId, binding);
   return null;
 }
 
 /** Closes Codex's queue if a question shows open in it. */
-async function closeOpenQuestion(paneId: string): Promise<void> {
+async function closeOpenQuestion(paneId: string, binding: string | null = null): Promise<void> {
   const screen = await liveScreen(paneId);
-  if (parsePrompt("codex", screen)?.responder === "codex-async-question") await paneSendKeys(paneId, [KEY.closeQueue]);
+  if (parsePrompt("codex", screen)?.responder === "codex-async-question" && await sameManagedBinding(paneId, binding)) await paneSendKeys(paneId, [KEY.closeQueue]);
 }
 
 /** How long an answer waits for the menu to show the cursor on its row, before it is refused. */
@@ -3643,10 +3917,10 @@ const SETTLE_MS = 1_500;
  * step and never the one just answered. A screen that does not move within a second leaves it to
  * the card's next poll.
  */
-async function formMovedOn(paneId: string, answered: string, codexHome?: string): Promise<void> {
+async function formMovedOn(paneId: string, answered: string, codexHome?: string, openCodeStateDir?: string): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await Bun.sleep(50);
-    const prompt = await readPrompt(paneId, codexHome).then((read) => read.prompt, () => null);
+    const prompt = await readPrompt(paneId, codexHome, openCodeStateDir).then((read) => read.prompt, () => null);
     // by what it says: the answer ended that asking, so the same step still on screen has a new id
     if (contentId(prompt) !== answered) return;
   }
@@ -3665,6 +3939,10 @@ export interface PromptRequestOptions {
   claudeTranscript?: (paneId: string) => string | null;
   /** the requester can only watch: it gets the screen's card, never the plan file's text or path */
   readOnly?: boolean;
+  /** OpenCode state dir where service.json lives; tests use an isolated directory */
+  openCodeStateDir?: string;
+  /** Each server owns its drafts and clears them when stopped. */
+  openCodeState?: OpenCodePromptState;
 }
 
 /**
@@ -3689,12 +3967,13 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       if (request.method !== "GET") return badRequest("method_not_allowed", "GET is required.");
       const paneId = url.searchParams.get("pane_id")?.trim();
       if (!paneId) return badRequest("missing_pane_id", "pane_id is required.");
-      const read = await readPrompt(paneId, options.codexHome);
+      const read = await readPrompt(paneId, options.codexHome, options.openCodeStateDir, options.openCodeState, request.signal);
+      if (read.stale) return promptChanged();
       const { agent, status } = read;
       // `plan=0` is how a connection server asks for a watching device through its PC proxy, which
       // reaches this PC with its own credential: it only ever narrows the answer
       const watching = options.readOnly || url.searchParams.get("plan") === "0";
-      const prompt = watching ? read.prompt : await withPlanFile(read.prompt, options.claudeTranscript?.(paneId));
+      const prompt = bindManagedPrompt(watching ? read.prompt : await withPlanFile(read.prompt, options.claudeTranscript?.(paneId)), read.binding);
       // no menu up: what Claude suggests typing next, for the composer's placeholder, and the chat's
       // own last message where Claude put it back into the box on a cancel. Only a nicety: it is read
       // only while Claude waits for the next prompt (a working agent shows none), and a failed or
@@ -3731,10 +4010,166 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     const response = await serialize(body.pane_id, async () => {
       // given up while it waited its turn: nothing is read, opened or sent for it
       if (request.signal.aborted) return promptChanged();
-      const { prompt, agent, pane, panes } = await readPrompt(body.pane_id, options.codexHome);
+      const deadlineAt = Date.now() + 4_000;
+      const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(4_000)]);
+      const openCodeState = options.openCodeState ?? defaultOpenCodeState;
+      const { prompt, agent, pane, panes, binding } = await readPrompt(body.pane_id, options.codexHome, options.openCodeStateDir, openCodeState, deadline);
       // a plan card's id carries its plan file's revision: the file as it is now must match too
-      if (!prompt || (await withPlanFile(prompt, options.claudeTranscript?.(body.pane_id)))!.id !== body.prompt_id) return promptChanged();
+      if (!prompt || bindManagedPrompt(await withPlanFile(prompt, options.claudeTranscript?.(body.pane_id)), binding)!.id !== body.prompt_id) return promptChanged();
       log.matched = true;
+
+      const parsedPrompt = parsedByPublicPrompt.get(prompt);
+      if (parsedPrompt?.responder === "opencode-question" && parsedPrompt.openCodeForm) {
+        const openCodeForm = parsedPrompt.openCodeForm;
+        if (!openCodeForm.available) return jsonResponse({ error: { code: "service_unavailable", message: "OpenCode service is not available. Your answer has not been sent." } }, 502);
+        const state = openCodeForm.state;
+        const asking = askings.get(body.pane_id);
+        const current = (): boolean => !deadline.aborted
+          && openCodeState.entries.get(body.pane_id) === state && state.revision === openCodeForm.revision
+          && askings.get(body.pane_id) === asking && asking?.content === parsedPrompt.id;
+        // The lookup above awaited HTTP. Neither its pane nor its form is a live binding now.
+        const stillBound = async (): Promise<boolean> => {
+          if (!current()) return false;
+          const before = openCodeState.checkpoint();
+          const snapshot = await openCodeState.snapshot(Math.max(1, deadlineAt - Date.now())).catch(() => null);
+          if (!snapshot) return false;
+          openCodeState.reconcile(snapshot.panes, before);
+          const live = snapshot.panes.find((candidate) => candidate.pane_id === body.pane_id);
+          return !!live && live.agent === "opencode" && opencodeSessionId(live) === openCodeForm.sessionID && current();
+        };
+        if (!(await stillBound())) return promptChanged();
+        const navigating = body.step_back === true || body.step_index !== undefined;
+        const supplied = [
+          body.option_index !== undefined,
+          body.option_indices !== undefined,
+          body.custom_text !== undefined,
+        ].filter(Boolean).length;
+        const combined = parsedPrompt.multi_select && body.option_indices !== undefined && body.custom_text !== undefined && body.option_index === undefined;
+        if (supplied !== 1 && !navigating && !combined) return badRequest("invalid_answer", "Exactly one answer is required.");
+        if ((supplied > 1 && !combined) || (navigating && supplied !== 0) || (body.step_back === true && body.step_index !== undefined)
+          || (!navigating && body.draft !== undefined)) return badRequest("invalid_answer", "Exactly one answer is required.");
+
+        if (navigating) {
+          let targetStep = openCodeForm.stepIndex - 1;
+          if (body.step_index !== undefined) {
+            if (!Number.isInteger(body.step_index) || body.step_index < 0 || body.step_index >= openCodeForm.stepIndex) {
+              return badRequest("invalid_answer", "Invalid step index to step back to.");
+            }
+            targetStep = body.step_index;
+          }
+          if (targetStep < 0) {
+            return badRequest("invalid_answer", "Cannot step back from the first step.");
+          }
+
+          const draft = state.draft ? { ...state.draft, answers: { ...state.draft.answers } } : {
+            formId: openCodeForm.formId,
+            stepIndex: targetStep,
+            answers: {},
+            updatedAt: openCodeState.now(),
+          };
+          // Navigation carries the current step's unsent edits, including an explicit clear.
+          if (body.draft !== undefined) {
+            if (typeof body.draft !== "object" || body.draft === null
+              || !Array.isArray(body.draft.option_indices) || typeof body.draft.custom_text !== "string"
+              || body.draft.custom_text.length > 12_000
+              || body.draft.option_indices.some((index) => !Number.isInteger(index) || index < 0 || index >= openCodeForm.options.length)
+              || (!parsedPrompt.multi_select && body.draft.option_indices.length > 1)
+              || (parsedPrompt.custom_option_index === null && body.draft.custom_text !== "")) return badRequest("invalid_answer", "Invalid draft.");
+            const selected = body.draft.option_indices.map((index) => openCodeForm.options[index]!.value);
+            const custom = body.draft.custom_text;
+            draft.answers[openCodeForm.fieldKey] = parsedPrompt.multi_select ? [...selected, ...(custom ? [custom] : [])] : custom || selected[0] || "";
+          }
+          if (JSON.stringify(draft.answers).length > 65_536) return badRequest("invalid_answer", "The form answers are too large.");
+          draft.stepIndex = targetStep;
+          draft.updatedAt = openCodeState.now();
+          state.draft = draft;
+          state.updatedAt = draft.updatedAt;
+          state.revision++;
+          askingEnded(body.pane_id);
+          return jsonResponse({ ok: true });
+        }
+
+        let answerValue: string | string[];
+        if (body.custom_text !== undefined && body.option_indices === undefined) {
+          if (typeof body.custom_text !== "string") return badRequest("invalid_answer", "Custom text must be a string.");
+          const text = body.custom_text.trim();
+          if (!text || text.length > 12_000 || parsedPrompt.custom_option_index === null) return badRequest("invalid_answer", "This prompt does not accept a custom answer.");
+          answerValue = parsedPrompt.multi_select ? [text] : text;
+        } else if (body.option_indices !== undefined) {
+          if (!Array.isArray(body.option_indices)) return badRequest("invalid_answer", "Option indices must be an array.");
+          if (!parsedPrompt.multi_select || (body.option_indices.length === 0 && !combined)) return badRequest("invalid_answer", "This prompt requires one or more selections.");
+          const choices = [...new Set(body.option_indices)];
+          if (choices.some((c) => !Number.isInteger(c) || c < 0 || c >= openCodeForm.options.length)) {
+            return badRequest("invalid_answer", "An option index is outside the displayed range.");
+          }
+          answerValue = choices.map((i) => openCodeForm.options[i]!.value);
+          if (body.custom_text !== undefined) {
+            if (typeof body.custom_text !== "string" || !body.custom_text.trim() || body.custom_text.length > 12_000 || parsedPrompt.custom_option_index === null) return badRequest("invalid_answer", "This prompt does not accept a custom answer.");
+            answerValue.push(body.custom_text.trim());
+          }
+        } else {
+          const index = body.option_index;
+          if (!Number.isInteger(index) || index! < 0 || index! >= openCodeForm.options.length || index === parsedPrompt.custom_option_index || parsedPrompt.multi_select) {
+            return badRequest("invalid_answer", "A valid option index is required.");
+          }
+          answerValue = openCodeForm.options[index!]!.value;
+        }
+
+        const draft = state.draft ? { ...state.draft, answers: { ...state.draft.answers } } : {
+          formId: openCodeForm.formId,
+          stepIndex: openCodeForm.stepIndex,
+          answers: {},
+          updatedAt: openCodeState.now(),
+        };
+        draft.answers[openCodeForm.fieldKey] = answerValue;
+        if (JSON.stringify(draft.answers).length > 65_536) return badRequest("invalid_answer", "The form answers are too large.");
+        draft.updatedAt = openCodeState.now();
+        state.updatedAt = draft.updatedAt;
+
+        const isLastStep = openCodeForm.stepIndex >= openCodeForm.totalSteps - 1;
+        if (!isLastStep) {
+          draft.stepIndex += 1;
+          state.draft = draft;
+          state.revision++;
+          askingEnded(body.pane_id);
+          return jsonResponse({ ok: true });
+        }
+
+        const config = readOpenCodeService(options.openCodeStateDir);
+        if (!config) {
+          return jsonResponse({ error: { code: "service_unavailable", message: "OpenCode service is not available." } }, 502);
+        }
+
+        if (!(await stillBound())) return promptChanged();
+        const replyResult = await replyOpenCodeForm(config, openCodeForm.sessionID, openCodeForm.formId, draft.answers, deadline);
+        if (replyResult.ok) {
+          // An upstream acknowledgement is authoritative, even after a poll or status change.
+          // Only clean up this asking: another form/session may already have replaced it.
+          if (openCodeState.entries.get(body.pane_id) === state && state.revision === openCodeForm.revision) {
+            state.draft = undefined;
+            state.form = null;
+            state.listed = null;
+            state.revision++;
+            formsAnswered.set(body.pane_id, Date.now());
+            if (formsAnswered.size > 64) formsAnswered.delete(formsAnswered.keys().next().value!);
+            if (askings.get(body.pane_id) === asking) askingEnded(body.pane_id);
+          }
+          return jsonResponse({ ok: true });
+        }
+        if (replyResult.status === 0) return jsonResponse({ error: { code: "reply_unconfirmed", message: "OpenCode may have received your answer, but its reply did not arrive. Check the question before sending again." } }, 504);
+        if (!current()) return promptChanged();
+        if (replyResult.status === 409) {
+          state.draft = undefined;
+          state.form = null;
+          state.listed = null;
+          state.revision++;
+          return jsonResponse({ error: { code: "prompt_changed", message: "The form has already been settled." } }, 409);
+        }
+        state.draft = draft;
+        state.revision++;
+        return jsonResponse({ error: { code: "reply_failed", message: `Failed to reply to OpenCode form (HTTP ${replyResult.status}).` } }, 502);
+      }
+
       // checked against the card before anything is sent: an invalid answer never opens the queue
       let steps: AnswerStep[];
       try {
@@ -3762,7 +4197,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         if (request.signal.aborted) return promptChanged();
         if (opensQueue) {
           // the card came from the rollout: answer it in the open queue, once it shows this question
-          const opened = await openQueuedQuestion(body.pane_id, parsedByPublicPrompt.get(prompt)!, () => request.signal.aborted, (open) => { queueOpened = open; });
+          const opened = await openQueuedQuestion(body.pane_id, parsedByPublicPrompt.get(prompt)!, () => request.signal.aborted, (open) => { queueOpened = open; }, binding);
           // a queue it could not answer in it has closed again itself, or never opened: a
           // queue another client opened meanwhile is that client's to close
           if (!opened) return promptChanged();
@@ -3772,13 +4207,14 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         if (opensOmo) {
           // Alt+Up opens the form even with whitespace in the composer; no draft is submitted.
           // A remapped shortcut or a different question fails closed before any answer text.
+          if (!(await sameManagedBinding(body.pane_id, binding))) return promptChanged();
           await paneSendKeys(body.pane_id, [KEY.openQueue]);
           const deadline = Date.now() + SETTLE_MS;
           let opened: InteractivePrompt | null = null;
           while (Date.now() < deadline) {
             if (!asks() || request.signal.aborted) return promptChanged();
             const left = deadline - Date.now();
-            const read = await Promise.race([readKnownPrompt(body.pane_id, pane, agent, options.codexHome, panes), Bun.sleep(left).then(() => null)]);
+            const read = await Promise.race([readKnownPrompt(body.pane_id, pane, agent, options.codexHome, panes, options.openCodeStateDir), Bun.sleep(left).then(() => null)]);
             if (!read || Date.now() > deadline) return promptChanged();
             const parsed = read.prompt && parsedByPublicPrompt.get(read.prompt);
             if (parsed?.responder === "omo-question") {
@@ -3847,7 +4283,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             const left = deadline - Date.now();
             if (left <= 0) return false;
             // a read that outlasts the wait is no read
-            const reading = readKnownPrompt(body.pane_id, pane, agent, options.codexHome, panes);
+            const reading = readKnownPrompt(body.pane_id, pane, agent, options.codexHome, panes, options.openCodeStateDir);
             reading.catch(() => undefined);
             const read = await Promise.race([reading, Bun.sleep(left).then(() => null)]);
             if (!read || Date.now() > deadline) return false;
@@ -3887,6 +4323,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           // none where no look was taken or the row names no key this reader knows
           const key: AnswerStep | null = step.pick ? (seen as ParsedPrompt | null)?.rowKey ?? null : step;
           if (key === null) return promptChanged();
+          if (!(await sameManagedBinding(body.pane_id, binding))) return promptChanged();
           const first = !move && !committed;
           if (!move) committed = true;
           try {
@@ -3912,7 +4349,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         answersUnderWay.delete(body.pane_id);
         answerTurns.set(body.pane_id, (answerTurns.get(body.pane_id) ?? 0) + 1);
         // the queue this request opened never stays open, whatever failed on the way
-        if (queueOpened && !answered) await closeOpenQuestion(body.pane_id).catch(() => undefined);
+        if (queueOpened && !answered) await closeOpenQuestion(body.pane_id, binding).catch(() => undefined);
         // answered, or as good as: the same prompt on the screen after this is asked anew
         if (committed) askingEnded(body.pane_id);
         // sent or dropped from its card: the same words in the box after this are a new message
@@ -3923,7 +4360,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       if (parsedByPublicPrompt.get(target)?.responder === "codex-async-question") {
         queueFronts.delete(body.pane_id);
         // by what it says, as closeQueue reads it off the screen
-        await closeQueue(body.pane_id, contentId(target)!);
+        await closeQueue(body.pane_id, contentId(target)!, binding);
       }
       const responder = parsedByPublicPrompt.get(target)?.responder;
       if (responder === "omo-question" || responder === "omo-review" || responder === "omo-typing" || responder === "omo-pending") {
@@ -3938,7 +4375,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     });
     // the wait for the form's next step only reads the pane: after the pane's turn, so a message
     // queued for it meanwhile is not held up behind the polls
-    if (form.answered !== undefined) await formMovedOn(body.pane_id, form.answered, options.codexHome);
+    if (form.answered !== undefined) await formMovedOn(body.pane_id, form.answered, options.codexHome, options.openCodeStateDir);
     await logAnswer(log, response);
     return response;
   } catch (error) {
