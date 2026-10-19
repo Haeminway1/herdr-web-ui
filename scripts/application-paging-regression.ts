@@ -14,6 +14,18 @@ const state = realpathSync(mkdtempSync(join(tmpdir(), "herdr-application-paging-
 let workspace: string | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+type MetricsGateCapture =
+  | { readonly kind: "captured"; readonly status: number; readonly body: string }
+  | { readonly kind: "failed"; readonly error: unknown };
+type MetricsGateCompletion =
+  | { readonly kind: "complete" }
+  | { readonly kind: "failed"; readonly error: unknown };
+const heldMetricsCapture = Promise.withResolvers<MetricsGateCapture>();
+const heldMetricsRequestArrived = Promise.withResolvers<void>();
+const releaseHeldMetrics = Promise.withResolvers<void>();
+const heldMetricsCompletion = Promise.withResolvers<MetricsGateCompletion>();
+let heldMetricsRequestClaimed = false;
+let heldMetricsRequest: object | undefined;
 async function until(check: () => Promise<boolean>, message: string): Promise<void> {
   const deadline = Date.now() + 5000;
   while (!await check()) {
@@ -95,31 +107,87 @@ sys.stdout.flush()
   await page.keyboard.press("ControlOrMeta+Shift+U");
   await page.keyboard.press("ControlOrMeta+Shift+D");
   await until(async () => read() === "\x1b[5~\x1b[6~\x1b[5~\x1b[5~\x1b[6~", "remapped paging actions still send plain page sequences to the application");
-  // The program quits and hands the screen back to the shell, whose history the browser does not know
-  // about until its next metrics read. A page asked for in that window must scroll that history once
-  // the read lands, never reach the shell as a key. The read is slowed to widen the window.
   await page.route((url) => url.pathname === "/api/pane/scroll", async (route) => {
-    if (route.request().method() === "GET") await new Promise((resolve) => setTimeout(resolve, 600));
-    await route.continue();
+    if (route.request().method() !== "GET" || heldMetricsRequestClaimed) { await route.continue(); return; }
+    heldMetricsRequestClaimed = true;
+    heldMetricsRequestArrived.resolve();
+    try {
+      heldMetricsRequest = route.request();
+      const response = await route.fetch({ timeout: 5000 });
+      const body = await response.text();
+      heldMetricsCapture.resolve({ kind: "captured", status: response.status(), body });
+      await releaseHeldMetrics.promise;
+      await route.fulfill({ response, body });
+      heldMetricsCompletion.resolve({ kind: "complete" });
+    } catch (error) {
+      heldMetricsCapture.resolve({ kind: "failed", error });
+      try {
+        await route.continue();
+        heldMetricsCompletion.resolve({ kind: "failed", error });
+      } catch (continueError) {
+        heldMetricsCompletion.resolve({ kind: "failed", error: new AggregateError([error, continueError], "The held metrics request could not be answered") });
+      }
+    }
   });
+  while (!heldMetricsRequestClaimed) {
+    const metricsRequest = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/pane/scroll"
+      && request.method() === "GET", { timeout: 5000 })
+      .then(() => ({ kind: "request" as const }), (error: unknown) => ({ kind: "failed" as const, error }));
+    const requestEvidence = await Promise.race([heldMetricsRequestArrived.promise.then(() => ({ kind: "held" as const })), metricsRequest]);
+    if (requestEvidence.kind === "failed") assert.fail(`no metrics GET reached the route gate: ${String(requestEvidence.error)}`);
+  }
+  await heldMetricsRequestArrived.promise;
+  const capturedMetrics = await heldMetricsCapture.promise;
+  if (capturedMetrics.kind === "failed") assert.fail(`the held metrics request failed: ${String(capturedMetrics.error)}`);
+  assert.equal(capturedMetrics.status, 200, "the held metrics response is successful");
+  const oldMetrics: unknown = JSON.parse(capturedMetrics.body);
+  assert.ok(typeof oldMetrics === "object" && oldMetrics !== null && "scroll" in oldMetrics);
+  const oldScroll: unknown = oldMetrics.scroll;
+  assert.ok(typeof oldScroll === "object" && oldScroll !== null && "max_offset_from_bottom" in oldScroll);
+  assert.equal(oldScroll.max_offset_from_bottom, 0, "the held response still reports the application's zero-history state");
   const sentBefore = inputs.length;
   const seenBefore = outputs;
   await page.keyboard.press("q");
   await until(async () => read().endsWith("q"), "the program read its quit key");
   await until(async () => ((await paneScrollInfo(paneId))?.max_offset_from_bottom ?? 0) > 0, "the shell's history is back once the program left its screen");
-  // the page has drawn the shell's return (what a user sees before pressing), but its metrics read is still on the way
   await until(async () => outputs > seenBefore, "the page received the program's exit and the shell's prompt");
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await page.locator(".terminal-jump-bottom").count(), 0, "the browser still shows the old zero-history metrics while the GET is held");
+  const freshMetricsResult = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/scroll"
+    && response.request().method() === "GET" && response.request() !== heldMetricsRequest, { timeout: 5000 })
+    .then((response) => ({ response }), (error: unknown) => ({ error }));
+  const pageScrollResult = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/scroll"
+    && response.request().method() === "POST", { timeout: 5000 })
+    .then((response) => ({ response }), (error: unknown) => ({ error }));
   await page.keyboard.press("ControlOrMeta+Shift+U");
-  await Bun.sleep(300);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.deepEqual(inputs.slice(sentBefore).filter((text) => text.includes("\x1b[5~")), [], `stale zero-history metrics do not turn the page into a key for the shell (sent: ${JSON.stringify(inputs.slice(sentBefore))})`);
-  await until(async () => ((await paneScrollInfo(paneId))?.offset_from_bottom ?? 0) > 0, "the page scrolls the shell's history once the metrics are read again");
+  releaseHeldMetrics.resolve();
+  const freshRead = await freshMetricsResult;
+  assert.ok("response" in freshRead, `no fresh metrics response arrived: ${"error" in freshRead ? String(freshRead.error) : "unknown failure"}`);
+  assert.ok(freshRead.response.ok(), "the fresh metrics response succeeds");
+  const freshMetrics: unknown = await freshRead.response.json();
+  assert.ok(typeof freshMetrics === "object" && freshMetrics !== null && "scroll" in freshMetrics);
+  const freshScroll: unknown = freshMetrics.scroll;
+  assert.ok(typeof freshScroll === "object" && freshScroll !== null && "max_offset_from_bottom" in freshScroll);
+  assert.ok(typeof freshScroll.max_offset_from_bottom === "number" && freshScroll.max_offset_from_bottom > 0, "the fresh metrics response sees the shell's history");
+  const pageScroll = await pageScrollResult;
+  assert.ok("response" in pageScroll, `the held page did not produce a scroll response: ${"error" in pageScroll ? String(pageScroll.error) : "unknown failure"}`);
+  assert.ok(pageScroll.response.ok(), "the held page scroll succeeds");
+  await until(async () => ((await paneScrollInfo(paneId))?.offset_from_bottom ?? 0) > 0, "the page scrolls the shell's history once the fresh metrics read arrives");
   assert.deepEqual(inputs.slice(sentBefore).filter((text) => text.includes("\x1b[5~")), [], "no page key reached the shell afterwards either");
   assert.deepEqual(errors, []);
   console.log("PASS application paging: translated up/down, plain terminal PageUp preserved, modal guard, no native history, no key for the shell after the program quits");
 } finally {
+  releaseHeldMetrics.resolve();
+  let routeCleanupError: Error | undefined;
+  if (heldMetricsRequestClaimed) {
+    const completion = await heldMetricsCompletion.promise;
+    if (completion.kind === "failed") routeCleanupError = new Error("the held metrics route did not complete cleanly", { cause: completion.error });
+  }
   await browser?.close();
   server?.stop();
   if (workspace) await workspaceClose(workspace);
   rmSync(state, { recursive: true, force: true });
+  if (routeCleanupError) throw routeCleanupError;
 }

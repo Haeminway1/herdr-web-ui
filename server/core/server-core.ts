@@ -73,7 +73,7 @@ export function createCore({ options, devices, usage, usageLogin, TYPED_SETTLE_M
   const { pending, holdPending, holdPendingPane, drainPending, pendingFrames } = createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, submitText, authorizeSocket: (client) => authorizeSocket(client), clientSnapshot: () => clientSnapshot(), omo: { sessionOf: (paneId) => omo.sessionOf(paneId) }, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS });
 
   const { mayType, authorizeSocket, admit, setRole, watchPane, unwatchPane, killWatches, end } = createConnections({ clients, present, pending, devices, detachClaimed, dropClaims });
-  const { push, omo, gjc, claudeAgents, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector, waitTimer } = createStatusHub({ options, devices, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin });
+  const { push, omo, gjc, claudeAgents, plans, clientSnapshot, countVisit, machines, residents, markPaneSeen, broadcastAll, logPushError, collector, waitTimer } = createStatusHub({ options, devices, clients, present, pending, drainPending, holdPendingPane, usage, usageLogin });
   const websocket = createSocket({
     clients, present, stopped: () => stopped, admit, setRole, watchPane, unwatchPane, end, holdPending, attachments, clientSnapshot, countVisit, drainOutput,
     // each frame type by name, with the handler of the module that owns it: anything else on a frame object never
@@ -96,7 +96,7 @@ export function createCore({ options, devices, usage, usageLogin, TYPED_SETTLE_M
   let outputTimer: ReturnType<typeof setInterval> | undefined;
 
   return {
-    sidecar, serialize, push, logPushError, omo, claudeAgents, plans, clientSnapshot, machines, broadcastAll, collector, websocket,
+    sidecar, serialize, push, logPushError, omo, claudeAgents, plans, clientSnapshot, machines, residents, markPaneSeen, broadcastAll, collector, websocket,
     /** once the server listens */
     start(): void {
       // ACKs can stop arriving entirely (a suspended tab). Bound the pause even then.

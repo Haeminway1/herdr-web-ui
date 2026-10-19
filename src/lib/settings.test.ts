@@ -981,6 +981,22 @@ it("keeps the Markdown preview's width to readable or full, readable by default"
   for (const bad of ["narrow", "medium", "wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("readable");
 });
 
+it("keeps file, web-link and new-agent launch settings within their supported choices", () => {
+  expect(DEFAULT_SETTINGS.webLinks).toBe("tab");
+  expect(DEFAULT_SETTINGS.fileOpen).toBe("popup");
+  expect(sanitizeSettings({ fileOpen: "panel" }).fileOpen).toBe("panel");
+  for (const bad of ["tab", "", null, true]) expect(sanitizeSettings({ fileOpen: bad }).fileOpen).toBe("popup");
+  expect(sanitizeSettings({ webLinks: "panel" }).webLinks).toBe("panel");
+  for (const bad of ["popup", "", null, true]) expect(sanitizeSettings({ webLinks: bad }).webLinks).toBe("tab");
+  expect(DEFAULT_SETTINGS.claudeLaunchMode).toBe("default");
+  expect(DEFAULT_SETTINGS.codexLaunchMode).toBe("default");
+  expect(sanitizeSettings({ claudeLaunchMode: "plan", codexLaunchMode: "readOnly" })).toMatchObject({ claudeLaunchMode: "plan", codexLaunchMode: "readOnly" });
+  for (const bad of ["bypass", "BypassPermissions", "full-access", "", null, 1, ["auto"]]) {
+    expect(sanitizeSettings({ claudeLaunchMode: bad }).claudeLaunchMode).toBe("default");
+    expect(sanitizeSettings({ codexLaunchMode: bad }).codexLaunchMode).toBe("default");
+  }
+});
+
 describe("shared settings", () => {
   it("shares exactly the settings SETTING_SCOPE marks shared", () => {
     const shared = Object.entries(SETTING_SCOPE).filter(([, scope]) => scope === "shared").map(([key]) => key).sort();

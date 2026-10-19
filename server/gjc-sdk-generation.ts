@@ -1,5 +1,6 @@
 import { realpathSync } from "node:fs";
 import { dirname } from "node:path";
+import { GjcSdkLookupError, lookupExecutionError } from "./gjc-sdk-error.ts";
 
 export interface GjcSdkGenerationObserver {
   generationStatus(sessionId: string, generation: number): Promise<{ readonly status: string }>;
@@ -39,9 +40,9 @@ export async function gjcSdkGenerationCurrent(
   try {
     return await Promise.race([
       Promise.resolve(observer).then(async (current) => (await current.generationStatus(sessionId, generation)).status === "current"),
-      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 2_000); }),
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new GjcSdkLookupError("timeout")), 2_000); }),
     ]);
   }
-  catch { return false; }
+  catch (error) { throw lookupExecutionError(error); }
   finally { if (timer !== undefined) clearTimeout(timer); }
 }

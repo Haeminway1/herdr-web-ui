@@ -6,9 +6,16 @@ import { join } from "node:path";
 import * as herdr from "./herdr/client.ts";
 import { HerdrError } from "./herdr/client.ts";
 import { errorResponse } from "./http.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { createServer } from "./index.ts";
 
 describe("errorResponse", () => {
+  it.each(["timeout", "unavailable"] as const)("keeps SDK %s distinct from missing identity without exposing execution details", async reason => {
+    const response = errorResponse(new GjcSdkLookupError(reason));
+    expect(response.status).toBe(reason === "timeout" ? 504 : 503);
+    expect(await response.json()).toEqual({ error: { code: `gjc_sdk_${reason}`, message: "GJC SDK lookup failed" } });
+  });
+
   it("answers a 500 with a fixed message and a correlation id, never the exception's own", async () => {
     const secret = "ENOENT: no such file or directory, open '/home/someone/.config/herdr-web-ui/devices.json'";
     const response = errorResponse(new Error(secret));

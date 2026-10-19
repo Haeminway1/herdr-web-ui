@@ -148,6 +148,7 @@ export class ReplayBuffer {
   private readonly modes = new Map<string, "h" | "l">();
   /** the modifyOtherKeys level the output before the tail left, 0 when off */
   private modifyOtherKeys = 0;
+  truncated = false;
 
   constructor(private readonly limit: number) {}
 
@@ -163,6 +164,7 @@ export class ReplayBuffer {
       this.tail += data;
       return;
     }
+    this.truncated = true;
     const cut = bytes.subarray(0, start).toString("utf8");
     for (const [, params, state] of cut.matchAll(PRIVATE_MODES)) {
       for (const mode of params!.split(";").filter(Boolean)) {

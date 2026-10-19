@@ -6,11 +6,12 @@ import { join } from "node:path";
 import type { AgentStatus, HerdrPane, PlanSummary, ServerMessage, SessionSnapshot } from "../../shared/protocol.ts";
 import { alertStatus, paneTitle } from "../../shared/notify-policy.ts";
 import { BackgroundWait } from "../background-wait.ts";
+import { AttentionStore, answerPreview } from "../attention.ts";
 import { ClaudeSubagentStatus } from "../claude-subagents.ts";
 import { codexOpenRollout, paneCodexHome } from "../codex.ts";
 import { startStatusCollector } from "../collector.ts";
 import { CompletionTracker, type OmoRest } from "../completion.ts";
-import { claudePanePid, claudePaneSession, forgetPaneTranscriptState } from "../conversation.ts";
+import { claudePanePid, claudePaneSession, forgetPaneTranscriptState, paneConversation } from "../conversation.ts";
 import type { DeviceStore } from "../devices.ts";
 import { createGjcStatus, gjcPanes, readOmoSnapshot, reconcileProviderStatus } from "../gjc-status.ts";
 import type { HerdrMachineProfile } from "../herdr-profiles.ts";
@@ -21,12 +22,14 @@ import { omoPanes } from "../omo.ts";
 import { OMO_ALIASES, OmoStatus } from "../omo-status.ts";
 import type { PendingInputs } from "../pending-input.ts";
 import { promptWaitEnded } from "../prompt.ts";
+import { ResidentStore } from "../residents.ts";
 import { type AlertTiming, createPushService, defaultStateDir } from "../push.ts";
 import { SessionPlans } from "../session-plan.ts";
 import type { Telemetry } from "../telemetry.ts";
 import type { UsageLoginService } from "../usage-login.ts";
 import type { UsageService } from "../usage.ts";
 import { type Client, send } from "./connections.ts";
+import { labelManagedPanes } from "../managed-sessions.ts";
 
 /** a focus or reconnect re-reads the panes for the daily active message at most this often */
 const VISIT_READ_MS = 10 * 60_000;
@@ -35,6 +38,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   options: {
     stateDir?: string;
     codexHome?: string;
+    protectedManagerFolder?: string;
     telemetry?: Telemetry;
     machines?: boolean;
     herdrProfiles?: () => Promise<HerdrMachineProfile[]>;
@@ -66,6 +70,8 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
 
   /** `done` for agents herdr loses track of (server/completion.ts), kept across restarts */
   const completions = new CompletionTracker(join(options.stateDir ?? defaultStateDir(), "completions.json"));
+  const attention = new AttentionStore(join(options.stateDir ?? defaultStateDir(), "attention.json"), undefined, options.statusNow);
+  const residents = new ResidentStore(join(options.stateDir ?? defaultStateDir(), "residents.json"), { snapshot: sessionSnapshot, managerFolder: options.protectedManagerFolder });
   /** OmO panes get their status from OmO's session files: herdr reports none for them (server/omo-status.ts) */
   const omo = new OmoStatus({
     discover: (panes) => omoPanes(panes),
@@ -108,7 +114,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   });
   /** herdr's snapshot with OmO's and GJC's own status in it: what the completion tracker and web push are given */
   const rawSnapshot = async (): Promise<SessionSnapshot> => {
-    const snapshot = await omoSnapshot();
+    const snapshot = await labelManagedPanes(await omoSnapshot());
     await gjc.refresh(snapshot.panes);
     const named = gjc.apply(omo.apply(snapshot));
     // not waited for: finding a transcript costs process calls, and a snapshot must not wait on them.
@@ -121,9 +127,12 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   const backgroundOf = (paneId: string): number => omo.backgroundOf(paneId) || claudeAgents.countOf(paneId);
   /** the snapshot clients get: finishes settled, OmO panes named, background tasks, waits and plan progress */
   const clientSnapshot = async (): Promise<SessionSnapshot> => {
+    const askedAt = (options.statusNow ?? Date.now)();
     const snapshot = await completions.readSnapshot(rawSnapshot);
-    if (!snapshot.panes.some((pane) => backgroundOf(pane.pane_id) > 0 || waits.waiting(pane.pane_id) || plans.summaryOf(pane.pane_id) !== null)) return snapshot;
-    return {
+    // A roster read marks already-finished panes unread without reading their historical transcripts.
+    attention.baseline(snapshot.panes, askedAt);
+    if (!snapshot.panes.some((pane) => backgroundOf(pane.pane_id) > 0 || waits.waiting(pane.pane_id) || plans.summaryOf(pane.pane_id) !== null)) return attention.decorate(snapshot);
+    return attention.decorate({
       ...snapshot,
       panes: snapshot.panes.map((pane) => {
         const background = backgroundOf(pane.pane_id);
@@ -131,7 +140,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
         const plan = plans.summaryOf(pane.pane_id);
         return background > 0 || waiting || plan !== null ? { ...pane, ...(background > 0 ? { background_tasks: background } : {}), ...(waiting ? { background_wait: true as const } : {}), ...(plan !== null ? { plan } : {}) } : pane;
       }),
-    };
+    });
   };
   /**
    * A browser visit for the daily active message: the call is made now so the visit's day is the
@@ -152,14 +161,33 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
       .catch((error) => console.error(`telemetry: the visit was not counted (${error instanceof Error ? error.message : String(error)})`));
   }
   /** A pane's status frame: every one says whether the pane waits on its turn's background work. */
-  const paneStatus = (paneId: string, status: AgentStatus, about: { background_tasks?: number; plan?: PlanSummary | null } = {}): ServerMessage =>
-    ({ type: "pane-status", pane_id: paneId, agent_status: status, ...about, ...(waits.waiting(paneId) ? { background_wait: true as const } : {}) });
+  const paneStatus = (paneId: string, status: AgentStatus, about: { background_tasks?: number; plan?: PlanSummary | null } = {}): ServerMessage => {
+    if (attention.observe(paneId, status)) void attentionFinished(paneId);
+    return { type: "pane-status", pane_id: paneId, agent_status: status, ...about, ...(waits.waiting(paneId) ? { background_wait: true as const } : {}) };
+  };
   const machines = options.machines === false ? null : new MachineManager(options.stateDir ?? defaultStateDir(), push, completions, clientSnapshot);
   if (machines && options.herdrProfiles) machines.watchHerdrProfiles(options.herdrProfiles);
 
   function broadcastAll(message: ServerMessage): void {
     machines?.localMessage(message);
     for (const client of clients) send(client, message);
+  }
+  async function attentionFinished(paneId: string): Promise<void> {
+    const state = attention.get(paneId);
+    if (!state?.finished_at) return;
+    broadcastAll({ type: "pane-attention", pane_id: paneId, attention: state });
+    try {
+      const conversation = await paneConversation(paneId, options.codexHome);
+      if (attention.setPreview(paneId, state.finished_at, answerPreview(conversation.turns))) {
+        const updated = attention.get(paneId);
+        if (updated) broadcastAll({ type: "pane-attention", pane_id: paneId, attention: updated });
+      }
+    } catch { /* Blocked or unavailable transcripts never select a guessed source. */ }
+  }
+  function markPaneSeen(paneId: string) {
+    const state = attention.markSeen(paneId);
+    if (state) broadcastAll({ type: "pane-attention", pane_id: paneId, attention: state });
+    return state;
   }
   /** A broken state file must cost the alert, never the server (an unhandled rejection would). */
   const logPushError = (error: unknown): void => {
@@ -315,6 +343,7 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
       pending.forget(paneId);
       waits.forget(paneId);
       completions.forget(paneId);
+      attention.forget(paneId);
       // the terminal is gone, so is whatever its chat parsed (server/conversation.ts)
       forgetPaneTranscriptState(paneId);
       bridgeAgents?.ended(paneId);
@@ -330,5 +359,5 @@ export function createStatusHub<Lease>({ options, devices, clients, present, pen
   waitTimer.unref?.();
   plans.start();
 
-  return { push, omo, gjc, claudeAgents, plans, clientSnapshot, countVisit, machines, broadcastAll, logPushError, collector, waitTimer };
+  return { push, omo, gjc, claudeAgents, plans, clientSnapshot, countVisit, machines, residents, markPaneSeen, broadcastAll, logPushError, collector, waitTimer };
 }

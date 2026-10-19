@@ -17,7 +17,7 @@ import "./test-herdr.ts";
 
 const socket = process.env["HERDR_SOCKET"] ?? "";
 const xdg = process.env["XDG_CONFIG_HOME"] ?? "";
-if (!xdg || !socket.startsWith(`${xdg}/`) || !/\/herdr\/sessions\/check-[0-9a-f]+(?:-\d+)?\/herdr\.sock$/.test(socket)) {
+if (!xdg || !socket.startsWith(`${xdg}/`) || !/\/herdr\/sessions\/check-[0-9a-f]+(?:-\d+|-b\d+)?\/herdr\.sock$/.test(socket)) {
   throw new Error(`refusing to run against a non-isolated herdr session: ${socket || "(unset)"}`);
 }
 console.log(`HERDR_SOCKET=${socket} (isolated check session)`);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { layoutTopology, paneContextPress, soloPane, splitPath, splitRatioAt } from "./paneCanvas.ts";
+import { layoutTopology, paneContextPress, paneFieldTarget, soloPane, splitPath, splitRatioAt } from "./paneCanvas.ts";
 import type { PaneLayoutSnapshot } from "../../shared/protocol.ts";
 
 const layout: PaneLayoutSnapshot = {
@@ -8,12 +8,40 @@ const layout: PaneLayoutSnapshot = {
   panes: [{pane_id:"w1:p1",focused:true,rect:{x:25,y:1,width:60,height:40}}],
   splits: [{id:"split_0_root",direction:"right",ratio:0.5,rect:{x:25,y:1,width:120,height:40}}],
 };
+
+class ElementTarget extends EventTarget {
+  readonly classList: { contains: (name: string) => boolean };
+  constructor(private readonly field: ElementTarget | null, classes: readonly string[] = []) {
+    super();
+    this.classList = { contains: (name) => classes.includes(name) };
+  }
+  closest(selector: string): ElementTarget | null {
+    return selector === "input, textarea, [contenteditable=true]" ? this.field : null;
+  }
+}
+
 describe("native pane canvas", () => {
   it("keeps Mac Control-click as a menu target without stealing pane focus", () => {
     expect(paneContextPress({button:0,ctrlKey:true}, true)).toBe(true);
     expect(paneContextPress({button:0,ctrlKey:true}, false)).toBe(false);
     expect(paneContextPress({button:2,ctrlKey:false}, false)).toBe(true);
     expect(paneContextPress({button:0,ctrlKey:false}, true)).toBe(false);
+  });
+  it("leaves native field context menus alone but keeps the pane menu on xterm", () => {
+    const originalElement = Object.getOwnPropertyDescriptor(globalThis, "Element");
+    Object.defineProperty(globalThis, "Element", { configurable: true, value: ElementTarget });
+    try {
+      const input = new ElementTarget(null);
+      const xtermInput = new ElementTarget(null, ["xterm-helper-textarea"]);
+      expect(paneFieldTarget(new ElementTarget(input))).toBe(true);
+      expect(paneFieldTarget(new ElementTarget(xtermInput))).toBe(false);
+      expect(paneFieldTarget(new ElementTarget(null))).toBe(false);
+      expect(paneFieldTarget(new EventTarget())).toBe(false);
+      expect(paneFieldTarget(null)).toBe(false);
+    } finally {
+      if (originalElement) Object.defineProperty(globalThis, "Element", originalElement);
+      else Reflect.deleteProperty(globalThis, "Element");
+    }
   });
   it("decodes nested paths without treating the preorder index as a path", () => {
     expect(splitPath("split_12_010")).toEqual([false,true,false]);

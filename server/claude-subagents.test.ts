@@ -871,6 +871,11 @@ describe("claudeSubagents, an agent's own turn", () => {
     assistant(file, 6, "tool_use", "tool_use");
     entry(file, { type: "user", timestamp: at(7), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_shutdown", content: [{ type: "text", text: JSON.stringify(result) }] }] }, toolUseResult: result });
   };
+  /** the lead's TaskStop at `minute`: called with what it was asked to stop, answered with a task id of its own */
+  const stop = (s: ReturnType<typeof session>, minute: number, asked: string, answered: string) => {
+    s.parent({ type: "assistant", timestamp: at(minute), message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_stop_${minute}`, name: "TaskStop", input: { task_id: asked } }] } });
+    s.parent({ type: "user", timestamp: at(minute), message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_stop_${minute}`, content: "{}" }] }, toolUseResult: { message: `Successfully stopped task: ${answered} (map it)`, task_id: answered, task_type: "in_process_teammate", command: "map it" } });
+  };
 
   it("reads a teammate whose last turn ended as completed, at that entry's time, and titles it by its name", () => {
     const s = session();
@@ -920,6 +925,58 @@ describe("claudeSubagents, an agent's own turn", () => {
     shutdown(file, { success: true, message: "Shutdown approved. Sent confirmation to team-lead. Agent draft-t3 is now exiting.", request_id: "shutdown-3@draft-t3" });
     entry(file, { type: "user", timestamp: at(9), message: { role: "user", content: "one more thing" } });
     expect(ids(s.path)).toEqual(["draft-t3:running"]);
+  });
+
+  it("reads a teammate stopped by its name as cancelled, with the commands it left running", () => {
+    const s = session();
+    const file = teammate(s, "alocal-harness-map-f7b05717a4a23081");
+    s.bash("bsh", 2, { description: "Run the IME probe", file });
+    assistant(file, 3, "tool_use", "tool_use");
+    stop(s, 4, "local-harness-map", "t9glutltm");
+    expect(claudeSubagents(s.path, true, NOW).map((task) => `${task.id}:${task.status}:${task.ended_at?.slice(14, 16) ?? "-"}`)).toEqual([
+      "alocal-harness-map-f7b05717a4a23081:cancelled:04", "bsh:cancelled:04",
+    ]);
+  });
+
+  it("reads a teammate stopped by its id as cancelled, and one sent a message after the stop, or spawned after it, as running", () => {
+    const s = session();
+    const byId = teammate(s, "by-id");
+    assistant(byId, 2, "tool_use", "tool_use");
+    stop(s, 3, "by-id", "t1");
+    const woken = teammate(s, "woken-after-stop");
+    assistant(woken, 2, "tool_use", "tool_use");
+    stop(s, 3, "local-harness-map", "t2");
+    entry(woken, { type: "user", timestamp: at(5), message: { role: "user", content: "go on" } });
+    expect(ids(s.path).sort()).toEqual(["by-id:cancelled", "woken-after-stop:running"]);
+  });
+
+  it("reads a teammate stopped by its id, sent a message, then stopped by its name as cancelled at the second stop", () => {
+    const s = session();
+    const file = teammate(s, "restopped");
+    assistant(file, 2, "tool_use", "tool_use");
+    stop(s, 3, "restopped", "t1");
+    entry(file, { type: "user", timestamp: at(5), message: { role: "user", content: "go on" } });
+    stop(s, 6, "local-harness-map", "t2");
+    expect(claudeSubagents(s.path, true, NOW).map((task) => `${task.id}:${task.status}:${task.ended_at?.slice(14, 16) ?? "-"}`)).toEqual(["restopped:cancelled:06"]);
+  });
+
+  it("does not stop a teammate by a failed TaskStop", () => {
+    const s = session();
+    const file = teammate(s, "kept");
+    assistant(file, 2, "tool_use", "tool_use");
+    s.parent({ type: "assistant", timestamp: at(3), message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_failed", name: "TaskStop", input: { task_id: "local-harness-map" } }] } });
+    s.parent({ type: "user", timestamp: at(3), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_failed", is_error: true, content: "No task found" }] }, toolUseResult: { task_id: "kept" } });
+    expect(ids(s.path)).toEqual(["kept:running"]);
+  });
+
+  it("does not stop a teammate under a stopped name before its file is read", () => {
+    const s = session();
+    const old = teammate(s, "old-holder");
+    assistant(old, 2, "tool_use", "tool_use");
+    stop(s, 3, "local-harness-map", "t1");
+    const fresh = teammate(s, "fresh-holder");
+    writeFileSync(fresh, "");
+    expect(ids(s.path).filter((task) => task.startsWith("fresh-holder"))).not.toContain("fresh-holder:cancelled");
   });
 
   it("takes a background agent that ended its turn as done before its notification is written, and the newest word among them", () => {

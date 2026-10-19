@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
 import { gjcSdkCurrentSession } from "./gjc-sdk.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 
 interface ProcessIdentity { readonly pid: number; readonly starttime: string; readonly boot: string; readonly cwd: string }
 export interface ManagedSessionDeps {
@@ -261,7 +262,8 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     identity.state = "ready";
     identity.session_id = sessionId;
     return { identity, sessionFile };
-  } catch {
+  } catch (error) {
+    if (error instanceof GjcSdkLookupError) return pending("identity_pending");
     return blocked("blocked_managed_record_unavailable");
   }
 }

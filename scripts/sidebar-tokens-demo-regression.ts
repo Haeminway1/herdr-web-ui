@@ -9,7 +9,7 @@ import { chromePath } from "./chrome-path.ts";
 
 // The demo roster with what herdr plugins report on its panes (#1209): the Quota plugin's usage and
 // a summary on checkout-api's Claude, a task's progress on web-dashboard's Codex, a plugin's line for
-// the OMP agent (display_agent), and markup that must stay text. Only this disposable demo fixture is
+// the infra agent (display_agent), and markup that must stay text. Only this disposable demo fixture is
 // rewritten; no live session is read. The machine events then say herdr's `[ui.sidebar.agents]`
 // rows, as server/herdr-sidebar.ts reads them, and a later roster brings a new value.
 const app = mkdtempSync(join(tmpdir(), "herdr-sidebar-tokens-"));
@@ -20,7 +20,7 @@ const patch = `(() => {
   const reports = {
     "w1C:p1": { tokens: { quota: "5h 95% · Wk 67%", summary: ${JSON.stringify(LONG)} } },
     "w1D:p1": { tokens: { progress: "40% 12m", note: "<b>not markup</b>" } },
-    [${JSON.stringify(panes.omp)}]: { display_agent: "needs a login · 8m ago" },
+    [${JSON.stringify(panes.infra)}]: { display_agent: "needs a login · 8m ago" },
   };
   const roster = (machines) => machines.map((machine) => {
     const copy = structuredClone(machine);
@@ -78,7 +78,7 @@ try {
           ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US", colorScheme: theme }
           : { viewport: { width: 1280, height: 900 }, locale: "en-US", colorScheme: theme });
         try {
-          await context.addInitScript(([value, sidebarRows]) => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme: value, sidebarRows })), [theme, rows] as const);
+          await context.addInitScript(([value, sidebarRows]) => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme: value, sidebarRows, sidebarLayout: "upstream" })), [theme, rows] as const);
           const page = await context.newPage();
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
@@ -97,7 +97,7 @@ try {
           assert.equal(await tokensOf(page, panes.web).textContent(), "<b>not markup</b> · 40% 12m", "a value is text, never markup");
           assert.equal(await row(page, panes.web).locator(".agent-tokens b").count(), 0);
           assert.equal(await row(page, panes.shell).locator(".agent-tokens").count(), 0, "a pane without tokens draws no line");
-          assert.match(await row(page, panes.omp).locator(".agent-context").textContent() ?? "", /^needs a login · 8m ago · /, "a plugin's line for the agent leads the place");
+          assert.match(await row(page, panes.infra).locator(".agent-context").textContent() ?? "", /^needs a login · 8m ago · /, "a plugin's line for the agent leads the place");
 
           // the line sits under the title and the place, small and cut, its whole text in the tooltip
           const title = await box(page, panes.api, ".agent-title"), place = await box(page, panes.api, ".agent-context"), tokens = await box(page, panes.api, ".agent-tokens");
