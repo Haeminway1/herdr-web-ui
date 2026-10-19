@@ -2,6 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { OutputWindow, OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_JOIN_BYTES_PER_SECOND, OUTPUT_JOIN_MAX_MS, OUTPUT_LOW_BYTES, OUTPUT_PAUSE_MAX_MS, OUTPUT_STALL_MS, ReplayBuffer, wireBytes } from "./output-window.ts";
 
 describe("terminal output credit", () => {
+  it("says when output has fallen out of the tail", () => {
+    const replay = new ReplayBuffer(16);
+    replay.append("x".repeat(16));
+    expect(replay.truncated).toBe(false);
+    replay.append("y");
+    expect(replay.truncated).toBe(true);
+  });
   it("holds high-water backpressure until the low watermark, without duplicate credit", () => {
     const window = new OutputWindow();
     window.write(OUTPUT_HIGH_BYTES);

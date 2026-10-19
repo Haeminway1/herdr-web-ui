@@ -6,6 +6,7 @@ import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { ConversationUnavailable, conversationForPane as readConversation, HistoryChanged, resolveTranscript as readTranscript } from "./conversation.ts";
 import { labelManagedPanes as projectPanes, resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
 import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { createGjcStatus, gjcPanes as discoverGjc } from "./gjc-status.ts";
 import { omoPanes, omoSessionForPane } from "./omo.ts";
 
@@ -140,6 +141,46 @@ it.each([new Error("private GJC SDK exception"), "private GJC SDK rejection"] as
   expect(projected.agents[1]?.agent_session).toBeNull();
   expect(projected.agents[2]?.agent_session).toEqual(unmanagedPane.agent_session);
   expect(JSON.stringify(projected)).not.toContain("private GJC SDK");
+});
+
+it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and isolates the whole roster", async reason => {
+  const failedNonce = "f".repeat(32);
+  const failedPane: HerdrPane = {
+    ...pane,
+    pane_id: "wFailed:p1",
+    workspace_id: "wFailed",
+    terminal_id: "term_failed",
+    agent_session: { agent: "codex", kind: "id", source: "provider-child", value: "stale-child" },
+    tokens: { hm_managed_session: failedNonce, hm_managed_generation: "1" },
+  };
+  const failedDirectory = join(namespace, `${failedNonce}.sessions`);
+  mkdirSync(failedDirectory, { mode: 0o700 });
+  const failedFile = join(failedDirectory, "exact.jsonl");
+  writeFileSync(failedFile, JSON.stringify({ type: "session", id: sessionId, cwd: root }) + "\n", { mode: 0o600 });
+  const info = statSync(failedFile);
+  const child = { pid: 43, starttime: "456", boot: "fixture-boot", cwd: root };
+  writeFileSync(join(namespace, `${failedNonce}.json`), JSON.stringify({
+    ...record, nonce: failedNonce, pane_id: failedPane.pane_id, workspace_id: failedPane.workspace_id,
+    terminal_id: failedPane.terminal_id, session_file: failedFile, session_dir: failedDirectory,
+    file_identity: { dev: info.dev, ino: info.ino }, child,
+  }), { mode: 0o600 });
+  const failedDeps: ManagedSessionDeps = {
+    processIdentity: pid => pid === 42 ? observed : pid === 43 ? child : null,
+    gjcSession: async pids => {
+      if (pids.includes(43)) throw new GjcSdkLookupError(reason);
+      return live;
+    },
+  };
+  const snapshot = { panes: [pane, failedPane], agents: [pane, failedPane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  const result = await projectPanes(snapshot, namespace, failedDeps);
+  expect(result.panes[0]).toMatchObject({ managed_session: { state: "ready" }, agent_session: { source: "herdr-manager", value: sessionId } });
+  expect(result.panes[1]).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "identity_pending", reason: "identity_pending", session_id: null } });
+  expect(result.agents[1]).toMatchObject({ agent: "gjc", agent_session: null });
+  expect((await resolveManagedSession(failedPane, namespace, failedDeps))?.identity.state).toBe("identity_pending");
+  await expect(readConversation(failedPane, undefined, undefined, failedDeps)).rejects.toMatchObject({
+    managedSession: { state: "identity_pending", reason: "identity_pending" },
+  });
+  expect(JSON.stringify(result)).not.toContain("stale-child");
 });
 
 it("leaves unmanaged snapshots untouched without reading unrelated agent projections", async () => {

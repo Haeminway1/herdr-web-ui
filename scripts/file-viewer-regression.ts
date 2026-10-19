@@ -22,7 +22,6 @@ async function fileAction(scope: Locator | Page, name: string): Promise<Locator>
 import { sheetsSettled } from "./sheets-settled.ts";
 import { runMoreItem } from "./header-more.ts";
 import type { Machine } from "../shared/protocol.ts";
-import { FAVICON_CANDIDATES } from "../src/lib/projectFavicon.ts";
 import { chromePath } from "./chrome-path.ts";
 
 const openFiles = async (page: import("playwright-core").Page) => {
@@ -40,7 +39,7 @@ const fidelitySources = ["const last = 7;\n\n", "first\n", "first\n\nlast", "\n"
 writeFileSync(transcript, [
   { type: "session_meta", payload: { id: thread, cwd: root } },
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Show me the demo video." }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [big code](./big.ts) or [mid code](./mid.ts) or [deep quotes](./deep.md) or [empty](./empty.txt) or [slow preview](./slow.md) or [long notes](./long.md) or [many lines](./lines.txt) or [long list](./list.md) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Open [demo video](./preview.webm) or [notes](./notes.txt) or [guide](./docs/guide.md) or [big](./big.txt) or [big code](./big.ts) or [mid code](./mid.ts) or [deep quotes](./deep.md) or [empty](./empty.txt) or [slow preview](./slow.md) or [long notes](./long.md) or [many lines](./lines.txt) or [long list](./list.md) or [contents page](./toc.html) or [file URI notes](${new URL(`file://${join(root, "notes.txt")}`).href}) or [folder](${new URL(`file://${root}`).href}).\n\n${new URL(`file://${join(root, "notes.txt")}`).href}\n\n\`\`\`ts\nconst answer = 42;\n\nexport { answer };\n\`\`\`` }] } },
   // a block the highlighter is quadratic on (a line of dashes in YAML): seconds on the page
   { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "References: [source column](./target.ts:60:8), [source range](./target.ts#L60-L65), [Markdown line](./docs/guide.md#L6), [past end](./notes.txt:999), [past preview](./big.txt:999999), [capped line](./lines.txt:5)." }] } },
   { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Dashes:\n\n\`\`\`yaml\n${"-".repeat(90_000)}\n\`\`\`` }] } },
@@ -106,6 +105,7 @@ document.getElementById("ran").textContent = "script ran";
 try { localStorage.length; document.getElementById("store").textContent = "storage reachable"; } catch { document.getElementById("store").textContent = "no storage"; }
 fetch("/api/health").then(() => { document.getElementById("net").textContent = "network reachable"; }, () => { document.getElementById("net").textContent = "network blocked"; });
 </script></body>`);
+writeFileSync(join(root, "toc.html"), `<!doctype html><meta charset="utf-8"><title>Contents</title><body><nav><a id="toc" href="#details">Details</a></nav><p id="ran">static</p><p style="height:1200px">body</p><h2 id="details">Details</h2><script>document.getElementById("ran").textContent = "contents ran";</script></body>`);
 const markdownPath = join(root, "preview #1 & 한글.MD");
 const markdownSource = "<p align=\"center\">\n  <img src=\"./preview.svg\" alt=\"Logo\" width=\"64\">\n</p>\n\n<p align=\"center\"><a href=\"https://example.com/\">website</a> &middot; <strong>bold</strong></p>\n\n# Markdown preview\n\n한글 문서도 새 탭에서 읽을 수 있습니다.\n\n| Item | State |\n| --- | --- |\n| Preview | Ready |\n\n- [x] Rendered\n\nSee [the other notes](other.md).\n\n```ts\nconst answer = 42;\n```\n\n![Local image](./preview.svg)\n\n```mermaid\ngraph LR\n  A[Read] --> B[Preview]\n```\n";
 writeFileSync(markdownPath, markdownSource);
@@ -144,7 +144,7 @@ try {
   await page.addInitScript(() => {
     // the app's own document only: a sandboxed HTML page the viewer frames has no storage to seed
     if (window.top !== window) return;
-    if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", chatFontSize: 17, chatFontFamily: "Georgia", sidebarLayout: "upstream" }));
+    if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", chatFontSize: 17, chatFontFamily: "Georgia", sidebarLayout: "upstream", fileOpen: "panel" }));
     const record = window as unknown as { longTasks: number[] };
     record.longTasks = [];
     new PerformanceObserver((list) => { for (const entry of list.getEntries()) record.longTasks.push(entry.duration); }).observe({ type: "longtask" });
@@ -157,19 +157,22 @@ try {
   await page.goto(`${origin}/api/health`);
   await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
   await page.locator(".conn-live").waitFor();
+  const activeChat = page.locator(".pane-frame.is-current .chat-view");
+  const codeBlocks = activeChat.locator(".markdown-code");
   const videoLink = page.getByRole("button", { name: "demo video", exact: true });
   await videoLink.waitFor();
-  await page.locator(".markdown-code").first().locator(".hl-keyword", { hasText: "const" }).waitFor();
-  await page.locator(".markdown-code .hl-number", { hasText: "42" }).waitFor();
+  await codeBlocks.first().locator(".hl-keyword", { hasText: "const" }).waitFor();
+  await codeBlocks.locator(".hl-number", { hasText: "42" }).waitFor();
   console.log("PASS Chat fenced code block is syntax highlighted");
   // a blank line must survive in the text a copy picks up
-  const codeText = await page.locator(".markdown-code .hl-code").first().innerText();
+  const codeText = await codeBlocks.locator(".hl-code").first().innerText();
   if (codeText !== "const answer = 42;\n\nexport { answer };") throw new Error(`Chat code block text lost its blank line: ${JSON.stringify(codeText)}`);
   console.log("PASS Chat code block keeps its blank line in the text");
   const checkCodeFidelity = async (mode: string) => {
     for (const [index, source] of fidelitySources.entries()) {
-      const block = page.locator(".markdown-code").nth(3 + index);
+      const block = codeBlocks.nth(3 + index);
       assert.equal(await block.locator("code").textContent(), source, `${mode}: source whitespace`);
+      assert.equal(await block.locator("pre").evaluate((pre) => getComputedStyle(pre).visibility), "visible", `${mode}: selection comes from the current pane, not a hidden cached pane`);
       const selections = await block.locator("pre").evaluate((pre, source) => {
         const selection = window.getSelection()!;
         const select = (node: Node) => {
@@ -189,7 +192,7 @@ try {
     }
     if (process.env.UI_EVIDENCE_DIR) {
       mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
-      await page.locator(".markdown-code").nth(3).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `code-fidelity-${mode}.png`) });
+      await codeBlocks.nth(3).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `code-fidelity-${mode}.png`) });
     }
     console.log(`PASS ${mode}: trailing and interior blank lines match source and native selection`);
   };
@@ -439,6 +442,23 @@ try {
   const notesLink = page.getByRole("button", { name: "notes", exact: true });
   const textPopup = page.getByRole("dialog", { name: "notes.txt", exact: true });
   const panel = page.locator("aside.file-panel");
+  const setFileOpen = async (fileOpen: string | null) => {
+    await page.evaluate((fileOpen) => {
+      const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as Record<string, unknown>;
+      const next = Object.fromEntries(Object.entries(settings).filter(([key]) => key !== "fileOpen"));
+      if (fileOpen !== null) next["fileOpen"] = fileOpen;
+      localStorage.setItem("herdr-web-ui:settings", JSON.stringify(next));
+    }, fileOpen);
+    await page.reload();
+  };
+  await setFileOpen(null);
+  await notesLink.click();
+  await textPopup.getByText("File preview history regression", { exact: true }).waitFor();
+  assert.equal(await panel.count(), 0, "text starts in the popup at 1280px by default");
+  await textPopup.getByRole("button", { name: "Close file", exact: true }).click();
+  await textPopup.waitFor({ state: "detached" });
+  await setFileOpen("panel");
+  console.log("PASS by default a text file opens in the popup on a wide window");
   const beforePlacement = await page.evaluate(() => history.state);
   await videoLink.click();
   await page.locator(".modal.file-viewer video").waitFor();
@@ -522,6 +542,20 @@ try {
   await panel.waitFor({ state: "detached" });
   assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, "Close file consumes the preview entry");
   console.log("PASS from 980px a file is a panel beside the pane: no scrim, the pane takes clicks, its edge drags and keeps its width, Escape inside and Close file close it");
+  const contentsLink = page.getByRole("button", { name: "contents page", exact: true });
+  for (const close of ["Close file", "Escape"]) {
+    await contentsLink.click();
+    const framed = page.frameLocator(".file-viewer-page");
+    await framed.getByText("contents ran", { exact: true }).waitFor();
+    const opened = await page.evaluate(() => history.length);
+    await framed.locator("#toc").click();
+    await page.waitForFunction((length) => history.length === length + 1, opened);
+    if (close === "Escape") { await panel.locator(".file-panel-resizer").focus(); await page.keyboard.press("Escape"); }
+    else await panel.getByRole("button", { name: "Close file", exact: true }).click();
+    await panel.waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, `${close} consumes the preview entry under a page the reader navigated inside its frame`);
+  }
+  console.log("PASS from 980px a page the reader navigated inside its frame still closes on Close file and Escape, consuming the preview's entry");
   // a file chosen in the Files dialog opens in the panel, and the dialog, which would cover it, closes
   await openFiles(page);
   const filesDialog = page.getByRole("dialog", { name: "Files", exact: true });
@@ -1148,10 +1182,9 @@ try {
       if (request.pathname === "/api/machines") { await route.fulfill({ json: { machines: [...roster.machines, remote] } }); return; }
       if (request.pathname === "/api/machines/remote-fixture/session") { await route.fulfill({ json: { snapshot: remote.snapshot } }); return; }
       if (request.pathname.includes("/fs/")) {
-        // the sidebar probes each workspace folder for its project icon on its own PC; only the
+        // the sidebar asks each workspace folder for its project icon on its own PC; only the
         // document's reads are the link's
-        const asked = request.searchParams.get("path") ?? "";
-        if (!FAVICON_CANDIDATES.some((candidate) => asked.endsWith(`/${candidate}`))) fileRequests.push(request.pathname);
+        if (!request.pathname.endsWith("/fs/favicon")) fileRequests.push(request.pathname);
         if (request.pathname.startsWith("/api/machines/remote-fixture/")) {
           request.pathname = request.pathname.replace("/api/machines/remote-fixture/", "/api/");
           await route.fulfill({ response: await route.fetch({ url: request.href }) });
@@ -1195,15 +1228,15 @@ try {
     console.log(`PASS file-only link PC ownership, stored selection and pane independence: ${target}`);
   }
   await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}&view=chat`);
-  await page.locator(".markdown-code").first().waitFor();
+  await activeChat.locator(".markdown-code").first().waitFor();
 
   // a chat code block the highlighter gives up on stays plain and says so, and the page runs on
-  await page.locator(".markdown-code .hl-note", { hasText: "Too long to highlight" }).waitFor();
-  assert.equal(await page.locator(".markdown-code").nth(1).locator("code span:not(.hl-line)").count(), 0, "the slow block is plain");
-  await page.locator(".markdown-code").first().locator(".hl-keyword", { hasText: "const" }).waitFor();
+  await activeChat.locator(".markdown-code .hl-note", { hasText: "Too long to highlight" }).waitFor();
+  assert.equal(await activeChat.locator(".markdown-code").nth(1).locator("code span:not(.hl-line)").count(), 0, "the slow block is plain");
+  await activeChat.locator(".markdown-code").first().locator(".hl-keyword", { hasText: "const" }).waitFor();
   console.log("PASS A chat code block too slow to highlight stays plain, the others are colored");
   // a block of more lines than are drawn one element each opens whole as one text
-  const many = page.locator(".markdown-code").nth(2);
+  const many = activeChat.locator(".markdown-code").nth(2);
   await many.getByRole("button", { name: "Show all 30000 lines", exact: true }).click();
   await many.getByRole("button", { name: "Show less", exact: true }).waitFor();
   assert.equal(await many.locator(".hl-line").count(), 0, "no element per line");
@@ -1313,8 +1346,22 @@ try {
   await report.getByRole("button", { name: "Close file", exact: true }).click();
   await report.waitFor({ state: "hidden" });
   console.log("PASS An HTML file a command names opens as its page, sandboxed with no network or storage, and as its source");
+  const contents = page.getByRole("dialog", { name: "toc.html", exact: true });
+  for (const close of ["Close file", "scrim"]) {
+    await contentsLink.tap();
+    await frame.getByText("contents ran", { exact: true }).waitFor();
+    await sheetsSettled(page);
+    const opened = await page.evaluate(() => history.length);
+    await frame.locator("#toc").click();
+    await page.waitForFunction((length) => history.length === length + 1, opened);
+    if (close === "scrim") await page.locator(".file-viewer-scrim").evaluate((scrim) => scrim.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    else await contents.getByRole("button", { name: "Close file", exact: true }).click();
+    await contents.waitFor({ state: "hidden" });
+    assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, `${close} consumes the preview entry under a page the reader navigated inside its frame`);
+  }
+  console.log("PASS A page the reader navigated inside its frame still closes on Close file and the scrim, consuming the preview's entry");
   // a log in a plain code block: its paths open as well
-  const log = page.locator(".markdown-code").last();
+  const log = activeChat.locator(".markdown-code").last();
   await log.getByRole("button", { name: shotPath, exact: true }).tap();
   await shot.locator("img.file-viewer-media").waitFor();
   await shot.getByRole("button", { name: "Close file", exact: true }).click();

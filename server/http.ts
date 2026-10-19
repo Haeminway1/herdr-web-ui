@@ -9,6 +9,7 @@
 import { randomBytes } from "node:crypto";
 
 import { HerdrError } from "./herdr/client.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 
 export function isJsonObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -27,6 +28,9 @@ export function jsonResponse(body: unknown, status = 200, headers: Record<string
 }
 
 export function errorResponse(error: unknown): Response {
+  if (error instanceof GjcSdkLookupError) {
+    return jsonResponse({ error: { code: `gjc_sdk_${error.reason}`, message: "GJC SDK lookup failed" } }, error.reason === "timeout" ? 504 : 503);
+  }
   if (error instanceof HerdrError) {
     const status = error.code === "connect_failed" || error.code === "timeout" ? 502 : 404;
     return jsonResponse({ error: { code: error.code, message: error.message } }, status);
@@ -46,4 +50,16 @@ export function conflictResponse(code: string, message: string): Response {
 
 export function badRequest(code: string, message: string): Response {
   return jsonResponse({ error: { code, message } }, 400);
+}
+
+/** A JSON route's body as an object, or the 400 that says it is not JSON or not an object. */
+export async function readJsonObject<T extends object = Record<string, unknown>>(request: Request): Promise<T | Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return badRequest("invalid_json", "request body must be JSON");
+  }
+  if (!isJsonObject(body)) return badRequest("invalid_body", "request body must be a JSON object");
+  return body as T;
 }

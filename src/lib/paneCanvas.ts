@@ -21,6 +21,12 @@ export function paneContextPress(event: { button: number; ctrlKey: boolean }, ap
   return event.button === 2 || (apple && event.button === 0 && event.ctrlKey);
 }
 
+export function paneFieldTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const field = target.closest("input, textarea, [contenteditable=true]");
+  return field !== null && !field.classList.contains("xterm-helper-textarea");
+}
+
 /** herdr's stable split path, not its preorder number (which changes after another split). */
 export function splitPath(id: string): boolean[] | null {
   const match = /^split_\d+_(root|[01]+)$/.exec(id);

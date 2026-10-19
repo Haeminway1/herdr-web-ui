@@ -117,15 +117,19 @@ const DEFAULT_DEPS: StatusCollectorDeps = {
 export interface StatusCollector {
   /** Initial baselines are reconciled after the status subscription has started. */
   ready: Promise<void>;
+  trackPane: (paneId: string) => void;
   stop: () => void;
 }
 
-/** A status frame's payload: flat fields, no wrapper object. */
-export function parseStatusFrame(frame: EventFrame): { paneId: string; status: AgentStatus; agent: string | null } | null {
+/**
+ * A status frame's payload: flat fields, no wrapper object. `displayAgent` is the line a plugin
+ * reports for the agent (`report-metadata --display-agent`), absent from the frame when none is.
+ */
+export function parseStatusFrame(frame: EventFrame): { paneId: string; status: AgentStatus; agent: string | null; displayAgent: string | null } | null {
   if (frame.event !== "pane.agent_status_changed") return null;
-  const data = frame.data as { pane_id?: unknown; agent_status?: unknown; agent?: unknown } | undefined;
+  const data = frame.data as { pane_id?: unknown; agent_status?: unknown; agent?: unknown; display_agent?: unknown } | undefined;
   if (typeof data?.pane_id !== "string" || typeof data.agent_status !== "string") return null;
-  return { paneId: data.pane_id, status: data.agent_status as AgentStatus, agent: typeof data.agent === "string" ? data.agent : null };
+  return { paneId: data.pane_id, status: data.agent_status as AgentStatus, agent: typeof data.agent === "string" ? data.agent : null, displayAgent: typeof data.display_agent === "string" ? data.display_agent : null };
 }
 
 export type StructureEvent =
@@ -187,6 +191,7 @@ function resilientSubscription(
   onEvent: (frame: EventFrame) => void,
   onRestart: () => void,
   isStopped: () => boolean,
+  onFirstStart?: () => void,
 ): { close: () => void } {
   let subscription: Subscription | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -203,6 +208,7 @@ function resilientSubscription(
       onStarted: () => {
         delay = deps.reconnectMinMs;
         if (retry) onRestart();
+        else onFirstStart?.();
       },
       onError: logSubscriptionError,
       onClose: () => {
@@ -259,6 +265,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
   const heard = new Map<string, { status: AgentStatus; agent: string | null }>();
   /** when a pane last ended or closed, counted as events are: a snapshot asked for before that is no news of it */
   const actedOn = new Map<string, number>();
+  const trackedPanes = new Map<string, number>();
   /** when a pane last came to the front: no replay from a snapshot asked for before that. A resync still corrects it */
   const focusedAt = new Map<string, number>();
   /** the status subscription was closed for another pane set, or refused: a change since then may have had no event */
@@ -267,6 +274,11 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
   let replayFor: number | null = null;
   /** the open status subscription has started: until then it has heard nothing */
   let statusStarted = false;
+  /**
+   * each pane's `display_agent` as last heard. A plugin's new line for an agent comes only as a
+   * status event, of the same status (live, herdr 0.9.3), and no lifecycle event says it
+   */
+  const displayAgents = new Map<string, string | null>();
 
   const STRUCTURE_SUBSCRIPTIONS = [
     { type: "workspace.created" },
@@ -316,6 +328,10 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
           lastEventOf.set(parsed.paneId, ++statusEvents);
           heard.set(parsed.paneId, { status: parsed.status, agent: parsed.agent });
           handlers.onStatus(parsed.paneId, parsed.status, parsed.agent);
+          // the rows draw that line: clients read the panes again, as for a token (pane.updated)
+          const shown = displayAgents.get(parsed.paneId);
+          displayAgents.set(parsed.paneId, parsed.displayAgent);
+          if (shown !== undefined && shown !== parsed.displayAgent) scheduleStructureChange();
         },
         // herdr's contract: subscribe, wait until it started, then snapshot. The snapshot
         // that chose these panes came before: one more closes the gap it leaves.
@@ -368,6 +384,8 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       const snapshot = await deps.snapshot();
       if (stopped) return;
       handlers.onBaseline(snapshot.panes);
+      // what a pane's first event is measured against; an event since is newer, and kept
+      for (const pane of snapshot.panes) if (!displayAgents.has(pane.pane_id)) displayAgents.set(pane.pane_id, pane.display_agent ?? null);
       // a snapshot asked for a subscription that closed meanwhile may predate what the next
       // one misses: recovery waits for that one's own snapshot
       const resynced = resync !== null && resync === statusGeneration && statusSubscription !== null;
@@ -381,6 +399,14 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
         handlers.onStructureChange();
       }
       const paneIds = snapshot.panes.map((pane) => pane.pane_id);
+      for (const [paneId, seq] of trackedPanes) {
+        if (seq <= askedAt && !paneIds.includes(paneId)) {
+          trackedPanes.delete(paneId);
+          actedOn.set(paneId, ++statusEvents);
+          heard.delete(paneId);
+          handlers.onPaneEnded(paneId);
+        }
+      }
       const sameSet =
         paneIds.length === subscribedPaneIds.size && paneIds.every((id) => subscribedPaneIds.has(id));
       // the live subscription is about to be closed for another pane set: what this snapshot
@@ -423,6 +449,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       for (const paneId of [...heard.keys()]) if (!paneIds.includes(paneId) && (lastEventOf.get(paneId) ?? 0) <= askedAt) heard.delete(paneId);
       for (const [paneId, seq] of actedOn) if (seq <= askedAt && !paneIds.includes(paneId)) actedOn.delete(paneId);
       for (const [paneId, seq] of focusedAt) if (seq <= askedAt && !paneIds.includes(paneId)) focusedAt.delete(paneId);
+      for (const paneId of [...displayAgents.keys()]) if (!paneIds.includes(paneId) && (lastEventOf.get(paneId) ?? 0) <= askedAt) displayAgents.delete(paneId);
       if (sameSet) {
         if (statusStarted || paneIds.length === 0) ready.resolve();
         return;
@@ -475,6 +502,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       const parsed = parseStructureFrame(frame);
       if (!parsed) return;
       if (parsed.kind === "pane-ended") {
+        trackedPanes.delete(parsed.paneId);
         // a snapshot already on its way still holds the pane: it is no news of it
         actedOn.set(parsed.paneId, ++statusEvents);
         heard.delete(parsed.paneId);
@@ -511,6 +539,7 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
       void reconcile();
     },
     () => stopped,
+    () => { if (trackedPanes.size > 0) void reconcile(); },
   );
 
   // Its own connection: a focus type an older herdr refuses must not cost pane exits.
@@ -540,6 +569,10 @@ export function startStatusCollector(handlers: StatusCollectorHandlers, override
 
   return {
     ready: ready.promise,
+    trackPane(paneId) {
+      trackedPanes.set(paneId, ++statusEvents);
+      void reconcile();
+    },
     stop() {
       stopped = true;
       if (reconcileTimer !== null) clearTimeout(reconcileTimer);
