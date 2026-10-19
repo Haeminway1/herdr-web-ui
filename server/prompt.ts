@@ -1575,7 +1575,6 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       try {
         steps = answerKeys(prompt, body);
       } catch (error) {
-        if (error instanceof ManagedPromptChanged) return promptChanged();
         if (error instanceof InvalidAnswer) return badRequest("invalid_answer", error.message);
         throw error;
       }
@@ -1741,6 +1740,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         }
         answered = true;
       } catch (error) {
+        if (error instanceof ManagedPromptChanged) return promptChanged();
         if (error instanceof InvalidAnswer) return badRequest("invalid_answer", error.message);
         throw error;
       } finally {
