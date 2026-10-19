@@ -32,6 +32,23 @@ export type GjcSdkCommandRunner = (command: string, args: string[], options: Gjc
 
 export type GjcSdkWorktreeRootResolver = (cwd: string, timeoutMs: number) => Promise<string | null>;
 
+export interface GjcSdkBinding {
+  sessionId: string;
+  pid: number;
+  path: string;
+  hostIncarnation: string;
+  endpointGeneration: number;
+  /** Includes retired/fence rows: a heartbeat may revive a same-pid session without registering it. */
+  guardSessionIds: string[];
+}
+
+export class GjcSdkLookupError extends Error {
+  constructor(readonly reason: "timeout" | "unavailable") {
+    super(reason === "timeout" ? "GJC SDK lookup timed out" : "GJC SDK is unavailable");
+    this.name = "GjcSdkLookupError";
+  }
+}
+
 const execFileAsync = promisify(execFile);
 
 const runGjcSdkCommand: GjcSdkCommandRunner = async (command, args, options) => {
@@ -116,7 +133,7 @@ export interface GjcSdkSessionIdentity {
   readonly endpointGeneration: number;
 }
 
-type ResolvedSession = GjcSdkSessionIdentity & { readonly savedSession: unknown };
+type ResolvedSession = GjcSdkSessionIdentity & { readonly savedSession: unknown; readonly guardSessionIds: string[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -130,6 +147,14 @@ function definitivelyRetired(row: Record<string, unknown>): boolean {
   return row.live === false
     || row.deleted === true
     || (row.terminal === true && row.terminalUncertain === false);
+}
+
+function collectGuardSessionIds(rows: readonly unknown[], pids: ReadonlySet<number>, sessionIds: Set<string>): void {
+  for (const row of rows) {
+    if (isRecord(row) && typeof row.pid === "number" && pids.has(row.pid) && nonEmptyString(row.sessionId)) {
+      sessionIds.add(row.sessionId);
+    }
+  }
 }
 
 /**
@@ -186,6 +211,13 @@ function parseBrokerPage(text: string): BrokerPage | null {
   } catch {
     return null;
   }
+}
+
+function brokerUnavailable(text: string): boolean {
+  try {
+    const response: unknown = JSON.parse(text);
+    return isRecord(response) && response.type === "broker_response" && response.ok === false;
+  } catch { return false; }
 }
 
 function bindingFromRow(value: unknown, pids: ReadonlySet<number>, cwd: string, worktreeRoot: string | null): SessionBinding | null {
@@ -476,6 +508,7 @@ async function resolveTranscript(
     const wantedPids = new Set(pids);
     const seenCursors = new Set<string>();
     const rows: unknown[] = [];
+    const guardSessionIds = new Set<string>();
     let indexSeq: number | null = null;
     let cursor: string | null = null;
     const scope = {
@@ -487,12 +520,14 @@ async function resolveTranscript(
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const input = cursor === null ? { scope } : { scope, cursor };
       const output = await runCachedSessionList(runner, { agentDir, jsonInput: input, deadline, cacheClock });
+      if (brokerUnavailable(output)) throw new GjcSdkLookupError("unavailable");
       const response = parseBrokerPage(output);
       if (response === null || response.sessions.length > PAGE_LIMIT) return null;
       if (indexSeq !== null && response.indexSeq !== indexSeq) return null;
       indexSeq = response.indexSeq;
       if (rows.length + response.sessions.length > MAX_ROWS) return null;
       rows.push(...response.sessions);
+      collectGuardSessionIds(response.sessions, wantedPids, guardSessionIds);
 
       cursor = response.continuationCursor;
       if (cursor === null) break;
@@ -519,28 +554,36 @@ async function resolveTranscript(
       deadline,
       cacheClock,
     });
+    if (brokerUnavailable(lookup)) throw new GjcSdkLookupError("unavailable");
     const exact = parseBrokerPage(lookup);
     if (exact === null || exact.continuationCursor !== null || indexSeq === null || exact.indexSeq < indexSeq) return null;
 
+    collectGuardSessionIds(exact.sessions, wantedPids, guardSessionIds);
     const samePidRows = exact.sessions.filter((row) => isRecord(row)
       && row.pid === expected.pid
       && !definitivelyRetired(row) && !directSessionFence(row, agentDir));
     if (samePidRows.length !== 1 || !sameBinding(samePidRows[0], expected, wantedPids, canonicalCwd, canonicalWorktreeRoot)) return null;
     if (!isRecord(samePidRows[0]) || samePidRows[0].sessionId !== expected.sessionId) return null;
+    guardSessionIds.add(expected.sessionId);
     return {
       sessionId: expected.sessionId,
       pid: expected.pid,
       savedSession: exact.savedSession,
       hostIncarnation: expected.hostIncarnation,
       endpointGeneration: expected.endpointGeneration,
+      guardSessionIds: [...guardSessionIds],
     };
-  } catch {
-    // SDK stderr and process errors may include user paths; discovery must fail closed and stay quiet.
-    return null;
+  } catch (error) {
+    // Never expose CLI stderr: it can contain user paths and credentials.
+    if (error instanceof GjcSdkLookupError) throw error;
+    const code = isRecord(error) ? error.code : undefined;
+    const message = error instanceof Error ? error.message : "";
+    throw new GjcSdkLookupError(code === "ETIMEDOUT" || code === "ETIME" || /SDK lookup deadline exceeded|SDK spawn budget exhausted/.test(message)
+      ? "timeout" : "unavailable");
   }
 }
 
-function savedTranscript(binding: ResolvedSession | null): (GjcSdkSessionIdentity & { path: string }) | null {
+function savedTranscript(binding: ResolvedSession | null): GjcSdkBinding | null {
   if (!binding) return null;
   const savedSession = binding.savedSession;
   if (!isRecord(savedSession) || savedSession.id !== binding.sessionId
@@ -551,6 +594,7 @@ function savedTranscript(binding: ResolvedSession | null): (GjcSdkSessionIdentit
     path: savedSession.path,
     hostIncarnation: binding.hostIncarnation,
     endpointGeneration: binding.endpointGeneration,
+    guardSessionIds: binding.guardSessionIds,
   };
 }
 
@@ -589,7 +633,7 @@ export function gjcSdkTranscript(
   pids: readonly number[],
   cwd: string,
   agentDir: string,
-): Promise<{ sessionId: string; pid: number; path: string; hostIncarnation: string; endpointGeneration: number } | null> {
+): Promise<GjcSdkBinding | null> {
   return resolveTranscript(pids, cwd, agentDir, runGjcSdkCommand, gitWorktreeRoot)
     .then(async (binding) => binding && await gjcSdkGenerationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? savedTranscript(binding) : null);
 }
@@ -602,6 +646,6 @@ export function gjcSdkTranscriptWithRunner(
   runner: GjcSdkCommandRunner,
   worktreeRootResolver: GjcSdkWorktreeRootResolver = gitWorktreeRoot,
   cacheClock: () => number = sessionListCacheClock,
-): Promise<{ sessionId: string; pid: number; path: string; hostIncarnation: string; endpointGeneration: number } | null> {
+): Promise<GjcSdkBinding | null> {
   return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock).then(savedTranscript);
 }

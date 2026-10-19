@@ -55,6 +55,7 @@ import { keyboardHoldsGrid, keyboardUp } from "../lib/keyboard.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
 import { fileUriPath, hyperlinkFilter, isWebLink, openWebLink, terminalFileLinkProvider } from "../lib/terminalFileLinks.ts";
 import { adjustTerminalGlyphs } from "../lib/terminalGlyphs.ts";
+import { keepDeleteRepeatText, keyboardNeedsText, restoreDeleteRepeatCaret } from "../lib/deleteRepeat.ts";
 import { terminalLabel } from "../lib/terminalLabel.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
@@ -630,6 +631,19 @@ export function PaneTerminal({
     };
     host.addEventListener("compositionstart", compositionStart);
     host.addEventListener("compositionend", compositionEnd);
+    // iOS repeats a held ⌫ only while the field has text and wraps (#862). These run after
+    // xterm's own capturing listeners on its textarea, so they refill it once xterm emptied it.
+    const textarea = term.textarea;
+    const keepText = (event: Event): void => {
+      if (!textarea || composingRef.current) return;
+      if ((event instanceof KeyboardEvent || event instanceof InputEvent) && event.isComposing) return;
+      if (event.type === "focus" || event.type === "keydown") restoreDeleteRepeatCaret(textarea);
+      if (event instanceof KeyboardEvent && event.keyCode === 229) return;
+      keepDeleteRepeatText(textarea);
+    };
+    const keepTextOn = textarea && keyboardNeedsText(navigator) ? ["focus", "keydown", "input"] : [];
+    for (const type of keepTextOn) textarea?.addEventListener(type, keepText, true);
+    if (textarea && keepTextOn.length) textarea.style.whiteSpace = "pre-wrap";
     const stopGlyphs = adjustTerminalGlyphs(term);
     // Let the browser emit a paste event, which xterm already handles (including
     // bracketed paste). Otherwise Ctrl+V becomes 0x16, triggering the agent's
@@ -1999,6 +2013,7 @@ export function PaneTerminal({
       document.removeEventListener("visibilitychange", onVisibility);
       onModifiedEnter.dispose();
       onCommandBackspace.dispose();
+      for (const type of keepTextOn) textarea?.removeEventListener(type, keepText, true);
       host.removeEventListener("keydown", onCommandArrow);
       onData.dispose();
       host.removeEventListener("paste", onPaste, true);
