@@ -138,11 +138,14 @@ function agentRow(paneId: string) {
   assert.ok(page);
   return page.locator(`.agents-sidebar .agent-item[data-machine="local"][data-pane="${paneId}"]`);
 }
+// the pane on screen was looked at: its row draws herdr's DONE as ready, as herdr's own client does (#1279)
+let onScreen: string | null = null;
+const drawn = (paneId: string, status: Status): Status => status === "done" && paneId === onScreen ? "idle" : status;
 async function settled(paneId: string, status: Status, start?: number): Promise<void> {
   if (start !== undefined) await until(() => frames.slice(start).some((frame) =>
     frame.type === "pane-status" && frame.pane_id === paneId && frame.agent_status === status), `${scenario}: pushed ${status}`);
   await until(async () => (await httpSnapshot()).panes.find((item) => item.pane_id === paneId)?.agent_status === status, `${scenario}: HTTP ${status}`);
-  await until(() => agentRow(paneId).locator(`.badge[data-status="${status}"]`).isVisible(), `${scenario}: browser ${status}`);
+  await until(() => agentRow(paneId).locator(`.badge[data-status="${drawn(paneId, status)}"]`).isVisible(), `${scenario}: browser ${drawn(paneId, status)}`);
   await rawWorking(paneId);
 }
 async function checkpoint(name: string): Promise<void> {
@@ -155,7 +158,7 @@ async function staysDone(paneId: string, start: number): Promise<void> {
   const observedUntil = Date.now() + 2_000;
   await until(async () => {
     assert.equal((await httpSnapshot()).panes.find((item) => item.pane_id === paneId)?.agent_status, "done");
-    assert.ok(await agentRow(paneId).locator('.badge[data-status="done"]').isVisible());
+    assert.ok(await agentRow(paneId).locator(`.badge[data-status="${drawn(paneId, "done")}"]`).isVisible());
     assert.ok(!frames.slice(start).some((frame) => frame.type === "pane-status" && frame.pane_id === paneId && frame.agent_status !== "done"), "stale raw events must not push a native status regression");
     return Date.now() >= observedUntil;
   }, "DONE remains stable while stale raw events are processed");
@@ -241,6 +244,7 @@ console.log(JSON.stringify({ type: "broker_response", ok: true, result: {
   await settled(paneId, "idle");
   assert.ok((await conversation(paneId)).includes("Synthetic GJC completed answer"));
   await agentRow(paneId).locator(".agent-select").click();
+  onScreen = paneId;
   await page.getByText("Synthetic GJC completed answer", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
   assert.ok(!frames.some((frame) => frame.type === "pane-status" && frame.pane_id === paneId && frame.agent_status === "done"));
   await checkpoint("initial-rest"); passed();
@@ -286,6 +290,7 @@ console.log(JSON.stringify({ type: "broker_response", ok: true, result: {
   scenario = "Delayed native readiness pushes DONE from raw RUN";
   await settled(delayedPaneId, "working");
   await agentRow(delayedPaneId).locator(".agent-select").click();
+  onScreen = delayedPaneId;
   start = frames.length;
   delayed.append(delayed.message("user", "Synthetic delayed request"), delayed.message("assistant", "Synthetic delayed completed answer"));
   await settled(delayedPaneId, "done", start);

@@ -1,5 +1,5 @@
 import { useContext, useEffect, useId, useRef, useState } from "react";
-import { Check, FileText, Send } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronUp, FileText, Send } from "lucide-react";
 
 import "./PromptCard.css";
 
@@ -27,15 +27,29 @@ export interface PromptCardProps {
   /** an option picked by a typed message, sent only on Confirm */
   typedAnswer?: TypedAnswer | null;
   onTypedAnswerDone?(): void;
+  /** the last reads of the screen failed: the question shown may have changed since (an answer is still checked, 409 prompt_changed) */
+  stale?: boolean;
 }
 
-export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedAnswer = null, onTypedAnswerDone }: PromptCardProps) {
+export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedAnswer = null, onTypedAnswerDone, stale = false }: PromptCardProps) {
   const t = useT();
   const { answerPanePrompt } = useMachineApi();
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [custom, setCustom] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(() => {
+    if (prompt.default_option_indices && prompt.default_option_indices.length > 0) {
+      return new Set(prompt.default_option_indices);
+    }
+    if (prompt.default_option_index !== undefined && prompt.default_option_index !== null) {
+      return new Set([prompt.default_option_index]);
+    }
+    return new Set();
+  });
+  const [custom, setCustom] = useState(() => prompt.default_custom_text ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<UserError | null>(null);
+  // folded to its header, to read the transcript under it; the question still waits, so the card
+  // stays. A typed answer to confirm opens it, and the next prompt's card starts open
+  const [foldedByUser, setFoldedByUser] = useState(false);
+  const folded = foldedByUser && typedAnswer?.option_index === undefined;
   const cardRef = useRef<HTMLElement | null>(null);
   const confirmRef = useRef<HTMLDivElement | null>(null);
   // the control Enter or Space last went down on: the click that follows on it is that key's
@@ -69,6 +83,14 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
    * prompt took its place, or after its pane was left, changes nothing there.
    */
   const answer = async (choice: Omit<PromptAnswer, "pane_id" | "prompt_id">, press?: { nativeEvent: Event; currentTarget: EventTarget }): Promise<boolean> => {
+    // Native OpenCode multiselect fields accept checks and a custom entry in the same array.
+    // Both buttons and Enter submit the whole field, including edits restored by Back.
+    if (prompt.agent === "opencode" && !prompt.fallback && prompt.multi_select && (choice.option_indices !== undefined || choice.custom_text !== undefined)) {
+      choice = {
+        option_indices: [...selected].sort((a, b) => a - b),
+        ...(custom.trim() ? { custom_text: custom.trim() } : {}),
+      };
+    }
     // read now: the pressed button is disabled while the answer is on its way, and loses the focus
     const fromCard = cardRef.current?.contains(document.activeElement) === true;
     const click = press?.nativeEvent as Partial<PointerEvent> | undefined;
@@ -90,7 +112,10 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
       if (!shown.current) return false;
       // a card read before the question moved on: refused as changed (409), or as an answer it no longer fits (400).
       // The note stays until the card is replaced or answered again, so the button never looks dead
-      if (cause instanceof ApiError && ((cause.status === 409 && cause.code === "prompt_changed") || (cause.status === 400 && cause.code === "invalid_answer"))) {
+      if (cause instanceof ApiError && cause.code === "reply_unconfirmed") {
+        setError({ message: t("OpenCode did not confirm the answer. Check the question before sending again."), detail: null });
+        onPromptChanged();
+      } else if (cause instanceof ApiError && ((cause.status === 409 && cause.code === "prompt_changed") || (cause.status === 400 && cause.code === "invalid_answer"))) {
         setError({ message: t("The question on screen changed; check it and answer again."), detail: null });
         onPromptChanged();
       } else {
@@ -120,7 +145,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   const planFile = prompt.plan_file;
 
   return (
-    <section className="prompt-card" ref={cardRef} role="region" aria-label={t("Agent is asking")}
+    <section className={`prompt-card${folded ? " is-folded" : ""}`} ref={cardRef} role="region" aria-label={t("Agent is asking")}
       onKeyDown={(event) => { down.current = null; keyed.current = event.key === "Enter" || event.key === " " ? event.target : null; }}
       onPointerDown={(event) => {
         keyed.current = null;
@@ -128,6 +153,19 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         down.current = button === null ? null : { target: button, pointerType: event.pointerType };
       }}>
       <header className="prompt-card-header">
+        {prompt.can_step_back && (
+          <button
+            type="button"
+            className="btn btn-ghost prompt-card-back"
+            disabled={pending}
+            aria-label={t("Back")}
+            title={t("Back")}
+            onClick={(event) => void answer({ step_back: true, draft: { option_indices: [...selected], custom_text: custom } }, event)}
+          >
+            <ArrowLeft aria-hidden="true" />
+            <span>{t("Back")}</span>
+          </button>
+        )}
         {/* read, not drawn: the title is the card's one red */}
         <span className="visually-hidden">{t("input needed")}</span>
         <h2>{prompt.title}</h2>
@@ -137,17 +175,45 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
             <FileText aria-hidden="true" />{t("View plan")}
           </button>
         )}
+        {/* a typed answer waiting for Confirm keeps the card open, so the fold has nothing to do then */}
+        <button type="button" className="prompt-card-fold" disabled={typedAnswer?.option_index !== undefined} aria-expanded={!folded} aria-label={t(folded ? "Expand question" : "Collapse question")} title={t(folded ? "Expand question" : "Collapse question")} onClick={() => setFoldedByUser(!folded)}>
+          {folded ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+        </button>
       </header>
       {/* a form of several questions (omo): each one, answered or not, and the one asked now */}
       {prompt.steps && (
         <ol className="prompt-card-steps" aria-label={t("Questions")}>
-          {prompt.steps.map((step, index) => (
-            <li key={index} className={`prompt-card-step${step.answered ? " is-answered" : ""}${step.current ? " is-current" : ""}`} aria-current={step.current ? "step" : undefined}>
-              <span className="prompt-card-step-mark" aria-hidden="true">{step.answered ? <Check /> : index + 1}</span>
-              <span className="prompt-card-step-label">{step.label}</span>
-              {step.answered && <span className="visually-hidden">{t("(answered)")}</span>}
-            </li>
-          ))}
+          {prompt.steps.map((step, index) => {
+            const isClickable = step.answered && !step.current && prompt.can_step_back;
+            return (
+              <li
+                key={index}
+                className={`prompt-card-step${step.answered ? " is-answered" : ""}${step.current ? " is-current" : ""}${isClickable ? " is-clickable" : ""}`}
+                aria-current={step.current ? "step" : undefined}
+              >
+                {isClickable ? (
+                  <button
+                    type="button"
+                    className="prompt-card-step-button"
+                    disabled={pending}
+                    aria-label={step.label}
+                    title={t("Back")}
+                    onClick={(event) => void answer({ step_index: index, draft: { option_indices: [...selected], custom_text: custom } }, event)}
+                  >
+                    <span className="prompt-card-step-mark" aria-hidden="true"><Check /></span>
+                    <span className="prompt-card-step-label">{step.label}</span>
+                    <span className="visually-hidden">{t("(answered)")}</span>
+                  </button>
+                ) : (
+                  <>
+                    <span className="prompt-card-step-mark" aria-hidden="true">{step.answered ? <Check /> : index + 1}</span>
+                    <span className="prompt-card-step-label">{step.label}</span>
+                    {step.answered && <span className="visually-hidden">{t("(answered)")}</span>}
+                  </>
+                )}
+              </li>
+            );
+          })}
         </ol>
       )}
       {/* a Claude approval's heading is its question too: said once */}
@@ -160,6 +226,23 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         </p>
       )}
       {/* the reference text (a command, a plan, a diff) is the one part that gives way when the card is short */}
+      {/* a review's answers (Claude, omp): each question over what was picked for it, read as prose */}
+      {prompt.answers && (
+        <dl className="prompt-card-answers">
+          {prompt.answers.map((item, index) => {
+            const answer = item.answer === null ? null : labelOf(item.answer);
+            return (
+              <div key={index} className="prompt-card-answer">
+                {item.question !== null && <dt>{item.question}</dt>}
+                <dd className={answer === null ? "is-empty" : undefined}>
+                  {answer === null ? t("Not answered") : <>{answer.text}{answer.recommended && <> <span className="prompt-card-tag">{t("Recommended")}</span></>}</>}
+                </dd>
+                {item.note !== undefined && <dd className="prompt-card-answer-note">{t("Note: {note}", { note: item.note })}</dd>}
+              </div>
+            );
+          })}
+        </dl>
+      )}
       {prompt.body !== null && prompt.body.length > 0 && <pre className={`prompt-card-body${prompt.body.includes("\n") ? "" : " is-line"}`}>{prompt.body}</pre>}
       {hasChoices && (
         /* busy on the options alone, never on the card: a live region inside an aria-busy subtree is not
@@ -186,8 +269,9 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
                 </label>
               );
             }
+            const isSelected = prompt.default_option_index === index;
             return (
-              <button key={index} type="button" className={`prompt-card-option${described}${typedAnswer?.option_index === index ? " is-typed" : ""}`} disabled={pending} onClick={(event) => void answer({ option_index: index }, event)}>
+              <button key={index} type="button" className={`prompt-card-option${described}${typedAnswer?.option_index === index ? " is-typed" : ""}${isSelected ? " is-selected" : ""}`} disabled={pending} onClick={(event) => void answer({ option_index: index }, event)}>
                 {number} {content}
               </button>
             );
@@ -195,13 +279,13 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         </div>
       )}
       {prompt.multi_select && (
-        <button type="button" className={`btn${selected.size > 0 ? " btn-primary" : ""} prompt-card-submit`} disabled={pending || selected.size === 0} onClick={(event) => void answer({ option_indices: [...selected].sort((a, b) => a - b) }, event)}>
+        <button type="button" className={`btn${selected.size > 0 ? " btn-primary" : ""} prompt-card-submit`} disabled={pending || (selected.size === 0 && !prompt.optional && !(prompt.agent === "opencode" && custom.trim()))} onClick={(event) => void answer({ option_indices: [...selected].sort((a, b) => a - b) }, event)}>
           {selected.size > 0 ? t("Submit ({n})", { n: selected.size }) : t("Submit")}
         </button>
       )}
       {prompt.custom_option_index !== null && (
         <div className="prompt-card-custom">
-          {hasChoices && <span className="prompt-card-custom-label" id={customLabelId}>{t("Or type your own answer")}</span>}
+          {hasChoices && <span className="prompt-card-custom-label" id={customLabelId}>{prompt.agent === "opencode" && prompt.multi_select ? t("Custom answer") : t("Or type your own answer")}</span>}
           <div className="prompt-card-custom-row">
             <input className="input" value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index]?.label ?? t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => setCustom(event.currentTarget.value)} onKeyDown={(event) => {
               // an IME's Enter commits the candidate; WebKit can send it after compositionend, as key code 229
@@ -212,6 +296,11 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
             </button>
           </div>
         </div>
+      )}
+      {prompt.optional && !prompt.multi_select && (
+        <button type="button" className="btn prompt-card-skip" disabled={pending} onClick={(event) => void answer({ custom_text: "" }, event)}>
+          {t("Skip question")}
+        </button>
       )}
       {typedAnswer?.option_index !== undefined && (
         <div className="prompt-card-confirm" role="alert" ref={confirmRef}>
@@ -226,7 +315,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
       )}
       {/* in the card from its first render, clipped while empty (never display: none): a live region that
           appears together with its words is not read; one that is there and gets them is */}
-      <p className={pending ? "prompt-card-status" : "visually-hidden"} role="status">{pending ? t("Sending your answer…") : null}</p>
+      <p className={pending || stale ? "prompt-card-status" : "visually-hidden"} role="status">{pending ? t("Sending your answer…") : stale ? t("Not updated: the question on screen may have changed.") : null}</p>
       {error !== null && <p className="prompt-card-error" role="alert">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}</p>}
     </section>
   );

@@ -29,6 +29,7 @@
     "scripts/gjc-status-browser-regression.ts",
     "scripts/managed-chat-demo-regression.ts",
     "scripts/fork-sync.test.ts",
+    "scripts/sidebar-activity-demo-regression.ts",
     "scripts/file-preview-text-browser-qa.ts",
     "scripts/file-preview-text-fixture.tsx",
     "scripts/virtual-source-browser-qa.ts",
@@ -37,7 +38,11 @@
     "scripts/repo-diff-fixture.tsx",
     "scripts/lan-exposure-notice-regression.ts",
     "scripts/application-paging-regression.ts",
-    "scripts/pane-paging-demo-regression.ts"
+    "scripts/omo-question-wheel-regression.ts",
+    "scripts/terminal-cjk-punctuation-regression.ts",
+    "scripts/pane-paging-demo-regression.ts",
+    "scripts/omp-question-compat.ts",
+    "app/scripts/build-web.ts"
   ],
   "include": []
 }

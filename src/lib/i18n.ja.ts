@@ -674,6 +674,7 @@ export const JA: Record<string, string> = {
 
   // ---- prompt card ----
   "Submit": "送信",
+  "Skip question": "質問をスキップ",
   "Submit ({n})": "送信 ({n})",
   "Recommended": "推奨",
   "Or type your own answer": "または回答を直接入力",
@@ -815,6 +816,7 @@ export const JA: Record<string, string> = {
   // ---- terminal ----
   "Codex has a question open in the terminal: answer it above, or close it there (alt+↓) to message Codex.": "Codex がターミナルで質問を表示しています。上で回答するか、ターミナルで閉じる (alt+↓) と Codex にメッセージを送れます。",
   "The question on screen changed; check it and answer again.": "画面上の質問が変わりました。確認してもう一度回答してください。",
+  "Not updated: the question on screen may have changed.": "更新されていません：画面の質問が変わっている可能性があります。",
   "NOT RESTORED": "復元失敗",
   "herdr could not restore this pane": "herdr はこのペインを復元できませんでした",
   "Select a pane to open its terminal": "ターミナルを開くペインを選択してください",
@@ -893,6 +895,7 @@ export const JA: Record<string, string> = {
   "That item no longer exists on the PC. Refresh and try again.": "その項目は PC にもうありません。更新してからもう一度お試しください。",
   "It changed on the PC while you were acting. Check it and try again.": "操作中に PC 側で変更されました。確認してからもう一度お試しください。",
   "The PC took too long to answer. Try again.": "PC の応答に時間がかかりすぎました。もう一度お試しください。",
+  "OpenCode did not confirm the answer. Check the question before sending again.": "OpenCode から回答の受信確認が届きませんでした。再送する前に質問を確認してください。",
   "The PC could not do that. Try again; if it keeps failing, restart herdr web ui on the PC.": "PC でその操作を実行できませんでした。もう一度お試しください。失敗が続く場合は PC で herdr web ui を再起動してください。",
   "Can't reach the PC. Check your connection, then try again.": "PC に接続できません。接続を確認してからもう一度お試しください。",
   "Something went wrong. Try again.": "問題が発生しました。もう一度お試しください。",
@@ -1402,4 +1405,7 @@ export const JA: Record<string, string> = {
   "Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way.": "localhost の開発サーバーなど、この PC が配信するページだけがペインの横に開きます。Shift キーを押しながらクリックすると、もう一方で開きます。",
   "Beside the pane": "ペインの横",
   "In a new tab": "新しいタブ",
+  "Change PC": "PCを切り替え",
+  "This is the demo. Go back to the app's list of PCs to open yours.": "これはデモです。アプリのPC一覧に戻って、ご自分のPCを開いてください。",
+  "This app shows {address}. Go back to its list of PCs to open another.": "このアプリは {address} を表示しています。PC一覧に戻ると別のPCを開けます。",
 };

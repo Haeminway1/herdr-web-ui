@@ -181,11 +181,14 @@ try {
     window.formAnswers = [];
     window.formDelay = 0;
     window.formReturned = 0;
+    window.formReadFails = false;
     const promptOf = (pane) => pane === web ? window.formPrompt : window.panePrompts[pane] ?? null;
     const json = (body, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
     window.fetch = (input, init) => {
       const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
       if (url.pathname === "/api/pane/prompt") {
+        // window.formReadFails: reads of the screen fail as a dropped connection does
+        if (window.formReadFails) return Promise.reject(new TypeError("Failed to fetch"));
         const prompt = promptOf(url.searchParams.get("pane_id"));
         if (prompt !== null) return json({ prompt, suggestion: null });
       }
@@ -631,6 +634,49 @@ try {
         console.log("PASS a prompt that replaces a scrolled one opens at its top");
       }
 
+      {
+        // Reads that keep failing leave the card in place and say it may be out of date, until a read answers (#1335)
+        const { page, errors, close } = await open({ width: 1440, height: 900, prompt: FORM });
+        try {
+          const status = page.locator(".prompt-card [role=status]");
+          const STALE = "Not updated: the question on screen may have changed.";
+          assert.equal(await status.textContent(), "", "a card read a moment ago says nothing");
+          await page.evaluate(() => { (window as unknown as { formReadFails: boolean }).formReadFails = true; });
+          await page.waitForFunction((text) => document.querySelector(".prompt-card [role=status]")?.textContent === text, STALE, { timeout: 10_000 });
+          assert.equal(await page.locator(".prompt-card").count(), 1, "the card stays while reads fail");
+          assert.ok(await page.locator(".prompt-card").getByText(FORM.question).isVisible(), "its question is still shown");
+          // the screen moved on while reads failed: the answer is refused, the poll restarts, and the notice stays
+          await setPrompt(page, { ...FORM, id: "demo-form-moved" });
+          await page.locator(".prompt-card-option-label").first().click();
+          await page.locator(".prompt-card").getByText("The question on screen changed; check it and answer again.").waitFor();
+          await page.waitForTimeout(500);
+          assert.equal(await status.textContent(), STALE, "a refused answer restarts the reads without clearing the notice");
+          await setPrompt(page, FORM);
+          await page.evaluate(() => { (window as unknown as { formReadFails: boolean }).formReadFails = false; });
+          await page.waitForFunction(() => document.querySelector(".prompt-card [role=status]")?.textContent === "", undefined, { timeout: 10_000 });
+          assert.deepEqual(errors, []);
+        } catch (error) { await preserveFailure(page, error); } finally { await close(); }
+        console.log("PASS reads that keep failing mark the card as not updated, and the next read that answers clears it");
+      }
+
+      for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 700, touch: true }]) {
+        // A review of several answers reads as text, a question over its answer, not as the
+        // terminal's lines in the mono box
+        const { page, errors, shot, close } = await open({ ...size, prompt: ANSWERS_REVIEW });
+        try {
+          assert.equal(await page.locator(".prompt-card-body").count(), 0, "no mono box");
+          const read = await page.locator(".prompt-card-answer").evaluateAll((rows) => rows.map((row) => ({
+            question: row.querySelector("dt")!.textContent, answer: row.querySelector("dd")!.textContent,
+            font: getComputedStyle(row).fontFamily,
+          })));
+          assert.deepEqual(read.map(({ question }) => question), ANSWERS_REVIEW.answers.map(({ question }) => question), "each question whole");
+          assert.deepEqual(read.map(({ answer }) => answer), ["Fictional repo names Recommended", "Second tab in a repo Recommended"], "each answer, its recommendation as the tag");
+          assert.ok(read.every(({ font }) => font === read[0]!.font) && !/mono/i.test(read[0]!.font), `the card's own font (${read[0]!.font})`);
+          await shot(`review-${size.width}`);
+          assert.deepEqual(errors, []);
+        } catch (error) { await preserveFailure(page, error); } finally { await close(); }
+        console.log(`PASS a review of answers reads as a question over each answer at ${size.width}px`);
+      }
       {
         // An answer that comes back after the next prompt is already showing belongs to the prompt
         // it was pressed for: the one on screen stays, with its focus

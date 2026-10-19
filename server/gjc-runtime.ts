@@ -6,9 +6,10 @@
 import { execFileSync } from "node:child_process";
 import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import nodePath, { join, type PlatformPath } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { gjcSdkTranscript } from "./gjc-sdk.ts";
-import { lookupExecutionError } from "./gjc-sdk-error.ts";
+import { GjcSdkLookupError, lookupExecutionError } from "./gjc-sdk-error.ts";
 import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 import { captureGjcIndex, gjcIndexUnchanged, type GjcIndexStamp } from "./gjc-index.ts";
 import { herdrRpc } from "./herdr/client.ts";
@@ -45,7 +46,10 @@ export function recentProcessTable(read: () => Promise<ProcessRow[]> = windowsPr
   const entry = { at: now, rows: read() };
   processTable = entry;
   // an empty table is a read that failed: the next poll asks again
-  void entry.rows.then((rows) => { if (rows.length === 0 && processTable === entry) processTable = null; });
+  void entry.rows.then(
+    (rows) => { if (rows.length === 0 && processTable === entry) processTable = null; },
+    () => { if (processTable === entry) processTable = null; },
+  );
   return entry.rows;
 }
 
@@ -83,7 +87,7 @@ export async function gjcPidUnderShell(
 }
 
 /** Forget the process table kept between Windows polls. */
-export function forgetGjcState(): void { processTable = null; transcriptFlights.clear(); transcriptBindings.clear(); }
+export function forgetGjcState(): void { processTable = null; transcriptFlights.clear(); transcriptBindings.clear(); transcriptFailures.clear(); }
 
 /**
  * Where `file` sits inside `root`, as path segments, or null when it is not inside. The
@@ -267,6 +271,8 @@ type GjcPaneProcessInfo = { process_info?: { shell_pid?: unknown; foreground_pro
 type GjcProcessIdentity = { pid: number; birth: number };
 
 type GjcTranscriptOptions = {
+  /** Status uses shorter SDK deadlines and may reuse recent failures; chat reads retry. */
+  purpose?: "chat" | "status";
   platform?: string;
   now?: () => number;
   processInfo?: (paneId: string) => Promise<GjcPaneProcessInfo | null>;
@@ -277,7 +283,8 @@ type GjcTranscriptOptions = {
 };
 
 /** Each SDK lookup spawns the gjc CLI, so equivalent pane/directory/I/O contexts share one flight. */
-const transcriptFlights = new Map<string, Set<{ options: GjcTranscriptOptions; flight: Promise<string | null> }>>();
+type TranscriptFlight = { options: GjcTranscriptOptions; flight: Promise<string | null> };
+const transcriptFlights = new Map<string, { entries: Set<TranscriptFlight>; successes: number }>();
 
 function sameLookupContext(a: GjcTranscriptOptions, b: GjcTranscriptOptions): boolean {
   return a.processInfo === b.processInfo
@@ -308,6 +315,13 @@ type KeptBinding = {
  * creates the transcript the broker then names, without a new index row.
  */
 const transcriptBindings = new Map<string, KeptBinding>();
+const transcriptFailures = new Map<string, {
+  options: GjcTranscriptOptions;
+  at: number;
+  processes: GjcProcessIdentity[];
+  indexStamp: GjcIndexStamp | null;
+  error: GjcSdkLookupError | null;
+}>();
 
 /**
  * Resolves only while the SDK-selected GJC process is still foreground in this pane with the
@@ -324,16 +338,26 @@ export function gjcTranscriptForPane(
   options: GjcTranscriptOptions = {},
 ): Promise<string | null> {
   const key = JSON.stringify([paneId, cwd, home, options.platform ?? process.platform]);
-  const flights = transcriptFlights.get(key) ?? new Set<{ options: GjcTranscriptOptions; flight: Promise<string | null> }>();
-  for (const shared of flights) {
-    if (sameLookupContext(shared.options, options)) return shared.flight;
+  const now = (options.now ?? Date.now)();
+  for (const [other, failure] of transcriptFailures) {
+    if (now - failure.at >= BINDING_TTL_MS) transcriptFailures.delete(other);
   }
-  const flight: Promise<string | null> = lookupGjcTranscript(key, paneId, cwd, home, options).finally(() => {
-    flights.delete(entry);
-    if (transcriptFlights.get(key) === flights && flights.size === 0) transcriptFlights.delete(key);
+  const flights = transcriptFlights.get(key) ?? { entries: new Set<TranscriptFlight>(), successes: 0 };
+  for (const shared of flights.entries) {
+    if (sameLookupContext(shared.options, options)
+      && (shared.options.purpose ?? "chat") === (options.purpose ?? "chat")) return shared.flight;
+  }
+  const successes = flights.successes;
+  // The group lives until every overlapping flight settles, including one finishing after a success.
+  const flight: Promise<string | null> = lookupGjcTranscript(key, paneId, cwd, home, options, () => flights.successes === successes).then((path) => {
+    if (path !== null) { flights.successes += 1; transcriptFailures.delete(key); }
+    return path;
+  }).finally(() => {
+    flights.entries.delete(entry);
+    if (transcriptFlights.get(key) === flights && flights.entries.size === 0) transcriptFlights.delete(key);
   });
   const entry = { options, flight };
-  flights.add(entry);
+  flights.entries.add(entry);
   transcriptFlights.set(key, flights);
   return flight;
 }
@@ -344,6 +368,7 @@ async function lookupGjcTranscript(
   cwd: string,
   home: string,
   options: GjcTranscriptOptions,
+  canCacheFailure: () => boolean,
 ): Promise<string | null> {
   const platform = options.platform ?? process.platform;
   const agentDir = join(home, ".gjc", "agent");
@@ -361,16 +386,22 @@ async function lookupGjcTranscript(
   const sameBirth = (a: number, b: number) => platform === "darwin" ? Math.abs(a - b) <= 1000 : a === b;
   const sameProcesses = (a: GjcProcessIdentity[], b: GjcProcessIdentity[]) => a.length === b.length
     && a.every((process) => b.some((other) => other.pid === process.pid && sameBirth(other.birth, process.birth)));
-  const forget = (): null => { transcriptBindings.delete(key); return null; };
+  const forget = (): null => {
+    if (canCacheFailure()) { transcriptBindings.delete(key); transcriptFailures.delete(key); }
+    return null;
+  };
 
   const processes = async (info: GjcPaneProcessInfo | null, fresh: boolean): Promise<GjcProcessIdentity[] | null> => {
     if (!info?.process_info) return null;
     if (platform === "win32") {
       const table = fresh ? readProcessTable : () => recentProcessTable(readProcessTable);
       const process = await gjcPidUnderShell(info.process_info.shell_pid, platform, table);
-      if (process === undefined) return null;
+      if (process === undefined) throw lookupExecutionError(undefined);
       if (process === null) return [];
-      if (!Number.isSafeInteger(process.started) || process.started === null) return null;
+      if (!Number.isSafeInteger(process.started) || process.started === null) {
+        processTable = null;
+        throw lookupExecutionError(undefined);
+      }
       return [{ pid: process.pid, birth: process.started }];
     }
 
@@ -383,7 +414,7 @@ async function lookupGjcTranscript(
       if (!isGjcProcess(argv)) continue;
       if (typeof process.pid !== "number" || !Number.isSafeInteger(process.pid) || process.pid <= 0) return null;
       const started = processBirth(process.pid);
-      if (started === null || !Number.isFinite(started)) return null;
+      if (started === null || !Number.isFinite(started)) throw lookupExecutionError(undefined);
       const previous = seen.get(process.pid);
       if (previous !== undefined && !sameBirth(previous, started)) return null;
       if (previous === undefined) {
@@ -397,7 +428,7 @@ async function lookupGjcTranscript(
   try {
     const initialInfo = await readProcessInfo(paneId);
     if (!initialInfo) return forget();
-    const initial = await processes(initialInfo, false);
+    let initial = await processes(initialInfo, false);
     if (!initial || initial.length === 0) return forget();
     // Read before the lookup: a write that lands during it then makes the next read ask again.
     const indexStamp = captureGjcIndex(agentDir), checkedAt = now();
@@ -416,15 +447,41 @@ async function lookupGjcTranscript(
           const final = await processes(finalInfo, true);
           if (!final || !sameProcesses(final, kept.processes)) return forget();
           if (validateGjcSdkTranscript(kept.binding, cwd, agentDir) !== path) return forget();
+          if (!await generationCurrent(agentDir, kept.binding.sessionId, kept.binding.endpointGeneration)) return forget();
           kept.indexStamp = indexStamp;
           return path;
         }
         if (path) return forget();
       }
     }
+    const failure = transcriptFailures.get(key);
+    if (options.purpose === "status" && failure) {
+      const current = platform === "win32" ? await processes(initialInfo, true) : initial;
+      if (!current || current.length === 0) return forget();
+      if (sameLookupContext(failure.options, options) && failure.options.purpose === options.purpose
+        && checkedAt - failure.at < BINDING_TTL_MS
+        && sameProcesses(current, failure.processes) && isDeepStrictEqual(failure.indexStamp, indexStamp)) {
+        if (failure.error) throw failure.error;
+        return null;
+      }
+      transcriptFailures.delete(key);
+      initial = current;
+    }
     transcriptBindings.delete(key);
     const pids = initial.map((process) => process.pid);
-    const binding = await sdkTranscript(pids, cwd, agentDir);
+    const cacheFailure = (error: GjcSdkLookupError | null): void => {
+      if (options.purpose === "status" && canCacheFailure()) {
+        transcriptFailures.set(key, { options, at: now(), processes: initial, indexStamp, error });
+      }
+    };
+    let binding: GjcSdkBinding | null;
+    try {
+      binding = await sdkTranscript(pids, cwd, agentDir, options.purpose);
+    } catch (error) {
+      if (error instanceof GjcSdkLookupError) cacheFailure(error);
+      throw error;
+    }
+    if (binding === null) { cacheFailure(null); return null; }
     const owner = binding && initial.find((process) => process.pid === binding.pid);
     if (!binding || !owner) return null;
     const path = validateGjcSdkTranscript(binding, cwd, agentDir);
@@ -436,6 +493,7 @@ async function lookupGjcTranscript(
     const final = await processes(finalInfo, true);
     if (!final?.some((process) => process.pid === owner.pid && sameBirth(process.birth, owner.birth))) return null;
     if (validateGjcSdkTranscript(binding, cwd, agentDir) !== path) return null;
+    if (!await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration)) return null;
     if (indexStamp !== null) {
       for (const [other, entry] of transcriptBindings) if (checkedAt - entry.at >= BINDING_TTL_MS) transcriptBindings.delete(other);
       // aged from before the lookup, when the index stamp was read

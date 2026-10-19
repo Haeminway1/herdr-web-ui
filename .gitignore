@@ -26,3 +26,5 @@ scripts/*.tmp.ts
 
 # Local fork verification receipts and screenshots, never release inputs
 _artifacts/
+# the iOS app's bundled pages and demo, assembled by app/scripts/build-web.ts
+app/www/
