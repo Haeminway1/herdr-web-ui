@@ -733,6 +733,47 @@ it.each(["timeout", "unavailable"] as const)("propagates cached generation %s an
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
+it.each(["fresh", "cached"] as const)("sanitizes late %s generation failures and discards reusable bindings", async (mode) => {
+  for (const code of ["ENOENT", "EACCES", "BROKER"]) {
+    forgetTranscriptState();
+    const home = tempDir("gjc-final-generation-unavailable-");
+    try {
+      const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+      const store = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+      mkdirSync(cwd); mkdirSync(store, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+      const path = join(store, "session.jsonl"), sessionId = "session";
+      writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
+      writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId, pid: 200 }));
+      const binding = { path, sessionId, pid: 200, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] };
+      const secret = `private generation execution ${code} ${path}`;
+      let failing = false, lookups = 0, observations = 0;
+      const finalObservation = mode === "cached" ? 3 : 2;
+      const options = {
+        platform: "linux", now: () => 0, processBirth: () => 1000,
+        processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+        sdkTranscript: async () => { lookups += 1; return binding; },
+        generationCurrent: async () => {
+          observations += 1;
+          if (failing && observations === finalObservation) throw Object.assign(new Error(secret), { code });
+          return true;
+        },
+      };
+      if (mode === "cached") expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+      observations = 0; failing = true;
+      const failure = await gjcTranscriptForPane("pane", cwd, home, options).catch(error => error);
+      expect(failure).toBeInstanceOf(GjcSdkLookupError);
+      expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(JSON.stringify(failure)).not.toContain(secret);
+      expect(observations).toBe(finalObservation);
+      expect(lookups).toBe(1);
+      failing = false;
+      expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+      expect(lookups).toBe(2);
+      expect(observations).toBe(finalObservation + 2);
+    } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+  }
+});
+
 it.each(["fresh", "cached"] as const)("rejects a %s transcript when the pane changes while generation is awaited", async (mode) => {
   for (const change of ["exit", "switch"] as const) {
     forgetTranscriptState();

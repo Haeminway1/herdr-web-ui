@@ -1188,6 +1188,15 @@ export function Composer({
     contextShown, mobile, usageCaption, usage?.problem, hintText, dictation.shown, backgroundTasks,
     plan?.done, plan?.total, statusCompact, compactNow !== undefined, facesLoaded, t]);
   const menuId = `composer-menu-${paneId}`;
+  // the suggestions' own close, for a pointer or a phone, which has no Escape: it does what Escape does, and the
+  // text and the focus stay in the box (a press never takes the focus; a key on it hands it back)
+  const menuClose = (
+    <button type="button" className="composer-menu-close" aria-label={t("Close suggestions")} title={t("Close suggestions")}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={(event) => { setMenuDismissed(true); if (event.detail === 0) textareaRef.current?.focus({ preventScroll: true }); }}>
+      <X aria-hidden="true" />
+    </button>
+  );
   // the arrow keys move the selection, not the focus (it stays in the box), so the browser does not scroll to it
   useEffect(() => {
     if (menuOpen) document.getElementById(`${menuId}-${selectedIndex}`)?.scrollIntoView({ block: "nearest" });
@@ -1398,6 +1407,7 @@ export function Composer({
 
         {filesFailedShown && (
           <div className="menu composer-menu">
+            {menuClose}
             <div className="composer-menu-group">
               <div className="menu-heading">{t("Files")}</div>
               <p className="chat-inline-state chat-inline-error">{t("Couldn't load suggestions. Keep typing to try again.")}</p>
