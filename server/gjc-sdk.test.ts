@@ -913,6 +913,35 @@ describe("GJC SDK session.list cache", () => {
       expect(fixture.calls).toHaveLength(3);
     }
   });
+  it.each(["ENOENT", "EACCES", "BROKER"] as const)("does not hide generation %s behind cached broker pages or missing saved metadata", async code => {
+    for (const savedSession of [null, { id: "session-1", path: savedPath }]) {
+      const fixture = fakeRunner([page([session()]), page([session()], { savedSession })]);
+      const secret = `private generation ${code} ${savedPath}`;
+      let failing = false, observations = 0;
+      const generationCurrent = async () => {
+        observations += 1;
+        if (failing) throw Object.assign(new Error(secret), { code });
+        return true;
+      };
+      const lookups = [sdkCurrentSessionWithRunner, sdkTranscriptWithRunner];
+      const read = (lookup: typeof lookups[number]) => lookup([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver, () => 0, generationCurrent);
+      await expect(read(sdkCurrentSessionWithRunner)).resolves.toMatchObject({ sessionId: "session-1" });
+      failing = true;
+      for (const lookup of lookups) {
+        const failure = await read(lookup).catch(error => error);
+        expect(failure).toBeInstanceOf(GjcSdkLookupError);
+        expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+        expect(JSON.stringify(failure)).not.toContain(secret);
+      }
+      failing = false;
+      await expect(read(sdkCurrentSessionWithRunner)).resolves.toMatchObject({ sessionId: "session-1" });
+      if (savedSession === null) await expect(read(sdkTranscriptWithRunner)).resolves.toBeNull();
+      else await expect(read(sdkTranscriptWithRunner)).resolves.toMatchObject({ path: savedPath });
+      expect(observations).toBe(5);
+      expect(fixture.calls).toHaveLength(2);
+    }
+  });
+
   it("coalesces concurrent callers for the same raw query", async () => {
     let resolveFirstStarted: () => void = () => {};
     const firstStarted = new Promise<void>((resolve) => {
