@@ -380,7 +380,7 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
                       </span>
                     </span>
                   </div>
-                  <div className="cl-pane-actions">
+                  <div className={`cl-pane-actions${armedId === pane.pane_id ? " is-armed-within" : ""}`}>
                     {residentsOn && pane.cwd && (() => {
                       const folder = residentFolder(pane.cwd, [...residents.top, ...residents.residents]);
                       // the protected folder belongs to the verified manager pane alone: an

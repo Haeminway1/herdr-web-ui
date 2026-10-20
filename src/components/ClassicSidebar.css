@@ -472,8 +472,11 @@
 }
 
 /* keyboard focus only: a click's focus would bring the buttons under the pointer mid-click */
-.cl-pane-item:has(:focus-visible) .cl-pane-actions,
-.cl-pane-actions:has(.is-armed) {
+/* no :has() here: a :has() on these rows made Chrome restyle the pane column on every
+   xterm glyph measurement, freezing each pane switch for 0.3-0.8s */
+.cl-pane-select:focus-visible ~ .cl-pane-actions,
+.cl-pane-actions:focus-within,
+.cl-pane-actions.is-armed-within {
   opacity: 1;
 }
 
@@ -500,8 +503,9 @@
 }
 
 /* only the buttons take a click: the fade in front of them still opens the pane */
-.cl-pane-item:has(:focus-visible) .cl-pane-actions > *,
-.cl-pane-actions:has(.is-armed) > * {
+.cl-pane-select:focus-visible ~ .cl-pane-actions > *,
+.cl-pane-actions:focus-within > *,
+.cl-pane-actions.is-armed-within > * {
   pointer-events: auto;
 }
 
