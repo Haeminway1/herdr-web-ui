@@ -408,13 +408,17 @@ it("reports only fixed blocked codes, never arbitrary process output from a reco
   await expect(conversationForPane(pane)).rejects.toThrow("blocked_record_state");
 });
 
-it("connects the existing managed record using live SDK identity, without upgrading recovery metadata", async () => {
+it("waits for a persisted GJC inode pin without upgrading recovery metadata", async () => {
   record.schema = 1; delete record.file_identity; save();
   const original = readFileSync(recordFile, "utf8");
-  expect((await resolve()).identity).toMatchObject({ harness: "gjc", state: "ready", session_id: sessionId });
-  expect(await resolveTranscript(pane, root)).toMatchObject({ path: sessionFile });
-  expect((await conversationForPane(pane)).turns.flatMap(t => t.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+  expect(await resolve()).toMatchObject({ identity: { harness: "gjc", state: "identity_pending", session_id: null }, sessionFile: null });
+  await expect(resolveTranscript(pane, root)).rejects.toThrow("identity_pending");
+  await expect(conversationForPane(pane)).rejects.toThrow("identity_pending");
   expect(readFileSync(recordFile, "utf8")).toBe(original);
+  pinCurrentFile();
+  const pinnedRecord = readFileSync(recordFile, "utf8");
+  expect((await conversationForPane(pane)).turns.flatMap(t => t.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+  expect(readFileSync(recordFile, "utf8")).toBe(pinnedRecord);
 });
 
 it.each(["sessionId", "pid", "hostIncarnation"] as const)("rejects a live SDK %s mismatch without reading another session", async field => {
@@ -555,6 +559,25 @@ it.each([false, true])("rejects a same-header GJC inode replacement with a prior
   expect(projected.panes[0]).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "blocked" } });
   expect(projected.agents[0]?.agent_session).toBeNull();
   await expect(conversationForPane(pane)).rejects.toThrow("blocked_session_replaced");
+  expect(readFileSync(recordFile, "utf8")).toBe(originalRecord);
+});
+
+it.each([false, true])("denies a pinless GJC same-header replacement with a cached conversation=%s", async warm => {
+  if (warm) expect((await conversationForPane(pane)).source).toBe("gjc-transcript");
+  record.schema = 1; delete record.file_identity; save();
+  const originalRecord = readFileSync(recordFile, "utf8");
+  const originalFile = statSync(sessionFile);
+  const replacement = join(String(record.session_dir), "replacement.jsonl");
+  writeFileSync(replacement, [JSON.stringify({ type: "session", id: sessionId, cwd: root }), message("assistant", "unauthorized replacement")].join("\n") + "\n", { mode: 0o600 });
+  renameSync(replacement, sessionFile);
+  expect(statSync(sessionFile).ino).not.toBe(originalFile.ino);
+  expect(await resolve()).toMatchObject({ identity: { harness: "gjc", state: "identity_pending", session_id: null }, sessionFile: null });
+  const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  const projected = await labelManagedPanes(snapshot);
+  expect(projected.panes[0]).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "identity_pending" } });
+  expect(projected.agents[0]?.agent_session).toBeNull();
+  await expect(resolveTranscript(pane, root)).rejects.toThrow("identity_pending");
+  await expect(conversationForPane(pane)).rejects.toThrow("identity_pending");
   expect(readFileSync(recordFile, "utf8")).toBe(originalRecord);
 });
 

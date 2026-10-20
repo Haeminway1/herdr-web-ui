@@ -214,7 +214,7 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     if (typeof record.session_id !== "string" || !ID.test(record.session_id) || typeof record.session_file !== "string" || !isAbsolute(record.session_file)) return blocked("blocked_session_identity");
     const sessionId = record.session_id;
     const hasFileIdentity = Object.hasOwn(record, "file_identity");
-    if (identity.harness === "omo" && !hasFileIdentity) return pending("identity_pending");
+    if ((identity.harness === "gjc" || identity.harness === "omo") && !hasFileIdentity) return pending("identity_pending");
     const pinned = hasFileIdentity ? fileIdentityPin(record.file_identity) : null;
     if (hasFileIdentity && !pinned) return blocked("blocked_session_replaced");
     const sessionFile = record.session_file;
@@ -238,7 +238,7 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       || realpathSync(store) !== store || realpathSync(sessionFile) !== sessionFile || !inside(store, sessionFile)
       || !sessionFile.endsWith(".jsonl")) return blocked("blocked_session_root");
     const info = lstatSync(sessionFile);
-    const pinMatches = pinned ? pinned.dev === info.dev && pinned.ino === info.ino : identity.harness === "gjc";
+    const pinMatches = pinned !== null && pinned.dev === info.dev && pinned.ino === info.ino;
     if (!info.isFile() || !pinMatches) return blocked("blocked_session_replaced");
     const initialPermission = transcriptPermission(info, identity.harness, pinned !== null && pinMatches, storeInfo);
     if (!initialPermission) return blocked("blocked_session_replaced");
