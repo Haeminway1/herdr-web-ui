@@ -22,7 +22,7 @@ import { useT } from "../lib/i18n.ts";
 import { paneStatus } from "../lib/status.ts";
 import { groupDirectories } from "../lib/directoryGroups.ts";
 import { useSettings, type SidebarGrouping } from "../lib/settings.ts";
-import { toggleResident, useResidents } from "../lib/residents.ts";
+import { moveResident, toggleResident, useResidents } from "../lib/residents.ts";
 import { isSystemResidentPane, launchArgs, residentFolder, residentName } from "../../shared/residents.ts";
 
 const CLOSE_ARM_MS = 3000;
@@ -232,39 +232,65 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
     });
   };
 
-  const onDragStart = (event: DragEvent<HTMLElement>, workspaceId: string): void => {
-    setDragWorkspaceId(workspaceId);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("application/x-herdr-workspace", JSON.stringify({ machine_id: machineId, workspace_id: workspaceId }));
+  // Resident and top rows are drawn in their folder list's order: a move within one list reorders that list
+  const residentScope = (scope: string): { list: "top" | "residents"; folder: string } | null => {
+    const match = /^(top|resident):(.+)$/.exec(scope);
+    return match ? { list: match[1] === "top" ? "top" : "residents", folder: match[2]! } : null;
+  };
+  const reorderResident = (list: "top" | "residents", folder: string, target: string | undefined): void => {
+    if (target === undefined) return;
+    void moveResident(list, folder, target).catch((reason: unknown) => {
+      noteError(t("Reorder failed: {reason}", { reason: reason instanceof Error ? reason.message : String(reason) }));
+    });
   };
 
-  const onDrop = (event: DragEvent<HTMLElement>, targetWorkspaceId: string): void => {
+  const onDragStart = (event: DragEvent<HTMLElement>, workspaceId: string, scope: string): void => {
+    setDragWorkspaceId(workspaceId);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-herdr-workspace", JSON.stringify({ machine_id: machineId, workspace_id: workspaceId, scope }));
+  };
+
+  const onDrop = (event: DragEvent<HTMLElement>, targetWorkspaceId: string | null, scope: string): void => {
     event.preventDefault();
-    let payload: { machine_id?: string; workspace_id?: string };
+    let payload: { machine_id?: string; workspace_id?: string; scope?: string };
     try { payload = JSON.parse(event.dataTransfer.getData("application/x-herdr-workspace")); } catch { return; }
     if (payload.machine_id !== machineId || typeof payload.workspace_id !== "string") return;
+    const from = residentScope(payload.scope ?? "");
+    const to = residentScope(scope);
+    if (from && to && from.list === to.list) {
+      setDragWorkspaceId(null);
+      reorderResident(from.list, from.folder, to.folder);
+      return;
+    }
+    if (targetWorkspaceId === null) return;
     const sourceId = dragWorkspaceId ?? payload.workspace_id;
     setDragWorkspaceId(null);
     reorderWorkspace(sourceId, workspaceOrder.indexOf(targetWorkspaceId));
   };
 
-  const onHandleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, workspaceId: string): void => {
+  const onHandleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, workspaceId: string, scope: string): void => {
     if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
     event.preventDefault();
+    const resident = residentScope(scope);
+    if (resident) {
+      const order = residents[resident.list];
+      reorderResident(resident.list, resident.folder, order[order.indexOf(resident.folder) + (event.key === "ArrowUp" ? -1 : 1)]);
+      return;
+    }
     const current = workspaceOrder.indexOf(workspaceId);
     reorderWorkspace(workspaceId, current + (event.key === "ArrowUp" ? -1 : 1));
   };
 
-  const dragHandle = (workspace: WorkspaceInfo, draggable: boolean) => (
+  const dragHandle = (workspace: WorkspaceInfo, draggable: boolean, scope: string) => (
     <button
       type="button"
       className="cl-sidebar-drag-handle"
       aria-label={t("Reorder workspace {name}", { name: workspace.label })}
       title={t("Drag to reorder · Alt+↑/↓")}
       draggable={draggable}
-      onDragStart={(event) => onDragStart(event, workspace.workspace_id)}
+      onDragStart={(event) => onDragStart(event, workspace.workspace_id, scope)}
       onDragEnd={() => setDragWorkspaceId(null)}
-      onKeyDown={(event) => onHandleKeyDown(event, workspace.workspace_id)}
+      onKeyDown={(event) => onHandleKeyDown(event, workspace.workspace_id, scope)}
     >
       <GripVertical aria-hidden="true" />
     </button>
@@ -285,16 +311,16 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
           event.preventDefault();
           event.dataTransfer.dropEffect = "move";
         }}
-        onDrop={(event) => onDrop(event, workspace.workspace_id)}
+        onDrop={(event) => onDrop(event, workspace.workspace_id, scope)}
       >
         {!merged && (
           <header
             className="cl-workspace-header"
             draggable
-            onDragStart={(event) => onDragStart(event, workspace.workspace_id)}
+            onDragStart={(event) => onDragStart(event, workspace.workspace_id, scope)}
             onDragEnd={() => setDragWorkspaceId(null)}
           >
-            {dragHandle(workspace, false)}
+            {dragHandle(workspace, false, scope)}
             {!byFolder && <button type="button" className="cl-workspace-toggle" aria-expanded={!collapsed} aria-label={collapsed ? t("Expand workspace {name}", { name: workspace.label }) : t("Collapse workspace {name}", { name: workspace.label })} title={collapsed ? t("Show panes") : t("Hide panes")} onClick={(event) => { event.stopPropagation(); setGroupCollapsed(groupKey, !collapsed); }}>
               {collapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
             </button>}
@@ -333,7 +359,7 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
             return (
               <li className={`cl-pane-item${selected ? " is-selected" : ""}`} key={pane.pane_id}>
                 <div className="cl-pane-row">
-                  {merged && dragHandle(workspace, true)}
+                  {merged && dragHandle(workspace, true, scope)}
                   <div
                     className="cl-pane-select"
                     role="button"
@@ -433,8 +459,8 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
       setStarting(null);
     }
   };
-  const renderGhost = (folder: string) => (
-    <ul className="cl-pane-list" key={`ghost:${folder}`}>
+  const renderGhost = (folder: string, scope: string) => (
+    <ul className="cl-pane-list" key={`ghost:${folder}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, null, scope)}>
       <li className="cl-pane-item is-ghost" data-folder={folder}>
         <div className="cl-pane-row">
           <button type="button" className="cl-pane-select" disabled={starting !== null} title={t("Start a session in {path}", { path: folder })} onClick={() => void startResident(folder)}>
@@ -533,7 +559,7 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
     const residentOf = (pane: PaneInfo) => topOf(pane) === null ? residentFolder(pane.cwd, residentFolders) : null;
     const folderRows = (folders: string[], of: (pane: PaneInfo) => string | null, scope: string) => folders.flatMap((folder) => {
       const own = panes.filter((pane) => of(pane) === folder);
-      return own.length > 0 ? workspacesOf(own, `${scope}:${folder}`) : [renderGhost(folder)];
+      return own.length > 0 ? workspacesOf(own, `${scope}:${folder}`) : [renderGhost(folder, `${scope}:${folder}`)];
     });
     const work = panes.filter((pane) => topOf(pane) === null && residentOf(pane) === null);
     const residentCount = residentFolders.reduce((count, folder) => count + Math.max(1, panes.filter((pane) => residentOf(pane) === folder).length), 0);

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 
-import { refreshResidents, toggleResident, updateResidents } from "./residents.ts";
+import { moveResident, refreshResidents, toggleResident, updateResidents } from "./residents.ts";
 import { DEFAULT_RESIDENTS, type Residents } from "../../shared/residents.ts";
 
 const realFetch = globalThis.fetch;
@@ -175,5 +175,22 @@ describe("residents", () => {
     const seen = await observe(calls);
     expect(seen.top[0]).toBe("/sys");
     expect(seen.system_pin).toEqual(PIN);
+  });
+
+  it("moves a resident folder to another's place in its own list", async () => {
+    const calls: Call[] = [];
+    heldFetch(calls);
+    await seed(calls, state({ residents: ["/a", "/b", "/c"] }));
+
+    const down = moveResident("residents", "/a", "/c");
+    await untilCalls(calls, 2);
+    expect(JSON.parse(String(calls[1]!.init?.body)).residents).toEqual(["/b", "/c", "/a"]);
+    calls[1]!.answer(json(JSON.parse(String(calls[1]!.init?.body))));
+    await down;
+    const up = moveResident("residents", "/a", "/b");
+    await untilCalls(calls, 3);
+    expect(JSON.parse(String(calls[2]!.init?.body)).residents).toEqual(["/a", "/b", "/c"]);
+    calls[2]!.answer(json(JSON.parse(String(calls[2]!.init?.body))));
+    await up;
   });
 });

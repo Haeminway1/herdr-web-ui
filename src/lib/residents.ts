@@ -83,6 +83,18 @@ export function useResidents(): { residents: Residents; loaded: boolean } {
   return { residents, loaded };
 }
 
+/** Moves a folder to another's place in the same list: these rows follow the list, not herdr's workspace order. */
+export function moveResident(list: "top" | "residents", folder: string, target: string): Promise<void> {
+  return updateResidents((residents) => {
+    const from = residents[list].indexOf(folder);
+    const to = residents[list].indexOf(target);
+    if (from < 0 || to < 0 || from === to) return residents;
+    const next = residents[list].filter((path) => path !== folder);
+    next.splice(to, 0, folder);
+    return { ...residents, [list]: next };
+  });
+}
+
 /** Puts a folder on the Resident tab, or takes it off (and off the top). The pinned manager's folder is not the user's to move. */
 export function toggleResident(folder: string): Promise<void> {
   if (current.system_pin?.folder === folder) return Promise.resolve();
