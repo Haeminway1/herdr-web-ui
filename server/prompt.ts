@@ -138,7 +138,9 @@ const HELD_WINDOW_MS = 10 * 60_000;
 /** What the chat last sent to each pane: Claude Code puts that text back in its input box when the send is cancelled right after it. */
 const chatSent = new Map<string, { text: string; commands: (CommandSend & { store: string | null })[]; reservations: CommandReservations }>();
 
-const outcomeIdentity = (pane: HerdrPane): string => JSON.stringify([pane.terminal_id, pane.agent_session]);
+const outcomeIdentity = (pane: HerdrPane): string => JSON.stringify([
+  pane.terminal_id, pane.agent_session, ...(managedDeclared(pane) ? [managedBinding(pane)] : []),
+]);
 
 /** Capture only existing data before delivery. Discovery and transcript reads belong to the poll. */
 export function prepareCommandSend(pane: HerdrPane, text: string, screen = ""): (CommandSend & { store: string | null }) | undefined {
@@ -182,6 +184,7 @@ export function noteCommandEvidence(paneId: string, id: string, evidence: NonNul
 }
 
 async function commandOutcomes(paneId: string, pane: HerdrPane, prompt: InteractivePrompt | null, screen: string | undefined, readSendId: string | undefined, codexHome?: string): Promise<NonNullable<PanePromptResponse["outcomes"]>> {
+  if (managedDeclared(pane) && managedBinding(pane) === null) return [];
   if (!chatSent.get(paneId)?.commands.length) return [];
   chatSent.get(paneId)?.reservations.prune(Date.now());
   screen ??= await liveScreen(paneId).catch(() => "");
@@ -1490,7 +1493,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // only while Claude waits for the next prompt (a working agent shows none), and a failed or
       // slow read of it (a herdr without ansi reads, a busy one) leaves the prompt answer as it is,
       // on time.
-      const box = prompt === null && agent === "claude" && (status === "idle" || status === "done")
+      const identityReady = !managedDeclared(read.pane) || read.binding !== null;
+      const box = identityReady && prompt === null && agent === "claude" && (status === "idle" || status === "done")
         ? await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS })
           .then((read) => read.text, () => null)
         : null;

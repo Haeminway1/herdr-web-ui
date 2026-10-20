@@ -1418,7 +1418,7 @@ function sameManagedIdentity(a: ManagedSessionIdentity, b: ManagedSessionIdentit
     && a.state === "ready" && b.state === "ready" && a.session_id === b.session_id;
 }
 
-async function assertManagedTranscriptCurrent(pane: HerdrPane, resolved: ManagedResolvedTranscript, deps: ManagedSessionDeps): Promise<void> {
+async function assertManagedTranscriptCurrent(pane: Pick<HerdrPane, "pane_id">, resolved: ManagedResolvedTranscript, deps: ManagedSessionDeps): Promise<void> {
   let livePane: HerdrPane | null;
   try {
     livePane = deps.paneById ? await deps.paneById(pane.pane_id)
@@ -1818,25 +1818,42 @@ const commandTranscripts = new Map<string, {
   partialStart: number; records: CommandTranscriptRecord[]; identity: string; answer: CommandTranscript | null;
 }>();
 
-export async function readCommandTranscript(paneId: string, codexHome?: string): Promise<CommandTranscript | null> {
-  const resolved = await paneTranscript(paneId, codexHome);
+export async function readCommandTranscript(paneId: string, codexHome?: string, managedDeps: ManagedSessionDeps = {}): Promise<CommandTranscript | null> {
+  const resolved = await paneTranscript(paneId, codexHome, undefined, undefined, undefined, undefined, undefined, managedDeps);
+  const managed = "managed_session" in resolved ? resolved : null;
+  let io: CodexReadScope | undefined;
+  let answer: CommandTranscript | null;
+  try {
+    io = managed ? managedReadScope(managed) : undefined;
+    answer = readCommandTranscriptSnapshot(resolved, io);
+  } catch (error) {
+    if (!managed) throw error;
+    await assertManagedTranscriptCurrent({ pane_id: paneId }, managed, managedDeps);
+    throw lookupExecutionError(error);
+  } finally { io?.close(); }
+  if (managed) await assertManagedTranscriptCurrent({ pane_id: paneId }, managed, managedDeps);
+  rememberPaneRead(paneId, resolved.path);
+  return answer;
+}
+
+function readCommandTranscriptSnapshot(resolved: NativeTranscript, io?: CodexReadScope): CommandTranscript | null {
   const { source, path } = resolved;
   if (source !== "claude-transcript" && source !== "codex-transcript" && source !== "pi-transcript"
     && source !== "omp-transcript" && source !== "omo-transcript" && source !== "gjc-transcript") return null;
-  const stat = statSync(path);
-  const file = `${source}:${stat.dev}:${stat.ino}`;
-  const signature = `${source}\0${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+  const stat = io ? io.stat(path) : statSync(path);
+  const prefix = "managed_session" in resolved ? managedPrefix(resolved.managed_session) : "";
+  const file = `${prefix}${source}:${stat.dev}:${stat.ino}`;
+  const signature = `${file}:${stat.size}:${stat.mtimeMs}`;
   const cached = commandTranscripts.get(path);
-  rememberPaneRead(paneId, path);
   if (cached?.signature === signature) return cached.answer;
   // Do not call transcriptStream here: building a cold pi index can read the entire file.
   // The same read supplies validation bytes AND new bytes, so their total stays in budget.
   const start = Math.max(0, stat.size - TRANSCRIPT_WINDOW_BYTES);
   const bytes = Buffer.alloc(stat.size - start);
-  const fd = openSync(path, "r");
+  const fd = io ? io.fd(path) : openSync(path, "r");
   try {
     if (readSync(fd, bytes, 0, bytes.length, start) !== bytes.length) return null;
-  } finally { closeSync(fd); }
+  } finally { if (!io) closeSync(fd); }
   let from = start;
   if (start > 0) {
     const newline = bytes.indexOf(0x0a);

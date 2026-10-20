@@ -4,7 +4,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, st
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
-import { ConversationUnavailable, conversationForPane as readConversation, HistoryChanged, resolveTranscript as readTranscript } from "./conversation.ts";
+import { ConversationUnavailable, conversationForPane as readConversation, HistoryChanged, readCommandTranscript, resolveTranscript as readTranscript } from "./conversation.ts";
+import * as client from "./herdr/client.ts";
 import { labelManagedPanes as projectPanes, resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
 import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
@@ -78,6 +79,78 @@ it("projects both panes and agents without converting identity ready into engine
   expect(pane.agent).toBe("codex");
   expect(result.panes[0]?.agent_session?.value).toBe(sessionId);
   expect(JSON.stringify(result.panes[0]?.managed_session)).not.toContain("session_file");
+});
+
+describe("managed command evidence", () => {
+  let snapshot: ReturnType<typeof spyOn<typeof client, "sessionSnapshot">>;
+  beforeEach(() => {
+    snapshot = spyOn(client, "sessionSnapshot").mockImplementation(async () => ({
+      panes: [pane], agents: [], workspaces: [], tabs: [], layouts: [], protocol: 22, version: "fixture",
+    }));
+  });
+  afterEach(() => snapshot.mockRestore());
+  const read = () => readCommandTranscript(pane.pane_id, undefined, deps);
+
+  it("scopes cached native command records to the managed generation", async () => {
+    fs.appendFileSync(sessionFile, JSON.stringify({ type: "model_change", modelId: "fixture-model" }) + "\n");
+    const first = await read();
+    expect(first?.records.some(({ entry }) => entry.modelId === "fixture-model")).toBe(true);
+    expect(await read()).toBe(first);
+    record.generation = 2; pane.tokens!.hm_managed_generation = "2"; save();
+    const second = await read();
+    expect(second?.identity).not.toBe(first?.identity);
+    expect(second?.identity).toStartWith(`gjc-transcript\0${sessionFile}\0managed-${nonce}-2:`);
+  });
+
+  it("never reads an inode swapped in just for the command-content open", async () => {
+    const replacement = join(String(record.session_dir), "replacement.jsonl");
+    const held = join(String(record.session_dir), "held.jsonl");
+    writeFileSync(replacement, JSON.stringify({ type: "model_change", modelId: "unauthorized" }) + "\n", { mode: 0o600 });
+    const originalOpen = fs.openSync;
+    let opens = 0;
+    let swapped = false;
+    const intercepted = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (String(path) === sessionFile && ++opens === 3) {
+        renameSync(sessionFile, held); renameSync(replacement, sessionFile);
+        try { return Reflect.apply(originalOpen, fs, [path, ...args]); }
+        finally { renameSync(sessionFile, replacement); renameSync(held, sessionFile); swapped = true; }
+      }
+      return Reflect.apply(originalOpen, fs, [path, ...args]);
+    }) as typeof fs.openSync);
+    try {
+      await expect(read()).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      expect(swapped).toBe(true);
+    } finally { intercepted.mockRestore(); }
+    expect((await read())?.records.some(({ entry }) => entry.modelId === "unauthorized")).toBe(false);
+  });
+
+  it.each([false, true])("rechecks managed authority after command evidence, including a cache hit: %s", async cached => {
+    if (cached) await read();
+    let validations = 0;
+    const changedDeps: ManagedSessionDeps = { ...deps, gjcSession: async () => {
+      if (++validations === 2) { record.generation = 2; save(); }
+      return live;
+    } };
+    await expect(readCommandTranscript(pane.pane_id, undefined, changedDeps)).rejects.toMatchObject({
+      name: "ConversationUnavailable", message: "blocked_managed_identity_changed",
+    });
+    expect(validations).toBe(2);
+  });
+
+  it.each(["ENOENT", "EACCES", "EIO"])("propagates a command-content %s failure without clearing chat", async code => {
+    const originalOpen = fs.openSync;
+    let opens = 0;
+    const denied = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (String(path) === sessionFile && ++opens === 3) throw Object.assign(new Error(`private ${sessionFile}`), { code });
+      return Reflect.apply(originalOpen, fs, [path, ...args]);
+    }) as typeof fs.openSync);
+    try {
+      const failure = await read().catch(error => error);
+      expect(failure).toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(JSON.stringify(failure)).not.toContain(root);
+    } finally { denied.mockRestore(); }
+    expect((await conversationForPane(pane)).turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+  });
 });
 
 it.each([
