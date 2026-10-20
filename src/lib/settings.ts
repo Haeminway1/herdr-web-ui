@@ -176,11 +176,14 @@ export const DIFF_STYLES = ["unified", "split"] as const;
 export type DiffStyle = (typeof DIFF_STYLES)[number];
 
 /** Raw custom text, key combinations and account keys are never copied. Requiring every other
- * Settings field in the projection makes a new field require an explicit collection decision. */
+ * Settings field in the projection makes a new field require an explicit collection decision.
+ * fileOpen, webLinks, the launch modes and followHerdrFocus are not collected: the telemetry schema
+ * (shared/telemetry.ts) does not carry them. */
 type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
-  | "quickReplies" | "usageOrder" | "usageHidden" | "sidebarLayout" | "sidebarGrouping" | "palette" | "paletteLight" | "paletteDark" | "darkTheme" | "lightTheme"
-  | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode" | "followHerdrFocus">;
+  | "quickReplies" | "usageOrder" | "usageHidden" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
+  | "sidebarLayout" | "sidebarGrouping" | "palette" | "paletteLight" | "paletteDark" | "darkTheme" | "lightTheme"
+  | "followHerdrFocus">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {

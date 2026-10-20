@@ -42,7 +42,12 @@ import { descendantProcesses, windowsArgv, windowsProcessTable } from "../server
  */
 const ENV_FILES = ["env", ".env"];
 const ROOT = resolve(process.env["HERDR_PLUGIN_ROOT"] ?? join(import.meta.dir, ".."));
-const STATE_DIR = process.env["HERDR_PLUGIN_STATE_DIR"] ?? join(homedir(), ".local", "state", "herdr-web-ui");
+const DEFAULT_STATE_DIR = join(homedir(), ".local", "state", "herdr-web-ui");
+const MANAGED_STATE_DIR = join(herdrStateDir(process.env, platform(), homedir()), "plugins", "haeminway1.herdr-web-ui");
+// run by hand, without herdr's HERDR_PLUGIN_STATE_DIR: a server started from a checkout keeps its
+// own dir while it runs; otherwise the dir herdr gives the plugin, where its startup hook wrote
+const STATE_DIR = process.env["HERDR_PLUGIN_STATE_DIR"]
+  ?? (pidIn(join(DEFAULT_STATE_DIR, "server.pid")) !== null || !existsSync(MANAGED_STATE_DIR) ? DEFAULT_STATE_DIR : MANAGED_STATE_DIR);
 const CONFIG_DIR = process.env["HERDR_PLUGIN_CONFIG_DIR"] ?? herdrConfigDir() ?? join(homedir(), ".config", "herdr-web-ui");
 const PID_FILE = join(STATE_DIR, "server.pid");
 const LOG_FILE = join(STATE_DIR, "server.log");
@@ -178,8 +183,13 @@ async function healthError(): Promise<string | null> {
 }
 
 function recordedPid(): number | null {
-  if (!existsSync(PID_FILE)) return null;
-  const pid = Number(readFileSync(PID_FILE, "utf8").trim());
+  return pidIn(PID_FILE);
+}
+
+/** the live process a pid file names, or null */
+function pidIn(file: string): number | null {
+  if (!existsSync(file)) return null;
+  const pid = Number(readFileSync(file, "utf8").trim());
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
     process.kill(pid, 0);

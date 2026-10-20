@@ -390,7 +390,7 @@ try {
             window.sidebarFixture.recoveringReplay(id, "previous answer\r\n");
             window.sidebarFixture.block(id, "loading");
             return window.sidebarFixture.finish(id, "done", 101);
-          }, panes.omp);
+          }, panes.infra);
           await waitStatus(page, INFRA, "done");
           await agent(page, INFRA).locator(".agent-select").click();
           await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
@@ -399,9 +399,9 @@ try {
           await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           assert.equal(await content.count(), 0, "a recovering joiner's replay is not the current screen");
           await waitStatus(page, INFRA, "done");
-          await page.evaluate((id) => window.sidebarFixture.frame({ type: "input-ready", pane_id: id }), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "input-ready", pane_id: id }), panes.infra);
           assert.equal(await content.count(), 0, "the attach taking again still waits for new output");
-          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "current screen\r\n" }), panes.omp);
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "current screen\r\n" }), panes.infra);
           await waitStatus(page, INFRA, "idle");
           await content.waitFor();
         });
