@@ -17,7 +17,11 @@ const app = mkdtempSync(join(tmpdir(), "herdr-touch-reorder-demo-"));
 const topRows = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".machine-workspaces .sidebar-list > .workspace-list > .workspace-group")].map((row) => row.dataset.workspace ?? ""));
 const serverOrder = (page: Page) => page.evaluate(async () => ((await (await fetch("/api/session")).json()).snapshot as { workspaces: { workspace_id: string }[] }).workspaces.map((workspace) => workspace.workspace_id));
 const centerOf = async (page: Page, id: string) => {
-  const box = await page.locator(`.workspace-group[data-workspace="${id}"] > .workspace-header .workspace-select`).boundingBox();
+  const handle = page.locator(`.workspace-group[data-workspace="${id}"] > .workspace-header .workspace-select`);
+  // Pinning reparents rows. Wait for stable layout before sampling raw CDP coordinates,
+  // just as Playwright's pointer actions do, or the finger can lift the neighbouring row.
+  await handle.scrollIntoViewIfNeeded();
+  const box = await handle.boundingBox();
   assert.ok(box, `row ${id} is on screen`);
   return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
 };

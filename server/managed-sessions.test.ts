@@ -541,6 +541,23 @@ it("requires the exact ID, canonical project and pinned file identity", async ()
   record.file_identity = { dev: -1, ino: -1 }; save(); expect((await resolve()).identity.reason).toBe("blocked_session_replaced");
 });
 
+it.each([false, true])("rejects a same-header GJC inode replacement with a prior lookup=%s", async priorLookup => {
+  const originalRecord = readFileSync(recordFile, "utf8");
+  const originalFile = statSync(sessionFile);
+  if (priorLookup) expect((await resolve()).identity.state).toBe("ready");
+  const replacement = join(String(record.session_dir), "replacement.jsonl");
+  writeFileSync(replacement, readFileSync(sessionFile), { mode: 0o600 });
+  renameSync(replacement, sessionFile);
+  expect(statSync(sessionFile).ino).not.toBe(originalFile.ino);
+  expect(await resolve()).toMatchObject({ identity: { state: "blocked", reason: "blocked_session_replaced" }, sessionFile: null });
+  const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  const projected = await labelManagedPanes(snapshot);
+  expect(projected.panes[0]).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "blocked" } });
+  expect(projected.agents[0]?.agent_session).toBeNull();
+  await expect(conversationForPane(pane)).rejects.toThrow("blocked_session_replaced");
+  expect(readFileSync(recordFile, "utf8")).toBe(originalRecord);
+});
+
 describe("pinned managed OMO transcripts", () => {
   it("serves a group-writable pinned OMO transcript from its private nonce store", async () => {
     useOmo(); chmodSync(sessionFile, 0o664);
