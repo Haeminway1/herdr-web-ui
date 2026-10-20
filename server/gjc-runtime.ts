@@ -491,7 +491,7 @@ async function lookupGjcTranscript(
     const finalInfo = await readProcessInfo(paneId);
     if (!finalInfo) return null;
     const final = await processes(finalInfo, true);
-    if (!final?.some((process) => process.pid === owner.pid && sameBirth(process.birth, owner.birth))) return null;
+    if (!final || !sameProcesses(final, initial)) return null;
     if (validateGjcSdkTranscript(binding, cwd, agentDir) !== path) return null;
     if (!await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration)) return null;
     if (indexStamp !== null) {

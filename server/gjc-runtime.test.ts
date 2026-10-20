@@ -312,6 +312,47 @@ it("re-reads pane process info and birth identity before accepting the SDK bindi
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+it.each([
+  { initial: [200], final: [200, 201], allowed: false },
+  { initial: [200, 201], final: [200], allowed: false },
+  { initial: [200], final: [201], allowed: false },
+  { initial: [200, 201], final: [201, 200], allowed: true },
+  { initial: [200], final: [200], allowed: true },
+])("requires an unchanged foreground GJC set from $initial to $final for fresh and cached bindings", async ({ initial, final, allowed }) => {
+  const home = tempDir("gjc-foreground-set-race-");
+  try {
+    const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+    const project = join(agentDir, "sessions", "project"), path = join(project, "main.jsonl");
+    mkdirSync(cwd); mkdirSync(project, { recursive: true });
+    mkdirSync(join(agentDir, "sdk", "sessions"), { recursive: true });
+    const sessionId = "foreground-set-race";
+    writeFileSync(join(agentDir, "sdk", "sessions", "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId, pid: 200 }));
+    writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
+    for (const cached of [false, true]) {
+      forgetTranscriptState();
+      let reads = 0, lookups = 0, racing = false;
+      const options = {
+        platform: "linux", processBirth: () => 1000,
+        processInfo: async () => {
+          const pids = racing && ++reads === 2 ? final : initial;
+          return { process_info: { foreground_processes: pids.map(pid => ({ pid, argv: ["gjc"] })) } };
+        },
+        sdkTranscript: async (pids: readonly number[]) => {
+          lookups += 1;
+          expect(pids).toEqual(initial);
+          return { sessionId, pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] };
+        },
+        generationCurrent: async () => true,
+      };
+      if (cached) expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+      racing = true;
+      expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(allowed ? path : null);
+      expect(reads).toBe(2);
+      expect(lookups).toBe(1);
+    }
+  } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
 it("shares one SDK lookup between overlapping reads of a pane", async () => {
   const home = tempDir("gjc-sdk-single-flight-");
   try {
