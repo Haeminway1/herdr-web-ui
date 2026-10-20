@@ -7,6 +7,13 @@ between releases do not reach them. Remote-PC runtime bundles are versioned sepa
 
 ## [Unreleased]
 
+## [0.4.1113] - 2026-10-21
+
+### Fixed
+- Dragging a row on the classic sidebar's Resident tab (or among the top folders) now reorders
+  that list. Those rows follow the saved resident order, so the drag used to move herdr's
+  workspace order instead and nothing on screen changed. Alt+↑/↓ on the handle does the same.
+
 ## [0.4.1112] - 2026-10-20
 
 ### Added
@@ -4945,7 +4952,8 @@ First public version.
 - Installable PWA, a mobile key bar, web push alerts and optional token auth.
 - Distribution as a herdr plugin.
 
-[Unreleased]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1112...HEAD
+[Unreleased]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1113...HEAD
+[0.4.1113]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1112...v0.4.1113
 [0.4.1112]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1111...v0.4.1112
 [0.4.1111]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1110...v0.4.1111
 [0.4.1110]: https://github.com/Haeminway1/herdr-web-ui/compare/v0.4.1108...v0.4.1110

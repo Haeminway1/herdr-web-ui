@@ -1,4 +1,10 @@
 {
+  "0.4.1113": {
+    "en": { "fixed": ["Reorder the Resident list by dragging its rows on the classic sidebar."] },
+    "ko": { "fixed": ["기존 사이드바의 상주 목록을 드래그로 순서를 바꿀 수 있습니다."] },
+    "ja": { "fixed": ["従来のサイドバーで常駐リストの行をドラッグして並べ替えられるようにしました。"] },
+    "zh": { "fixed": ["在原有侧栏中可拖动常驻列表的行来调整顺序。"] }
+  },
   "0.4.1112": {
     "en": { "improved": ["Adopt the latest upstream changes while keeping the classic sidebar."], "fixed": ["Switch between sessions without the half-second freeze the classic sidebar caused."] },
     "ko": { "improved": ["기존 사이드바를 유지하면서 최신 원본의 개선 사항을 반영했습니다."], "fixed": ["기존 사이드바 때문에 세션을 바꿀 때마다 생기던 0.5초가량의 멈춤을 없앴습니다."] },
