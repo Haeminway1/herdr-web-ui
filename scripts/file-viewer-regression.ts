@@ -551,9 +551,10 @@ try {
     await contentsLink.click();
     const framed = page.frameLocator(".file-viewer-page");
     await framed.getByText("contents ran", { exact: true }).waitFor();
-    const opened = await page.evaluate(() => history.length);
+    // Forward entries can be replaced without increasing history.length.
+    const navigated = page.waitForEvent("framenavigated", frame => frame.url().endsWith("#details"));
     await framed.locator("#toc").click();
-    await page.waitForFunction((length) => history.length === length + 1, opened);
+    await navigated;
     if (close === "Escape") { await panel.locator(".file-panel-resizer").focus(); await page.keyboard.press("Escape"); }
     else await panel.getByRole("button", { name: "Close file", exact: true }).click();
     await panel.waitFor({ state: "detached" });
@@ -1355,9 +1356,9 @@ try {
     await contentsLink.tap();
     await frame.getByText("contents ran", { exact: true }).waitFor();
     await sheetsSettled(page);
-    const opened = await page.evaluate(() => history.length);
+    const navigated = page.waitForEvent("framenavigated", frame => frame.url().endsWith("#details"));
     await frame.locator("#toc").click();
-    await page.waitForFunction((length) => history.length === length + 1, opened);
+    await navigated;
     if (close === "scrim") await page.locator(".file-viewer-scrim").evaluate((scrim) => scrim.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
     else await contents.getByRole("button", { name: "Close file", exact: true }).click();
     await contents.waitFor({ state: "hidden" });

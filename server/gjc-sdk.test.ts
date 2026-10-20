@@ -198,7 +198,7 @@ describe("GJC live identity independent of saved-store indexing", () => {
     }
   });
 
-  it.each(["ENOENT", "EACCES", "ETIMEDOUT"])("rejects %s without leaking CLI details or erasing a pending identity", async (code) => {
+  it.each(["ENOENT", "EACCES", "BROKER", "ETIMEDOUT"])("rejects %s without leaking CLI details or erasing a pending identity", async (code) => {
     const runner: GjcSdkCommandRunner = async () => { throw Object.assign(new Error("secret /home/user/private"), { code }); };
     for (const lookup of [gjcSdkCurrentSessionWithRunner, gjcSdkTranscriptWithRunner]) {
       const failure = lookup([321], cwd, agentDir, runner);
