@@ -515,7 +515,11 @@ try {
   await page.keyboard.press("Escape");
   await panel.waitFor({ state: "detached" });
   assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, "Escape in the panel consumes the preview entry");
-  assert.equal(await notesLink.evaluate((link) => document.activeElement === link), true, "Escape in the panel returns the focus to the link that opened the file");
+  const focusAfterEscape = await notesLink.evaluate((link) => ({
+    restored: document.activeElement === link,
+    active: document.activeElement?.outerHTML.slice(0, 300),
+  }));
+  assert.equal(focusAfterEscape.restored, true, `Escape in the panel returns the focus to the link that opened the file: ${JSON.stringify(focusAfterEscape)}`);
   // the left edge dragged 100px to the left widens the panel by as much, and the width is stored
   await notesLink.click();
   await panel.getByText("File preview history regression", { exact: true }).waitFor();

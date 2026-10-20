@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
+import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 import {
   isGitOutsideWorktree,
   gjcSdkCurrentSessionWithRunner as sdkCurrentSessionWithRunner,
@@ -165,6 +166,36 @@ describe("GJC live identity independent of saved-store indexing", () => {
     expect(await lookup()).toBeNull();
     expect(await sdkTranscriptWithRunner([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver, undefined, generation)).toBeNull();
     expect(fixture.calls).toHaveLength(2);
+  });
+
+  it.each(["ENOENT", "EACCES", "BROKER", "ETIMEDOUT"])("propagates native generation %s through both cached SDK readers", async (code) => {
+    for (const savedSession of [null, { id: "session-1", path: savedPath }]) {
+      const fixture = fakeRunner([page([session()]), page([session()], { savedSession })]);
+      let unavailable = true;
+      const observations: [string, number][] = [];
+      const generationCurrent = (directory: string, id: string, generation: number) => gjcSdkGenerationCurrent(directory, id, generation, {
+        generationStatus: async (sessionId, endpointGeneration) => {
+          observations.push([sessionId, endpointGeneration]);
+          if (unavailable) throw Object.assign(new Error("private generation evidence"), { code });
+          return { status: "current" };
+        },
+      });
+      const read = (lookup: typeof sdkCurrentSessionWithRunner | typeof sdkTranscriptWithRunner) =>
+        lookup([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver, undefined, generationCurrent);
+      for (const lookup of [sdkCurrentSessionWithRunner, sdkTranscriptWithRunner]) {
+        const failure = await read(lookup).catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(GjcSdkLookupError);
+        expect(failure).toMatchObject({ reason: code === "ETIMEDOUT" ? "timeout" : "unavailable", message: "GJC SDK lookup failed" });
+        expect(JSON.stringify(failure)).not.toContain("private generation evidence");
+      }
+      unavailable = false;
+      expect(await read(sdkCurrentSessionWithRunner)).toMatchObject({ sessionId: "session-1", pid: 321 });
+      const transcript = await read(sdkTranscriptWithRunner);
+      if (savedSession === null) expect(transcript).toBeNull();
+      else expect(transcript).toMatchObject({ sessionId: "session-1", path: savedPath });
+      expect(observations).toEqual(Array.from({ length: 4 }, () => ["session-1", 4]));
+      expect(fixture.calls).toHaveLength(2);
+    }
   });
 
   it.each(["ENOENT", "EACCES", "ETIMEDOUT"])("rejects %s without leaking CLI details or erasing a pending identity", async (code) => {
