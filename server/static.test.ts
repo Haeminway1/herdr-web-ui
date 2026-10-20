@@ -63,6 +63,20 @@ describe("HERDR_WEB_APP_NAME", () => {
     expect(renamed.replace("content=\"laptop\"", `content="${originalTitle}"`)).toBe(shell);
   });
 
+  it("frames the other ports of the request's own host and no other host", () => {
+    expect(contentSecurityPolicy("http://100.123.228.51:7317")).toContain("frame-src 'self' http://100.123.228.51:* https://100.123.228.51:*;");
+    expect(contentSecurityPolicy("https://pc.tailnet.ts.net")).toContain("frame-src 'self' http://pc.tailnet.ts.net:* https://pc.tailnet.ts.net:*;");
+    expect(contentSecurityPolicy("http://[::1]:7317")).toContain("frame-src 'self' http://[::1]:* https://[::1]:*;");
+    expect(contentSecurityPolicy("http://100.123.228.51:7317").replace(/ http:\/\/\S+ https:\/\/\S+;/, ";")).toBe(CONTENT_SECURITY_POLICY);
+  });
+
+  it("keeps frame-src to itself without an origin or with a host that is no host name", () => {
+    expect(contentSecurityPolicy()).toBe(CONTENT_SECURITY_POLICY);
+    expect(contentSecurityPolicy("not a url")).toBe(CONTENT_SECURITY_POLICY);
+    expect(contentSecurityPolicy("http://a_b;script-src *")).toBe(CONTENT_SECURITY_POLICY);
+    expect(CONTENT_SECURITY_POLICY).toContain("frame-src 'self';");
+  });
+
   it("fetches the manifest with the page's cookies, so a sign-in proxy lets it through", () => {
     expect(shell).toMatch(/<link rel="manifest" href="[^"]+" crossorigin="use-credentials" \/>/);
   });
