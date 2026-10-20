@@ -125,6 +125,8 @@ export interface PaneTerminalProps {
   machineName?: string;
   /** the lens over the pane: the chat transcript, or the live xterm grid (App remembers it per pane) */
   view: PaneView;
+  /** switches this pane to its terminal lens: where the chat's composer sends a terminal command on */
+  onOpenTerminal?: () => void;
   findRequest?: number;
   controls?: { current: PaneControls | null };
   /** Only the selected tile may take keyboard focus after async work or a lens change. */
@@ -188,6 +190,7 @@ export function PaneTerminal({
   theme,
   palette,
   role = "interact",
+  onOpenTerminal,
   onRoleAck,
   onConnectionChange,
   onServerMessage,
@@ -1146,8 +1149,9 @@ export function PaneTerminal({
         setChatInvalidation((current) => current + 1);
       }
       if (paneRef.current) setInputReady(socket.canInput(paneRef.current));
-      if (message.type === "input-ready") {
-        if (message.ready === false) {
+      if (message.type === "input-ready" || message.type === "output-recovering") {
+        // output-recovering: this client joined after the stream ended, so the replay is the screen from before
+        if (message.type === "output-recovering" || message.ready === false) {
           outputRecovering = true;
           outputLifetime++;
           setOutputReady(false);
@@ -1308,7 +1312,7 @@ export function PaneTerminal({
           }
           return;
         }
-        term.writeln(`\r\n\u001b[31m[herdr-web-ui] ${message.code}: ${message.message}\u001b[0m`);
+        term.writeln(`\r\n\u001b[31m[Ovis] ${message.code}: ${message.message}\u001b[0m`);
       }
       setConnected(socket.connected);
       setConversationPushes(socket.conversationPushes());
@@ -1876,8 +1880,8 @@ export function PaneTerminal({
       setHeld(false);
       // the pane's screen starts again from the new attach, as on a pane switch
       const generation = ++outputGeneration;
-      // A new attach owns a new output lifetime. The server's readiness receipt precedes
-      // replay, so a recovering attach will revoke this again before any retained bytes.
+      // A new attach owns a new output lifetime. A recovering attachment sends output-recovering
+      // before its replay, so it revokes this again before any retained bytes.
       outputRecovering = false;
       // Reset in stream order: synchronous reset would let old queued writes draw afterward.
       if (!cachedReleaseRef.current) {
@@ -2866,7 +2870,7 @@ export function PaneTerminal({
         )}
         {paneId !== null && !chatView && !ended && !connected && (
           <div className="terminal-banner terminal-banner-warning" role="status">
-            {t(connectedBefore ? "Reconnecting to herdr web ui…" : "Connecting to herdr web ui…")}
+            {t(connectedBefore ? "Reconnecting to Ovis…" : "Connecting to Ovis…")}
             {/* one line, cut with an ellipsis: a command is never broken inside a word; the title holds it whole */}
             {draft.text.length > 0 && <span className="draft-held" title={draft.text}> {t("Input held:")} <code>“{draft.text}”</code></span>}
           </div>
@@ -2978,6 +2982,7 @@ export function PaneTerminal({
             promptDock={promptDock}
             onPromptAnswered={onPromptAnswered}
             title={title}
+            onOpenTerminal={onOpenTerminal}
           />
           </RenderBoundary>
         )}
@@ -3094,6 +3099,8 @@ export function PaneTerminal({
           suggestion={chatPrompt?.pane !== paneId && chatSuggestion?.pane === paneId ? chatSuggestion.value : null}
           restored={chatPrompt?.pane !== paneId && chatRestored?.pane === paneId ? chatRestored.value : null}
           notices={composerNotices}
+          role={observing ? "observe" : role}
+          onOpenTerminal={onOpenTerminal}
           greeting={greetingDue ? (
             <div className={`composer-greeting${greeted ? "" : " is-out"}`} ref={greetingRef} aria-hidden={greeted ? undefined : true}>
               <p className="composer-greeting-title">{t("What should {agent} do in {folder}?", { agent: agentDisplayLabel(agent), folder })}</p>

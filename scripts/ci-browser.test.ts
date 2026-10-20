@@ -74,6 +74,7 @@ describe("browser lane", () => {
     expect(rows(text)).toHaveLength(72);
     expect(rows(text).map((row) => row.script)).toContain("scripts/classic-sidebar-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/opencode-prompt-regression.ts");
+    expect(rows(text).map((row) => row.script)).toContain("scripts/command-outcome-demo-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/sidebar-machine-layout-demo-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/sidebar-machine-removal-demo-regression.ts");
     expect(rows(text).map((row) => row.script)).toContain("scripts/cliproxy-settings-regression.ts");

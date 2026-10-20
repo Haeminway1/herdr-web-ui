@@ -208,7 +208,7 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         patch; `path` and, for a rename, `old_path` are the list's own, relative to the
  *         repository root. The patch is whole or null: `unavailable` says why it is null, and no
  *         cut hunk is ever sent. 400 invalid_path, 404 not_found when nothing changed there)
- *  GET    /api/pane/prompt?pane_id=     -> { prompt: InteractivePrompt | null, suggestion: string | null, restored: string | null }
+ *  GET    /api/pane/prompt?pane_id=     -> PanePromptResponse
  *         (the agent's TUI question/approval menu currently on screen, parsed from the visible pane
  *         text; with no menu, the next prompt Claude Code suggests, grey in its empty input box, and
  *         `restored`: the chat's last message when Claude Code put it back as typed text in that box,
@@ -432,7 +432,7 @@ export interface TailscaleAccess {
   readonly dns_name: string | null;
   /** the HTTPS address Tailscale already proxies to this server, when there is one */
   readonly serving_url: string | null;
-  /** otherwise, the command that publishes it on the lowest free of the usual HTTPS ports ... */
+  /** otherwise, the command that publishes it on the first free of the usual HTTPS ports, or on the one HERDR_WEB_TAILSCALE_HTTPS_PORT names while it is free ... */
   readonly serve_command: string | null;
   /** ... and the address that command gives, when the DNS name is known */
   readonly serve_url: string | null;
@@ -626,7 +626,7 @@ export interface ConversationResponse {
   activity?: "thinking" | "working" | "idle";
   /** Stable across appends; changes on transcript replacement or native context clear. */
   history_id?: string;
-  source: "grok-transcript" | "agy-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript" | "scrollback";
+  source: "grok-transcript" | "agy-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript" | "scrollback";
   turns: ConversationTurn[];
   metadata?: ConversationMetadata;
   /**
@@ -1062,14 +1062,83 @@ export interface SlashCommand {
   name: string;
   description: string;
   source: "builtin" | "user" | "project" | "skill" | "plugin";
-  /** `$`: typed as `$name` (Codex skills); otherwise `/name` */
-  trigger?: "$";
+  /** `$`: typed as `$name` (Codex skills); `@`: typed as `@name`; otherwise `/name` */
+  trigger?: "$" | "@";
   /**
    * where a skill comes from, for every agent: `user` is the person's own (the agent's own
    * directory or ~/.agents/skills), `project` the checkout's, `bundled` ships with the agent,
    * `plugin` comes with one of its plugins
    */
   origin?: "user" | "project" | "bundled" | "plugin";
+  /** how the command behaves per typed form (bare, with a subcommand, anything else) */
+  forms?: CommandForm[];
+  /** `terminal`: only works in the terminal; `agent-hidden`: the agent's own menu hides it, it still sends when typed */
+  visibility?: "offered" | "terminal" | "agent-hidden";
+  /** where this row came from, and whether it was checked against the running agent version */
+  provenance?: {
+    /** how the row was found: `scan` read from disk, `static` shipped with the bridge, `native` asked of the agent */
+    transport: "scan" | "static" | "native";
+    /** whether the row was checked against the running agent's version */
+    verified: boolean;
+  };
+  /** a skill or custom command that has the same name as a builtin */
+  shadows?: "builtin";
+  /** stable identity: the canonical path for a skill or custom command file, the qualified name otherwise */
+  id?: string;
+}
+
+/** One way a command can be typed and what it needs from the user. */
+export interface CommandForm {
+  /** `bare`: no argument; `{ sub }`: that subcommand; `other`: any other argument */
+  match: "bare" | {
+    /** the subcommand this form applies to */
+    sub: string;
+  } | "other";
+  /** what the form needs from the user: `none` means its effect is persisted where the bridge reads it, `terminal` also covers output the agent never persists */
+  interaction: "none" | "dialog" | "terminal" | "unknown";
+  /** the dialog this form opens, when `interaction` is `dialog` */
+  dialog?: string;
+}
+
+/** What the bridge knows about a command a user sent: accepted is never the same as done. */
+export interface CommandOutcome {
+  /** the outcome's own id, referenced by PendingMessage.outcome_id */
+  id: string;
+  /** the pane the command was sent to */
+  pane_id: string;
+  /** the command text as sent */
+  text: string;
+  /** how far the command is known to have got; `accepted` only means the bridge sent it */
+  state: "accepted" | "interaction-required" | "result-observed" | "terminal-required" | "unknown";
+  /** what showed the state, and when (ISO time) */
+  evidence: {
+    /** where the evidence was read from */
+    kind: "transcript" | "dialog" | "recognized-result" | "native" | "side-store";
+    /** when it was seen (ISO time) */
+    at: string;
+  }[];
+  /** a passing view of the result, never merged into history */
+  preview?: string;
+  /** what the command printed, verbatim with its line breaks, when a registered result reader recognized it (evidence `recognized-result`); bounded like `preview`, withheld from observers like it, never merged into history */
+  result_text?: string;
+  /** the command changed the agent's command list: refetch it */
+  catalog_changed?: true;
+  /** when the outcome was created (ISO time) */
+  created_at: string;
+  /** when the outcome last changed (ISO time) */
+  updated_at: string;
+}
+
+/** GET /api/pane/prompt response; `suggestion` and `restored` are absent from older servers. */
+export interface PanePromptResponse {
+  /** the waiting TUI menu, or null when none is on screen */
+  prompt: InteractivePrompt | null;
+  /** the next prompt the agent suggests when no menu waits */
+  suggestion?: string | null;
+  /** the chat's last message, when the agent put it back as typed text in its input box */
+  restored?: string | null;
+  /** the pane's tracked command outcomes */
+  outcomes?: CommandOutcome[];
 }
 
 /**
@@ -1208,6 +1277,8 @@ export interface PendingMessage {
   state: "queued" | "sending" | "held" | "uncertain";
   created_at: string;
   error?: { code: string; message: string };
+  /** the CommandOutcome this message's command is tracked by */
+  outcome_id?: string;
 }
 
 export type ClientMessage =
@@ -1313,6 +1384,8 @@ export type ServerMessage =
   | { type: "attach-resumed"; pane_id: string }
   /** Attachment readiness (omitted ready means true); false revokes it during retry. Never a typed-text acknowledgement. */
   | { type: "input-ready"; pane_id: string; ready?: boolean }
+  /** sent to a client joining an attachment whose stream ended after it was ready, before the replay: the replay is the screen from before, so only output after the next `input-ready` shows the pane as it is. Presentation only; input readiness is unchanged */
+  | { type: "output-recovering"; pane_id: string }
   /** the shared pty's grid changed: observe clients adopt it, interact clients drive it. `fixed`: the grid is the pane's own in herdr (a mirrored pane), so every client adopts it and none resizes */
   | { type: "pane-geometry"; pane_id: string; cols: number; rows: number; fixed?: boolean }
   | { type: "role-ack"; mode: ClientRole }
@@ -1338,6 +1411,10 @@ export type ServerMessage =
   | { type: "pane-attention"; pane_id: string; attention: PaneAttention }
   /** session structure changed (pane created/closed): refetch /api/session */
   | { type: "session-changed" }
+  /** herdr's own focus moved to this pane (its `pane.focused`, also sent for a tab or workspace brought
+   * to the front), whoever moved it: its TUI, its CLI or a script. A browser follows it only when
+   * asked to (Settings → Terminal); an older bridge never sends it */
+  | { type: "pane-focused"; pane_id: string }
   /** a watched pane's screen as herdr draws it for the watch's grid: whole screens and changes, written as they come; never acknowledged */
   | { type: "watch-data"; pane_id: string; data: string }
   /** the watch ended (pane gone, herdr closed it, or this herdr has no read-only view); the client keeps its last screen */

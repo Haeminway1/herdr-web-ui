@@ -5,15 +5,15 @@
  * server's own state. The dispatcher in index.ts runs the access gate first.
  */
 import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
-import { paneCommands } from "./commands.ts";
+import { paneCommands, rememberPaneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject } from "./http.ts";
-import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, toolOutput } from "./conversation.ts";
+import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { agentRename, HerdrError, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
-import { paneContext } from "./pane-context.ts";
+import { paneContext, resolveAgent, versionSourceOf } from "./pane-context.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 
 /** the native stores createServer was given; unset, each reader finds its own */
@@ -64,8 +64,15 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       const context = await paneContext(paneId);
       if (pathname === "/api/pane/commands") {
         const roots = await paneProcessRoots(paneId, context.agent);
-        const agent = roots.omo ? "omo" : context.agent;
-        return jsonResponse({ commands: paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }) });
+        const { agent } = resolveAgent(context.pane, roots);
+        // the version comes from the store this pane's own transcript names; none resolved leaves it unverified
+        const store = agent === "claude" || agent === "codex" || agent === "opencode"
+          ? await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome).then(versionSourceOf, () => null)
+          : null;
+        const { version } = resolveAgent(context.pane, roots, store);
+        const commands = paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }, version);
+        rememberPaneCommands(context.pane, agent, commands);
+        return jsonResponse({ commands });
       }
       const limitRaw = url.searchParams.get("limit");
       const limit = limitRaw === null ? 20 : Number(limitRaw);
