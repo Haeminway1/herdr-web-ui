@@ -222,7 +222,7 @@ it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and
   expect(JSON.stringify(result)).not.toContain("stale-child");
 });
 
-it.each(["EACCES", "EIO"])("keeps trusted record and transcript %s reads pending without provider authority", async (code) => {
+it.each(["ENOENT", "EACCES", "EIO"])("keeps trusted record and transcript %s reads pending without provider authority", async (code) => {
   for (const target of [recordFile, sessionFile]) {
     const open = fs.openSync;
     const denied = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { appName, manifestBody, relateManifest, renameManifest, renameShell, requestOrigin } from "./static.ts";
+import { appName, CONTENT_SECURITY_POLICY, contentSecurityPolicy, manifestBody, relateManifest, renameManifest, renameShell, requestOrigin } from "./static.ts";
 
 // The sources Vite builds from: public/ is copied into dist/ as it is, and the meta survives the build.
 const root = join(import.meta.dir, "..");
