@@ -625,7 +625,8 @@ export function gjcSdkCurrentSessionWithRunner(
   generationCurrent: typeof gjcSdkGenerationCurrent = gjcSdkGenerationCurrent,
 ): Promise<GjcSdkSessionIdentity | null> {
   return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock, "status")
-    .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? currentIdentity(binding) : null);
+    .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? currentIdentity(binding) : null)
+    .catch((error: unknown) => { throw lookupExecutionError(error); });
 }
 
 /** Resolves the current readable GJC transcript for one of the pane's known GJC processes. */
@@ -650,5 +651,6 @@ export function gjcSdkTranscriptWithRunner(
   purpose: "chat" | "status" = "chat",
 ): Promise<GjcSdkBinding | null> {
   return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock, purpose)
-    .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? savedTranscript(binding) : null);
+    .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? savedTranscript(binding) : null)
+    .catch((error: unknown) => { throw lookupExecutionError(error); });
 }
