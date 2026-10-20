@@ -1,6 +1,5 @@
 {
   "scripts/android-ime-regression.ts": 1,
-  "scripts/application-paging-regression.ts": 2,
   "scripts/chat-browser-qa.ts": 1,
   "scripts/chat-size-regression.ts": 5,
   "scripts/deep-link-demo-regression.ts": 3,
