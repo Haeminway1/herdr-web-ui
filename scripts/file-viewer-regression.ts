@@ -171,6 +171,13 @@ try {
   const checkCodeFidelity = async (mode: string) => {
     for (const [index, source] of fidelitySources.entries()) {
       const block = codeBlocks.nth(3 + index);
+      // The real focus pins this row while native selection is compared across browser calls.
+      await block.scrollIntoViewIfNeeded();
+      await block.getByRole("button", { name: "Copy code", exact: true }).focus();
+      await page.waitForFunction(() => {
+        const chat = document.activeElement?.closest(".chat-view-virtual");
+        return Number(chat?.getAttribute("data-chat-pinned")) > 0;
+      });
       assert.equal(await block.locator("code").textContent(), source, `${mode}: source whitespace`);
       assert.equal(await block.locator("pre").evaluate((pre) => getComputedStyle(pre).visibility), "visible", `${mode}: selection comes from the current pane, not a hidden cached pane`);
       const selections = await block.locator("pre").evaluate((pre, source) => {
@@ -497,7 +504,11 @@ try {
   // keeps its clicks, the panel's left edge drags its width (kept on this device across a reload),
   // Escape closes it only from inside it, and Close file takes the panel and its entry away.
   const panelWidth = () => panel.evaluate((element) => element.getBoundingClientRect().width);
-  await notesLink.click();
+  // Keep the exact opening node, not a locator that can silently find its virtualized replacement.
+  const panelOpener = await notesLink.evaluateHandle(button => {
+    if (!(button instanceof HTMLButtonElement)) throw new Error("The file opener must be a button");
+    button.focus(); button.click(); return button;
+  });
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
   assert.equal(await page.locator(".modal-scrim, .file-viewer-scrim, .modal.file-viewer, [aria-modal='true']").count(), 0, "a docked file has no scrim and no dialog");
   const paneBox = await page.locator(".app-body > .pane-column").boundingBox();
@@ -509,6 +520,13 @@ try {
   assert.equal(await composer.evaluate((input) => document.activeElement === input), true, "the pane beside the panel takes a click");
   assert.equal(await panel.count(), 1, "a click in the pane leaves the panel open");
   assert.equal(await composer.inputValue(), "Keep my mobile draft");
+  await page.waitForFunction(() => document.querySelector(".chat-view-virtual")?.getAttribute("data-chat-pinned") === "1");
+  await activeChat.evaluate(async element => {
+    element.scrollTop = element.scrollHeight;
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+  });
+  assert.equal(await panelOpener.evaluate(button => button.isConnected), true, "the docked file keeps its original chat opener mounted after focus leaves the row");
   // Escape from inside the panel closes it and takes its entry off, and the focus it held goes
   // back to the link that opened the file, as it does from the popup
   await panel.locator(".file-panel-resizer").focus();
@@ -520,6 +538,13 @@ try {
     active: document.activeElement?.outerHTML.slice(0, 300),
   }));
   assert.equal(focusAfterEscape.restored, true, `Escape in the panel returns the focus to the link that opened the file: ${JSON.stringify(focusAfterEscape)}`);
+  await notesLink.click();
+  await panel.getByText("File preview history regression", { exact: true }).waitFor();
+  await composer.click();
+  await page.goBack();
+  await panel.waitFor({ state: "detached" });
+  assert.equal(await composer.evaluate(input => document.activeElement === input), true, "Back leaves focus in the composer when it was already outside the panel");
+  await page.waitForFunction(() => document.querySelector(".chat-view-virtual")?.getAttribute("data-chat-pinned") === "0");
   // the left edge dragged 100px to the left widens the panel by as much, and the width is stored
   await notesLink.click();
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
