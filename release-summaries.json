@@ -1,4 +1,10 @@
 {
+  "0.4.1112": {
+    "en": { "improved": ["Adopt the latest upstream changes while keeping the classic sidebar."], "fixed": ["Switch between sessions without the half-second freeze the classic sidebar caused."] },
+    "ko": { "improved": ["기존 사이드바를 유지하면서 최신 원본의 개선 사항을 반영했습니다."], "fixed": ["기존 사이드바 때문에 세션을 바꿀 때마다 생기던 0.5초가량의 멈춤을 없앴습니다."] },
+    "ja": { "improved": ["従来のサイドバーを維持しながら、最新の上流の改善を取り込みました。"], "fixed": ["従来のサイドバーが原因でセッション切り替えのたびに起きていた約0.5秒の停止を解消しました。"] },
+    "zh": { "improved": ["保留原有侧栏，同时整合最新上游改进。"], "fixed": ["消除了原有侧栏导致的每次切换会话时约半秒的卡顿。"] }
+  },
   "0.4.1111": {
     "en": { "improved": ["Keep the classic sidebar while adopting the latest upstream changes.", "Run upstream sync as one background job without opening terminal windows."], "fixed": ["Keep cached GJC bindings generation-safe and preserve chat through lookup outages.", "Resolve live managed identities without requiring saved SDK session metadata."] },
     "ko": { "improved": ["기존 사이드바를 유지하면서 최신 원본의 개선 사항을 반영했습니다.", "새 터미널 창 없이 백그라운드 작업 하나로 원본을 동기화합니다."], "fixed": ["지난 GJC 세션을 차단하고 SDK 조회가 끊겨도 대화를 유지합니다.", "SDK에 저장된 대화 정보가 없어도 실행 중인 관리 세션을 올바르게 인식합니다."] },
