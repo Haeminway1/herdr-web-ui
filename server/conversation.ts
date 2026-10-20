@@ -500,8 +500,8 @@ export class HistoryChanged extends Error {
 /** What paneConversation resolved: which store the turns came from, and where they start. */
 export type RecognizedConversation = {
   activity?: "thinking" | "working" | "idle";
-  managed_session?: ManagedSessionIdentity;
   source: "grok-transcript" | "agy-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript";
+  managed_session?: ManagedSessionIdentity;
   turns: ConversationTurn[];
   metadata: ConversationMetadata;
   /** `metadata` was read off the agent's own screen (ConversationResponse.screen) */
@@ -2003,7 +2003,7 @@ export async function conversationImage(paneId: string, ref: string, codexHome?:
   let image: { mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null;
   try {
     image = resolved.source === "codex-transcript" ? await codexTranscriptImage(codexHistorySegments(resolved.path, resolved.codexHome ?? codexHome, io), nativeRef, pane.cwd, io)
-      : resolved.source === "pi-transcript" ? piTranscriptImage(resolved.path, nativeRef)
+      : resolved.source === "pi-transcript" || resolved.source === "cmd-transcript" ? piTranscriptImage(resolved.path, nativeRef)
       : resolved.source === "claude-transcript" ? transcriptImage(resolved.path, nativeRef, io) : null;
     if ("managed_session" in resolved) await assertManagedTranscriptCurrent(pane, resolved, managedDeps);
   } catch (error) { if (error instanceof ConversationUnavailable) return null; throw io && !(error instanceof GjcSdkLookupError) ? new GjcSdkLookupError("unavailable") : error; }

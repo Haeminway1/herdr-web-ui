@@ -97,14 +97,14 @@ export const expect = async ({ page, width, scheme, box, menu, scenario, clear, 
     assert.equal(await box.inputValue(), "/config", "the draft stays as typed");
     assert.equal(await page.locator(".chat-turn-user").count(), turns, "no turn was added");
     assert.match(await actions.innerText(), /\/config runs in the terminal; the chat cannot show what it does\./u);
-    // both ways on are in the Tab order, before the box: Shift+Tab reaches the dismiss, Run in Terminal, then Open Terminal
+    // both ways on stay keyboard-reachable past the retained resize grip and the dismiss button
     await box.focus();
     const reached: string[] = [];
-    for (let step = 0; step < 3; step += 1) {
+    for (let step = 0; step < 4; step += 1) {
       await page.keyboard.press("Shift+Tab");
       reached.push(await page.evaluate(() => { const active = document.activeElement as HTMLElement | null; return active?.getAttribute("aria-label") ?? active?.textContent ?? ""; }));
     }
-    assert.deepEqual(reached, ["Dismiss notice", "Run in Terminal", "Open Terminal"]);
+    assert.deepEqual(reached, ["Resize message box", "Dismiss notice", "Run in Terminal", "Open Terminal"]);
     const geometry = await actions.evaluate((node) => {
       const rect = node.getBoundingClientRect();
       const buttons = [...node.querySelectorAll<HTMLElement>("button")].map((button) => button.getBoundingClientRect());
