@@ -55,13 +55,15 @@ type Responder =
   | "pi-input"
   | "pi-model"
   | "omo-model"
+  | "omp-model"
   | "hermes-question"
   | "hermes-input"
   | "omp-submit"
   | "opencode-question"
   | "fallback-menu"
   | "fallback-gjc-menu"
-  | "fallback-keys";
+  | "fallback-keys"
+  | "cmd-question";
 
 export type ParsedPrompt = InteractivePrompt & {
   responder: Responder;

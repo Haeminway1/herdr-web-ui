@@ -1,4 +1,4 @@
-# herdr web ui Design System
+# Ovis Design System
 
 Extracted from the shipped client (`src/styles.css`, `src/components/*`), not invented. The machine
 copy of every token is the `:root` block in `src/styles.css`; every table below mirrors it value for
@@ -974,8 +974,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   A raw counter rollback clears synthetic recency even on older bridges without an epoch.
   This ordering correction never changes finish identities or read records.
 - A DONE opened here draws as ready in the Agents list and its workspace roll-up, as herdr's
-  own client does. This follows the Codex app's [unread completion dot](https://github.com/openai/codex/issues/50856),
-  but keeps read state browser-local rather than claiming cross-device acknowledgement. Only the
+  own client does. This follows the Codex app's [unread completion dot](https://github.com/openai/codex/issues/50856).
+  A finish read in one browser is read in every browser of the server (a phone and
+  a desktop agree; herdr's own TUI keeps its own record, since herdr can mark a pane seen only by
+  moving its focus). Only the
   selected pane actually rendered on a visible page counts. The drawer, Settings, New session,
   Files, a popup file/diff viewer, machine dialogs, descendant dialogs and menus (including
   composer slash/file suggestions and their failed-suggestions popup) all block it,
@@ -989,8 +991,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   queued parses. Recovery alone is insufficient: fresh output must parse after recovery.
   Attach preserves the input protocol: replay is sent first, and a positive readiness receipt
   is sent only once the attachment is ready. It does not send an early negative receipt that
-  existing input clients could mistake for the attach-complete barrier. Recovering-joiner
-  unread-dot accuracy remains follow-up work rather than changing queued-input semantics. A retained
+  existing input clients could mistake for the attach-complete barrier. A client that joins an
+  attachment whose stream ended after it was ready gets `output-recovering` before the retained
+  replay instead: presentation only, so that replay (the screen from before) never acknowledges a
+  finish, and like the members it needs fresh output after the next `input-ready`. A retained
   renderer starts a new output lifetime on resume, so a missed recovery cannot invalidate its
   quiet replay. This is independent of input permission.
   A native chat
@@ -1039,8 +1043,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   reconciliation or storage eviction can bring back a read dot, never acknowledge a newer finish.
   Old `herdr-web-ui:seen:<pc>` records are removed. Epochs this tab actually left are removed;
   unfamiliar epochs are ignored, not deleted using a possibly stale first roster. Storage is
-  capped at 2,000 keys, oldest first, never pruned by a tab's pane or PC roster. Another browser or
-  device keeps its own record. Saved read records survive reconnecting/offline rosters, which
+  capped at 2,000 keys, oldest first, never pruned by a tab's pane or PC roster. A record this
+  browser writes is also sent to its server (`POST /api/seen`, shared/seen.ts), which keeps the
+  greatest finish per `(PC, epoch, pane)` in `seen.json` (500 records, oldest first out) and hands
+  them to every browser as `seen` events on `/api/machines/events`: all of them when the stream
+  opens, then each change. A received record is laid over this browser's own with the same
+  max-finish rule, so it can mark a finish read, never bring a dot back. Each finish is sent once
+  per page, again with its answer fingerprint once the chat has it, and again after a failure. A
+  watching device's views stay its own (its POST is refused), and an older server without the
+  route keeps every browser's record local. Saved read records survive reconnecting/offline rosters, which
   hide their status badges and cannot create new acknowledgements. Retention cleanup after a save runs only
   when storage was actually written, not on every repeated DONE frame. Raw statuses and herdr
   recency still determine Agents order.
@@ -1195,6 +1206,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Zoom uses herdr's zoom flag and focused pane. The other panes keep their mounted terminals
   hidden, preserving attachments and drafts; unzoom restores their rectangles. Web selection
   stays local to this browser and does not change herdr's focus in another client.
+- The other way is opt-in, per device (Settings → Terminal → Follow herdr's focus, off by
+  default): when herdr's own focus moves (a click in its window, `herdr tab focus`, a script's
+  `herdr tab create --focus`), the server's `pane-focused` frame opens that pane here too, only
+  on the PC open here and never for a pane already in front (the selected one or the other split
+  half). It is an automatic pick: no keyboard is raised and no Back entry is added. Off, a browser
+  is a tmux client of a grouped session (its own current window); on, it shares the session's
+  current window as herdr's own window does. The coding-agent apps have no outside focus to follow.
 - Drag the actual split boundary to resize, with an 8px hit region and native 0.1–0.9 ratio
   limits. Its keyboard separator accepts arrow keys. `layout.set_split_ratio` receives the
   binary path (false first, true second), at most 30 times a second, one request in flight;
@@ -1310,8 +1328,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   marks the state that needs a look, never "on".
 - The segmented Chat/Terminal view switch lives in the header. There is no floating view-toggle pill.
   Files is an action, not a third lens: it opens the Files dialog and never joins the switch.
-- At `<=768px` the drawer toggle, the lens buttons and More are `--touch-target-header` squares
-  (the switch's track loses its inset so the `--header-h` bar holds them).
+- At `<=768px` the drawer toggle and More are `--touch-target-header` squares. The lens buttons
+  are not: they keep the switch's track and inset, as the segmented control entry describes.
 - Connection is one quiet chip, drawn only while the bridge is not live: a pulsing dot plus the
   written state - connecting until this page's first connection to the PC's socket, reconnecting
   after a drop, disconnected once output stopped. Below `900px` it keeps only its dot; the word stays as
@@ -1553,7 +1571,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - OpenCode multiselect Submit, custom Send and Enter send all checked choices and custom text
   together. A transient native-service failure keeps an existing question card and its edits;
   with no native question known, permissions and legacy prompts use the generic fallback card.
-- While an answer is on its way, a `--text-dim` `--fs-xs` line under the actions says `Sending your answer…` (`role="status"`), so a slow PC never looks like a dead button. The line is in the card from its first render, clipped and empty (`.visually-hidden`, never `display: none`) until the answer goes out: a live region that appears together with its content is not announced. The card's busy state (`aria-busy`) sits on its options group (`.prompt-card-options`), never on the card: Chromium fires no live-region event inside an `aria-busy` subtree, so the status line stays outside it.
+- While an answer is on its way, a `--text-dim` `--fs-xs` line under the actions says `Sending your answer…` (`role="status"`), so a slow PC never looks like a dead button. When two reads of the screen in a row fail, the same line says `Not updated: the question on screen may have changed.` and the card stays as it was; the next read that answers clears it, and a restarted poll (after a refused answer) keeps it. The line is in the card from its first render, clipped and empty (`.visually-hidden`, never `display: none`) until the answer goes out: a live region that appears together with its content is not announced. The card's busy state (`aria-busy`) sits on its options group (`.prompt-card-options`), never on the card: Chromium fires no live-region event inside an `aria-busy` subtree, so the status line stays outside it.
 - Options are flat full-width rows (`.prompt-card-option`), not boxes in the box: the menu's
   number as a keycap (mono, `--fs-2xs`, a `--border-strong` outline; the option's name keeps
   `1.`), the label, its description under it in `--text-dim`. All rows weigh the same: none is
@@ -1778,6 +1796,33 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `@` completions query `GET /api/pane/files`. Arrow keys navigate, Enter/Tab accepts, Escape closes.
   A listing that failed is told apart from no matches: a `role="status"` row says **Couldn't load
   suggestions. Keep typing to try again.** (every change of the query asks again).
+- Commands that run in the terminal (the catalog's `visibility: "terminal"`, or a bare form whose
+  interaction is the terminal; `terminalCommand`, `src/lib/compose.ts`) are listed apart, last,
+  under **Terminal commands**, and each carries a **Terminal** badge wherever it is listed, under a
+  typed query too (`.composer-menu-badge`: the `.badge` primitive in the quiet register, `--text-dim`
+  on `--bg-elevated`, never shrunk; the description beside it gives way). A row the agent's own
+  menu hides (`agent-hidden`) is never listed, and typed by hand it is sent like any text. The
+  chat never sends a terminal command on its own: picking one keeps the draft and a row in the
+  notices' anatomy (`ComposerNotices`, its group labelled **Terminal command**) stands over the
+  card, lucide `SquareTerminal`, then `/config runs in the terminal; the chat cannot show what it
+  does.` with the command in mono, and two ways on in the held rows' buttons: **Open Terminal**
+  (the pane's terminal lens, nothing sent) and **Run in Terminal** (the usual send, then the
+  terminal lens once the send is acknowledged; a refusal keeps the text and its note here), then
+  the row's X. Typing such a command by hand and pressing Send shows the same row instead of
+  sending; Escape or the X puts it away with the text kept, and Send brings it back. A
+  connection that only observes has no composer at all (PaneTerminal mounts none for it, see
+  Role), so it sees neither the group nor the row; the composer still takes the connection's
+  `role`, and `terminalCommandActions` never offers Run in Terminal to one that observes. Both
+  buttons are in the Tab order, the row is a `role="status"` row, and a phone's card stays docked
+  while it shows, as with any notice. The split follows VS Code's Copilot Chat, whose shell code blocks carry **Insert into
+  Terminal** (and, later, **Run in Terminal**) rather than running the command from the chat
+  (microsoft/vscode #196990, #227707); here the draft stays exactly as the user wrote it.
+- A pane whose rows carry `trigger: "@"` (OpenCode v2 skills, which it takes as `@skill-id`
+  attachments) lists them in the `@` menu under a **Skills** heading before the **Files** group
+  (the listbox is then **Skills and files**), a bare `@` opens that menu, and picking one inserts
+  `@<id> ` (the row's `id`, its name where it has none). A path (`@src/`) never matches a skill:
+  the match is a name's prefix or a word of it, as inline skills are matched. A file listing that
+  failed says so in the Files group, under the skills.
 - Paste, picker or drag/drop attaches up to 100 files per action; the message box names how many it left out.
   An image is stored as a paste, any other file under its own sanitised name. Each uploads through `POST /api/pane/image`, three at a time
   across all picks, and puts a removable editable `@path` mention at the start of the message (after
@@ -1888,7 +1933,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   **Composer**: Enter sends, send queued messages automatically, and on a touch screen the suggestion
   chip (off by default); then **Quick replies**; then **File viewer**: wrap long
   lines, Markdown width, Diff layout), **Terminal** (font size, font family, wheel
-  speed, input mode, Key bar), **Alerts**, **Voice input**, **Subscription usage**,
+  speed, input mode, Key bar, Clipboard from a pane, Use alongside herdr's own window, Follow
+  herdr's focus), **Alerts**, **Voice input**, **Subscription usage**,
   **Shortcuts** (the platform-resolved global bindings), **Phone & devices** (the phone address,
   Keep screen on, Install; then Portal, where the server offers it; then paired devices),
   **Remote PCs**, **About** (Updates, herdr, the repository links). A button that points at
@@ -2173,7 +2219,7 @@ The values are the ones in `src/styles.css`.
   the command palette, including its plugin actions, in the phone touch UI.
   The key bar sends terminal input only; it is not an app-action toolbar. Hardware keyboards use
   the same global bindings on phones and desktops.
-- `document.title` is `<pane title> · herdr` while selected, otherwise `herdr web ui`.
+- `document.title` is `<pane title> · Ovis` while selected, otherwise `Ovis`.
 
 ### Accepted debt
 
