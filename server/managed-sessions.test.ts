@@ -80,7 +80,12 @@ it("projects both panes and agents without converting identity ready into engine
   expect(JSON.stringify(result.panes[0]?.managed_session)).not.toContain("session_file");
 });
 
-it.each([new Error("private GJC SDK exception"), "private GJC SDK rejection"] as const)("isolates a managed SDK rejection to its pane", async rejection => {
+it.each([
+  new Error("private GJC SDK exception"), "private GJC SDK rejection",
+  Object.assign(new Error("private GJC SDK missing"), { code: "ENOENT" }),
+  Object.assign(new Error("private GJC SDK denied"), { code: "EACCES" }),
+  new GjcSdkLookupError("timeout"), new GjcSdkLookupError("unavailable"),
+] as const)("isolates a managed SDK rejection to its pane", async rejection => {
   const failedNonce = "f".repeat(32);
   const failedPane: HerdrPane = {
     ...pane,
@@ -144,8 +149,12 @@ it.each([new Error("private GJC SDK exception"), "private GJC SDK rejection"] as
   expect(projected.agents[1]?.agent_session).toBeNull();
   expect(projected.agents[2]?.agent_session).toEqual(unmanagedPane.agent_session);
   expect(JSON.stringify(projected)).not.toContain("private GJC SDK");
+  const reason = rejection instanceof GjcSdkLookupError ? rejection.reason : "unavailable";
   expect(await resolveManagedSession(failedPane, namespace, failedDeps)).toMatchObject({
-    identity: { state: "identity_pending" }, lookupError: { reason: "unavailable", message: "GJC SDK lookup failed" },
+    identity: { state: "identity_pending" }, lookupError: { reason, message: "GJC SDK lookup failed" },
+  });
+  await expect(readConversation(failedPane, undefined, undefined, failedDeps)).rejects.toMatchObject({
+    name: "GjcSdkLookupError", reason, message: "GJC SDK lookup failed",
   });
 });
 
