@@ -1,19 +1,27 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { HerdrPane, InteractivePrompt, InteractivePromptOption, ManagedSessionIdentity, PromptAnswer, SessionSnapshot } from "../shared/protocol.ts";
+import type { HerdrPane, InteractivePrompt, InteractivePromptOption, ManagedSessionIdentity, PanePromptResponse, PromptAnswer, SessionSnapshot, SlashCommand } from "../shared/protocol.ts";
+import { builtinCommands, cachedPaneCommands } from "./commands.ts";
+import { agentProcesses, claudeRestoredOwned, readCommandTranscript, releaseClaudeRestored } from "./conversation.ts";
+import { resolveAgent } from "./pane-context.ts";
+import { processAlive, processStartedAt, processStartUpperBoundAsync } from "./process-start.ts";
+import { commandInvocations, commandOutcome, CommandReservations, dialogSettlingScreen, ownsCommandDialog, WINDOW_MS as COMMAND_WINDOW_MS, type CommandSend } from "./outcome.ts";
 import { codexTranscriptPath, paneCodexHome, unansweredCodexQuestions, type QueuedQuestion } from "./codex.ts";
-import { HerdrError, paneRead, paneScrollInfo, paneSendKeys, paneSendText, sessionSnapshot } from "./herdr/client.ts";
+import { HerdrError, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { omoTranscriptForPane } from "./omo.ts";
 import { OmoAskReader, omoAsksAfter, type OmoAskCall, type OmoAsks } from "./omo-ask.ts";
-import { badRequest, errorResponse, jsonResponse } from "./http.ts";
+import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
 import { claudePlanFile } from "./claude-plan.ts";
-import { listPendingQuestionForms, readOpenCodeService, replyOpenCodeForm } from "./opencode-service.ts";
+import { listPendingQuestionForms, openCodeService, replyOpenCodeForm } from "./opencode-service.ts";
 import { opencodeSessionId } from "./opencode.ts";
 import { registry } from "./dialogs/registry.ts";
+import { claudeRewindPanelBelow } from "./dialogs/claude.ts";
+import { followClaudeNeverMind, followClaudeRestore } from "./rewind.ts";
 import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type OpenCodePromptEntry, PI_MODEL_HINT_RE, type ParsedPrompt, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parsedByPublicPrompt, publicPrompt, wrapped } from "./dialogs/shared.ts";
 import { executeInteractionPlan } from "./dialogs/interaction-plan.ts";
+import { openCodeV1QuestionActive } from "./dialogs/opencode.ts";
 import { CODEX_ASK_HINT_RE, CODEX_ASYNC_ASK_HINT_RE, CODEX_CONTINUE_HINT_RE, CODEX_QUEUE_HEADER_RE, codexModelListWaits } from "./dialogs/codex.ts";
 import { OMO_FOOTER_LINES, OMO_HINT_LINES, OMO_NOT_FOOTER_RE, OMO_OPTIONS_HINT_RE, OMO_PENDING_HINT_RE, OMO_REVIEW_HINT_RE, OMO_TYPING_HINT_RE, omoModelListWaits, sameText } from "./dialogs/omo.ts";
-import { CLAUDE_ASK_HINT_RE, CLAUDE_CONFIRM_HINT_RE, CLAUDE_EFFORT_GUARD_RE, CLAUDE_EFFORT_HINT_RE, INVISIBLE_CHAR_RE, claudeModelListWaits, withoutClaudeTasks } from "./dialogs/claude.ts";
+import { CLAUDE_ASK_HINT_RE, CLAUDE_CONFIRM_HINT_RE, CLAUDE_EFFORT_GUARD_RE, CLAUDE_EFFORT_HINT_RE, CLAUDE_REWIND_NEVER_MIND, INVISIBLE_CHAR_RE, claudeModelListWaits, withoutClaudeTasks } from "./dialogs/claude.ts";
 import { OMP_CLIPPED_SINGLE_HINT_RE, OMP_MULTI_HINT_RE, OMP_REVIEW_HINT_RE, OMP_SINGLE_CLIPPED_HINT_RE, OMP_SINGLE_HINT_RE } from "./dialogs/omp.ts";
 import { HERMES_HINT_RE } from "./dialogs/hermes.ts";
 import { PI_INPUT_HINT_RE, PI_MENU_HINT_RE, parsePiDialog } from "./dialogs/pi.ts";
@@ -131,19 +139,310 @@ export function pendingOmoAsk(jsonl: string): OmoAsk | null {
 const heldCandidates = new Map<string, { text: string; at: number }>();
 /** Long enough to read the card and answer it; a message kept past this is the user's own business */
 const HELD_WINDOW_MS = 10 * 60_000;
+type PaneCommandSend = CommandSend & {
+  store: string | null;
+  /** Session discovery is visibility metadata, not command completion evidence. */
+  visibility?: {
+    readonly terminalId: string;
+    discovering: boolean;
+    identity: string;
+    /** The agent process the send went to (bindCommandProcess); null when it could not be told, none when not bound. */
+    process?: { readonly pid: number; readonly started: number | null } | null;
+    /**
+     * No foreground process matched the agent when binding (native Windows lists only the shell; an executable
+     * named otherwise than its kind), or the read failed: nothing can show a replacement, so the session the same
+     * agent reports in this terminal is adopted.
+     */
+    unmatched?: true;
+    /**
+     * The identity herdr still reported from an earlier process when this send went to a later one (a restarted
+     * Claude Code keeps its old session id until its first turn): the send waits for its own session, as one sent
+     * before any session does, and is never adopted into this one; only within STALE_SESSION_LAG_MS, and not past a
+     * later Chat session change.
+     */
+    stale?: string;
+    /** Set while the binding's read is out: a poll waits for it, within BINDING_WAIT_MS. */
+    binding?: Promise<void>;
+    /** Polls in a row that did not find the bound process in the foreground, where its start time cannot say. */
+    misses?: number;
+    replaced?: true;
+  };
+  /** Visibility only: never changes the send identity used to correlate evidence. */
+  sessionChange?: { readonly terminalId: string; identity?: string };
+};
 /** What the chat last sent to each pane: Claude Code puts that text back in its input box when the send is cancelled right after it. */
-const chatSent = new Map<string, string>();
+const chatSent = new Map<string, { text: string; commands: PaneCommandSend[]; reservations: CommandReservations }>();
+
+const outcomeIdentity = (pane: HerdrPane): string => JSON.stringify([
+  pane.terminal_id, pane.agent_session, ...(managedDeclared(pane) ? [managedBinding(pane)] : []),
+]);
+
+/** The agent's own process (agentProcesses), keyed by its pid and, on Linux, its start time; never the process-group id. */
+function outcomeProcess(info: ProcessInfo | undefined, agent: string, bound?: number): { pid: number; started: number | null } | null {
+  const candidates = agentProcesses(info?.foreground_processes ?? [], agent);
+  const running = bound === undefined ? candidates[0] : candidates.find((entry) => entry.pid === bound);
+  return running ? { pid: running.pid, started: process.platform === "linux" ? processStartedAt(running.pid) : null } : null;
+}
+
+/** How long a poll waits for a send's process binding before it judges that send without one, this time. */
+const BINDING_WAIT_MS = 250;
+
+/**
+ * How long after a send herdr may still report the session of the process before a restart: a restarted Claude Code
+ * keeps the old id until its first turn, seen live for 20 s (F2 r3) and for at least 45 s (todo 42's probe). A send
+ * waiting for its own session (`stale`) adopts the next one only this long; after that it stays with the session it
+ * was made in, like any other send, so a resumed session (claude -c, codex resume) that truly kept its id does not
+ * carry its rows into a later one for long.
+ */
+const STALE_SESSION_LAG_MS = 60_000;
+
+/** The same process: one pid, and the same start time wherever both are known. */
+const sameProcess = (a: { pid: number; started: number | null }, b: { pid: number; started: number | null }): boolean =>
+  a.pid === b.pid && (a.started === null || b.started === null || a.started === b.started);
+
+/**
+ * Records which agent process a send went to, so its row follows that process (commandOutcomes), also when no browser
+ * polls until after a replacement. Every send is bound, not only one made before the session is known: herdr can keep
+ * reporting a restarted Claude Code's old session id until its first turn, so the session alone would keep the old
+ * process's rows. Recording never holds delivery: nothing here is awaited.
+ * `seen`: herdr's foreground answer read before this send, which is the process it went to. Without one, the read
+ * starts alongside delivery and can answer after a replacement: a process that started at or after the send never
+ * received it, so the send is left unidentified rather than bound to it. Outside Linux and macOS no start time is
+ * known and the answer is taken as the send-time one.
+ */
+export function bindCommandProcess(paneId: string, command: PaneCommandSend | undefined, seen?: ProcessInfo): void {
+  const visibility = command?.visibility;
+  if (!command || !visibility || visibility.process !== undefined || visibility.binding) return;
+  const sentAt = Date.now();
+  visibility.binding = (async () => {
+    if (seen) {
+      // the /proc start-time read waits until delivery has its turn
+      await Promise.resolve();
+      visibility.process = outcomeProcess(seen, command.agent);
+      if (!visibility.process) visibility.unmatched = true;
+      return;
+    }
+    const found = outcomeProcess(await paneProcessInfo(paneId).catch(() => undefined), command.agent);
+    const startedBy = found ? await processStartUpperBoundAsync(found.pid) : null;
+    visibility.process = found && (startedBy === null || startedBy < sentAt) ? found : null;
+    if (!found) visibility.unmatched = true;
+  })().finally(() => { visibility.binding = undefined; });
+}
+
+/** Whether the send's bound process still runs in the pane; replaced only on proof, never on one look. */
+function checkBoundProcess(visibility: NonNullable<PaneCommandSend["visibility"]>, agent: string, processes: ProcessInfo):
+  { pid: number; started: number | null } | null {
+  const original = visibility.process!;
+  const current = outcomeProcess(processes, agent, original.pid);
+  if (current) {
+    visibility.misses = 0;
+    if (original.started !== null && current.started !== null && original.started !== current.started) visibility.replaced = true;
+    return current;
+  }
+  // Out of the foreground is not gone: a suspended agent (Ctrl+Z) or another process group holding the
+  // terminal is still the same process. On Linux /proc says whether the pid is gone, or reused under another
+  // start time. Elsewhere a gone pid is proof; a live one is the same process on macOS and the other Unixes,
+  // which hand a pid out again only after the whole range, but not on Windows, which reuses a finished
+  // process's number at once. Where none of that can say, two looks in a row without the process say so.
+  if (process.platform === "linux") {
+    const started = processStartedAt(original.pid);
+    if (started === null || original.started !== null && started !== original.started) visibility.replaced = true;
+    else if (original.started === null && (visibility.misses = (visibility.misses ?? 0) + 1) >= 2) visibility.replaced = true;
+    return null;
+  }
+  const alive = processAlive(original.pid);
+  if (!alive) visibility.replaced = true;
+  else if (process.platform === "win32" && (visibility.misses = (visibility.misses ?? 0) + 1) >= 2) visibility.replaced = true;
+  return null;
+}
+
+/** Capture only existing data before delivery. Discovery and transcript reads belong to the poll. */
+export function prepareCommandSend(pane: HerdrPane, text: string, screen = ""): PaneCommandSend | undefined {
+  if (!/(?:^|\s)[/$@]\S/u.test(text)) return undefined;
+  const cached = cachedPaneCommands(pane);
+  const agent = cached?.agent ?? resolveAgent(pane).agent;
+  if (!agent) return undefined;
+  return commandSendFrom(pane, agent, cached?.commands ?? builtinCommands(agent), text, screen);
+}
+
+/** The send record for `text` against a given catalog: the remembered one above, or one the delivery already waited for. */
+export function commandSendFrom(pane: HerdrPane, agent: string, commands: SlashCommand[], text: string, screen = ""): PaneCommandSend | undefined {
+  const invocations = commandInvocations(agent, text, commands);
+  if (invocations.length === 0) return undefined;
+  const sessionChange = /^\/(?:clear|new|reset|resume)(?:\s|$)/iu.test(text.trim())
+    && commands.some((row) => row.source === "builtin" && row.name === invocations[0]?.name);
+  return { id: randomBytes(12).toString("hex"), text, at: Date.now(), agent, identity: outcomeIdentity(pane),
+    visibility: { terminalId: pane.terminal_id, discovering: pane.agent_session == null, identity: outcomeIdentity(pane) },
+    screen, invocations, form: invocations[0]?.form ?? null, store: null,
+    ...(sessionChange ? { sessionChange: { terminalId: pane.terminal_id } } : {}) };
+}
 
 /** A message the chat just sent to a pane: one with invisible characters may be held by Claude Code. */
-export function noteSubmitted(paneId: string, text: string): void {
-  chatSent.set(paneId, text);
+export function noteSubmitted(paneId: string, text: string, command?: PaneCommandSend): void {
+  const previous = chatSent.get(paneId)?.commands ?? [];
+  const reservations = chatSent.get(paneId)?.reservations ?? new CommandReservations();
+  reservations.close(command?.text ?? text, command?.at ?? Date.now());
+  if (command) reservations.add(command, registry.readersFor(command.agent));
+  const commands = command ? [...previous, command].slice(-5) : previous;
+  chatSent.delete(paneId);
+  chatSent.set(paneId, { text, commands, reservations });
+  if (chatSent.size > 128) chatSent.delete(chatSent.keys().next().value!);
   if (INVISIBLE_CHAR_RE.test(text)) heldCandidates.set(paneId, { text, at: Date.now() });
   else heldCandidates.delete(paneId);
+  // a message a rewind put back in Claude's box is no longer the chat's own once it sends again
+  releaseClaudeRestored(paneId);
+}
+
+/**
+ * A Claude restore took the conversation back to before a message Claude wrote at `at`: the chat's
+ * command sends made after it are forgotten with their outcomes, which would otherwise keep claiming
+ * evidence rewound away. Sends before it keep theirs.
+ */
+export function forgetChatSendsAfter(paneId: string, at: number): void {
+  const sent = chatSent.get(paneId);
+  if (!sent) return;
+  const gone = new Set(sent.commands.filter((command) => command.at > at).map((command) => command.id));
+  if (gone.size === 0) return;
+  sent.commands = sent.commands.filter((command) => !gone.has(command.id));
+  sent.reservations.forget(gone);
 }
 
 /** The text of the pane's last successful chat send (noteSubmitted), or none. */
 export function lastChatSubmitted(paneId: string): string | null {
-  return chatSent.get(paneId) ?? null;
+  return chatSent.get(paneId)?.text ?? null;
+}
+
+/**
+ * The words in Claude Code's input box that are the chat's own to offer again and to empty before
+ * the next send: the message a rewind restored there (conversation.ts claudeRestoredOwned), only
+ * while the pane's one Claude process is the one that restored it; else the chat's last send, which
+ * Claude puts back when that send is cancelled.
+ */
+export async function chatOwnedInput(paneId: string): Promise<string | null> {
+  return await claudeRestoredOwned(paneId) ?? lastChatSubmitted(paneId);
+}
+
+/** Native observers must name the send they correlated; a timestamp or idle transition alone is not an event. */
+export function noteCommandEvidence(paneId: string, id: string, evidence: NonNullable<Parameters<typeof commandOutcome>[2]["evidence"]>): void {
+  const commands = chatSent.get(paneId)?.commands ?? [];
+  const index = commands.findIndex((sent) => sent.id === id);
+  const sent = commands[index];
+  if (!sent) return;
+  sent.outcome = commandOutcome(paneId, sent, { now: Date.now(), evidence, nextAt: commands[index + 1]?.at });
+}
+
+async function commandOutcomes(paneId: string, pane: HerdrPane, prompt: InteractivePrompt | null, screen: string | undefined, readSendId: string | undefined, codexHome?: string): Promise<NonNullable<PanePromptResponse["outcomes"]>> {
+  if (managedDeclared(pane) && managedBinding(pane) === null) return [];
+  if (!chatSent.get(paneId)?.commands.length) return [];
+  chatSent.get(paneId)?.reservations.prune(Date.now());
+  screen ??= await liveScreen(paneId).catch(() => "");
+  const commands = chatSent.get(paneId)?.commands ?? [];
+  const now = Date.now();
+  const identity = outcomeIdentity(pane);
+  // a send's binding read runs alongside its delivery: it is waited for here, and only so long
+  const bindings = commands.flatMap((sent) => sent.visibility?.binding ? [sent.visibility.binding] : []);
+  if (bindings.length > 0) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([Promise.all(bindings), new Promise((resolve) => { timer = setTimeout(resolve, BINDING_WAIT_MS); })]);
+    clearTimeout(timer);
+  }
+  // the process is read only while some send still waits for its session, or is inside its window
+  const watched = commands.filter((sent) => sent.visibility?.process && !sent.visibility.replaced
+    && (sent.visibility.discovering || now < sent.at + COMMAND_WINDOW_MS));
+  const processes = watched.length > 0 ? await paneProcessInfo(paneId).catch(() => undefined) : undefined;
+  for (const [index, sent] of commands.entries()) {
+    const visibility = sent.visibility;
+    if (!visibility || visibility.replaced) continue;
+    // bound to another process than an earlier send under the same identity: herdr still reports the session
+    // of the process before, and this send waits for its own (a send no process was bound to is no evidence)
+    if (!visibility.discovering && visibility.stale === undefined && visibility.process
+      && commands.slice(0, index).some((earlier) => earlier.visibility?.identity === visibility.identity
+        && (earlier.visibility.replaced || earlier.visibility.process && !sameProcess(earlier.visibility.process, visibility.process!)))) {
+      visibility.discovering = true;
+      visibility.stale = visibility.identity;
+    }
+    // past herdr's lag, or once Chat itself changed the session after it, the session this send was made in was its own
+    if (visibility.stale !== undefined && visibility.discovering
+      && (now >= sent.at + STALE_SESSION_LAG_MS || commands.slice(index + 1).some((later) => later.sessionChange))) {
+      visibility.discovering = false;
+    }
+    const current = processes && watched.includes(sent) ? checkBoundProcess(visibility, sent.agent, processes) : null;
+    // A send's own session is adopted while its bound process runs. With no process bound (native Windows
+    // lists only the shell; an executable named otherwise than its kind), nothing can show a replacement,
+    // so the session that appears in the same terminal is taken as its own, when it is the same agent's.
+    if (visibility.discovering && !visibility.replaced && pane.agent_session && identity !== visibility.stale
+      && visibility.terminalId === pane.terminal_id
+      && (current || visibility.unmatched && pane.agent_session.agent === sent.agent)) {
+      visibility.identity = identity;
+      visibility.discovering = false;
+      if (sent.sessionChange) sent.sessionChange.identity = identity;
+    }
+  }
+  const sameSession = (sent: PaneCommandSend): boolean => !sent.visibility?.replaced
+    && (sent.visibility?.identity ?? sent.identity) === identity;
+  // The transcript can be megabytes; read it only while a send can still change from it.
+  const open = commands.some((sent) => sent.outcome?.state !== "result-observed" && sent.form?.interaction !== "terminal"
+    && now < sent.at + COMMAND_WINDOW_MS);
+  const transcript = open ? await readCommandTranscript(paneId, codexHome).catch(() => null) : null;
+  if (transcript) chatSent.get(paneId)?.reservations.observeTranscript(outcomeIdentity(pane), transcript.identity, transcript.records, readSendId);
+  const parsed = prompt ? parsedByPublicPrompt.get(prompt) : undefined;
+  const readIndex = commands.findIndex((sent) => sent.id === readSendId);
+  const outcomes = commands.map((sent, index) => {
+    // A send racing this GET must not inherit a screen read before that send.
+    if (index > readIndex) return sent.outcome ?? commandOutcome(paneId, sent, { now });
+    const same = sameSession(sent);
+    const latest = index === commands.length - 1 && same && sent.closedAt === undefined && now < sent.at + COMMAND_WINDOW_MS;
+    const reader = parsed ? registry.readerFor(parsed.responder) : undefined;
+    const readers = registry.readersFor(sent.agent);
+    const before = parsePrompt(sent.agent, sent.screen);
+    const dialog = latest && prompt && parsed && reader && reader.kind !== "result" && !prompt.fallback && parsed.id !== before?.id
+      && ownsCommandDialog(sent, parsed, screen, reader, readers)
+      ? { id: prompt.id, reader: reader.id } : undefined;
+    if (dialog && (!sent.form?.dialog || sent.form.dialog === dialog.reader)) {
+      sent.dialogId = dialog.id;
+      sent.dialogObserved = true;
+    }
+    else sent.dialogId = undefined;
+    if (latest && pane.agent_status === "blocked" && !prompt && reader?.kind !== "result") sent.waitingSince ??= now;
+    else sent.waitingSince = undefined;
+    if (latest && sent.form?.interaction === "dialog" && !sent.dialogObserved && (!prompt || prompt.fallback)
+      && (pane.agent_status === "idle" || pane.agent_status === "done")) {
+      const content = dialogSettlingScreen(screen, sent.agent, readers);
+      if (content === dialogSettlingScreen(sent.screen, sent.agent, readers)) sent.settled = undefined;
+      else if (sent.settled?.screen !== content) sent.settled = { screen: content, since: now };
+    } else sent.settled = undefined;
+    const nextAt = commands[index + 1]?.at ?? (!same ? now : undefined);
+    const observed = commandOutcome(paneId, sent, {
+      now, nextAt, screen: latest ? screen : undefined, resultScreen: same ? screen : undefined,
+      // the snapshot came before the screen read; a detection read is the live screen, whatever a device scrolled
+      top: pane.scroll?.max_offset_from_bottom,
+      readers, dialog, settledSince: sent.settled?.since,
+      waitingSince: sent.waitingSince,
+      transcriptAt: same && sent.transcriptEvidence && sent.transcriptEvidence.at < (sent.transcriptClosedAt ?? Infinity)
+        ? sent.transcriptEvidence.at : undefined,
+    });
+    sent.outcome = observed;
+    return observed;
+  });
+  // The last Chat /clear, /new or resume may itself change sessions. Keep its receipt in
+  // that next conversation only; a session change is not proof that the command completed.
+  for (const [index, sent] of commands.entries()) {
+    const change = sent.sessionChange;
+    if (!change || change.identity !== undefined || sent.visibility?.replaced || sameSession(sent)) continue;
+    const next = commands[index + 1];
+    // A send in the new session can arrive before its first poll. Its captured identity
+    // scopes the initiating receipt even though that later send has closed its evidence window.
+    if (next && next.identity !== sent.identity && next.at < sent.at + COMMAND_WINDOW_MS && change.terminalId === pane.terminal_id) {
+      change.identity = next.identity;
+    } else if (index === commands.length - 1 && index <= readIndex && sent.closedAt === undefined
+      && now < sent.at + COMMAND_WINDOW_MS && pane.agent_session && change.terminalId === pane.terminal_id) {
+      change.identity = identity;
+    }
+  }
+  return outcomes.filter((_, index) => {
+    const sent = commands[index]!;
+    return !sent.visibility?.replaced && (sameSession(sent) || sent.sessionChange?.identity === identity);
+  });
 }
 
 /** What the chat sent a pane that Claude Code may be holding, for the readers that ask whether it waits. */
@@ -228,6 +527,12 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   if (prompt.responder === "claude-confirm") return ends(CLAUDE_CONFIRM_HINT_RE);
   // its parser already found the hint over the input box with only the footer under it
   if (prompt.responder === "claude-held") return true;
+  // so has omp's handoff status: only omp's status bar and editor under it
+  if (prompt.responder === "omp-handoff") return true;
+  // the goal dialog ends the screen with its own dismiss hint
+  if (prompt.responder === "claude-goal") return ends(/esc to dismiss$/i);
+  // /rewind's list ends with its hint; its confirm step with its last choice, no hint under it
+  if (prompt.responder === "claude-rewind") return ends(/^enter to continue · esc to cancel$/i) || /^(?:❯\s*)?4\.\s+Never mind$/.test(last);
   if (prompt.responder === "claude-model") return claudeModelListWaits(screen);
   if (prompt.responder === "claude-effort") return ends(CLAUDE_EFFORT_HINT_RE);
   if (prompt.responder === "codex-model") return ends(/(?:^|\s)enter select\s*·\s*esc back$|(?:^|\s)enter (?:default|apply)\s*·\s*s session\s*·\s*esc back$/i);
@@ -257,10 +562,17 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   // above whatever came after, which is what keeps this window narrow.
   if (prompt.responder === "pi-model") return hintAtEnd(shown, PI_MODEL_HINT_AT_END_RE, PI_FOOTER_LINES);
   if (prompt.responder === "omo-model") return omoModelListWaits(screen);
+  // its reader already found the picker ending the screen, which only an open picker does
+  if (prompt.responder === "omp-model") return true;
   if (prompt.responder === "pi-question" || prompt.responder === "pi-confirm" || prompt.responder === "pi-input") {
     return hintAtEnd(shown, PI_MENU_HINT_AT_END_RE, PI_FOOTER_LINES, 4)
       || hintAtEnd(shown, PI_INPUT_HINT_AT_END_RE, PI_FOOTER_LINES, 4);
   }
+  // Command Code's permission footer names its keys at the dialog's end and wraps on a narrow
+  // pane: `↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo to bypass all …`
+  if (prompt.responder === "cmd-question") return cmdFooterEnds(shown);
+  // its footer ends the screen, wrapped or not (dialogs/opencode.ts)
+  if (prompt.responder === "opencode-v1-question") return openCodeV1QuestionActive(screen);
   return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i);
 }
 /**
@@ -272,6 +584,19 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
  */
 const PI_MENU_HINT_AT_END_RE = new RegExp(`${PI_MENU_HINT_RE.source}$`, "i");
 const PI_INPUT_HINT_AT_END_RE = new RegExp(`${PI_INPUT_HINT_RE.source}$`, "i");
+/** Command Code's permission footer: `↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo …` */
+const CMD_HINT_RE = /↑\/↓ navigate.*enter select/i;
+const CMD_FOOTER_WORDS = new Set(["·", "ctrl+e", "explain", "run", "cmd", "--yolo", "to", "bypass", "all", "permissions", "(docs", "↗)", "↗", "(docs↗)"]);
+/**
+ * The footer ends the screen: after its key hint only the footer's own words may follow, wrapped or
+ * not. A line typed below a quoted or stale dialog (`❯ my next message`) means it is no live one.
+ */
+function cmdFooterEnds(shown: string[]): boolean {
+  const at = findLastIndex(shown, (line) => CMD_HINT_RE.test(line));
+  if (at < 0 || shown.length - at > 3) return false;
+  const rest = [shown[at]!.replace(/^.*?enter select/i, ""), ...shown.slice(at + 1)].join(" ");
+  return rest.split(/\s+/).filter(Boolean).every((word) => CMD_FOOTER_WORDS.has(word.toLowerCase()));
+}
 /** The same hint told from the end, so lines that follow it cannot complete a match of their own. */
 const PI_MODEL_HINT_AT_END_RE = new RegExp(`${PI_MODEL_HINT_RE.source}$`, "i");
 /**
@@ -301,7 +626,8 @@ function hintAtEnd(shown: string[], atEnd: RegExp, footerLines: number, span = 3
 
 function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false): ParsedPrompt | null {
   const ctx = { agent, omoAsk, omoTrusted, omoOpen, sent, working };
-  const candidates = registry.readersFor(agent).map((reader) => reader.parse(screen, ctx));
+  // a result reader reads only below a send's own echo (outcome.ts), never a card on the whole screen
+  const candidates = registry.readersFor(agent).filter((reader) => reader.kind !== "result").map((reader) => reader.parse(screen, ctx));
   return candidates.find((candidate): candidate is ParsedPrompt => candidate !== null && promptTailIsActive(candidate, screen)) ?? null;
 }
 
@@ -865,6 +1191,17 @@ export function claudeInputBoxContent(live: string): string | null {
   return box.plain.map((row) => row.replace(/\u00a0/g, " ").trimEnd()).join("\n").trim();
 }
 
+/**
+ * Whether Claude Code's rewind dialog is open: the screen ends in its panel and Claude's own input box
+ * is not drawn under it (the dialog takes its place in every recorded state). A reply that draws the
+ * panel has the box under it, and must not hold the pane's sends; rules above the panel (an earlier
+ * reply's) are no box.
+ */
+export function claudeRewindOpen(screen: string): boolean {
+  const below = claudeRewindPanelBelow(screen);
+  return below !== null && claudeInputBoxContent(below) === null;
+}
+
 /** What the user is shown of a box's content: enough to tell a real draft from a box misread. */
 export function shownInputBox(content: string): string {
   return content.length > INPUT_BOX_SHOWN_CHARS ? `${content.slice(0, INPUT_BOX_SHOWN_CHARS)}…` : content;
@@ -883,7 +1220,7 @@ export function claudeInputBoxText(live: string): string {
  * viewportShowsLive verifies they show that screen.
  */
 async function restoredOnLiveScreen(paneId: string, viewport: string): Promise<string | null> {
-  const sent = lastChatSubmitted(paneId);
+  const sent = await chatOwnedInput(paneId);
   const plain = (text: string): string => text.replace(ANSI_RE, "").replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "");
   if (claudeRestoredDraft(plain(viewport), viewport, sent) === null) return null;
   const detection = async (): Promise<string> => (await paneRead({ paneId, source: "detection", format: "text", timeoutMs: SUGGESTION_READ_MS })).text;
@@ -994,7 +1331,7 @@ function bindManagedPrompt(prompt: InteractivePrompt | null, binding: string | n
   return prompt && binding ? { ...prompt, id: createHash("sha256").update(JSON.stringify([prompt.id, binding])).digest("hex") } : prompt;
 }
 
-async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?: string, openCodeState = defaultOpenCodeState, signal?: AbortSignal): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[]; binding: string | null; stale?: boolean }> {
+async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?: string, openCodeState = defaultOpenCodeState, signal?: AbortSignal): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[]; binding: string | null; screen?: string; stale?: boolean }> {
   const before = openCodeState.checkpoint();
   const { panes } = await openCodeState.snapshot();
   // a closed pane's wait has ended too
@@ -1007,7 +1344,7 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   const pane = panes.find((candidate) => candidate.pane_id === paneId);
   if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
   const binding = managedDeclared(pane) ? managedBinding(pane) : null;
-  const agent = pane.agent ?? "";
+  const agent = resolveAgent(pane).agent ?? "";
   const status = pane.agent_status;
   if (managedDeclared(pane) && binding === null) return { agent, status, prompt: null, pane, panes, binding };
   // counted right before the screen is read, after the snapshot: what matters is whether an
@@ -1020,7 +1357,7 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
   if (known.prompt !== null || status !== "blocked" || !agent || settling) {
     fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes, binding };
+    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes, binding, screen: known.screen };
   }
   // herdr says the agent waits on the user and no reader knows the screen: the fallback card
   const screen = known.screen ?? await liveScreen(paneId);
@@ -1029,14 +1366,14 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   // (claudeModelListWaits, codexModelListWaits)
   if ((agent === "codex" && (codexQuestionsCollapsed(screen) || codexModelListWaits(screen))) || claudeModelListWaits(screen) || claudeModelListWaits(screen, CLAUDE_EFFORT_GUARD_RE)) {
     fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, null, turns), pane, panes, binding };
+    return { agent, status, prompt: asked(paneId, null, turns), pane, panes, binding, screen };
   }
   const prompt = asked(paneId, parseFallbackPrompt(agent, screen), turns)!;
   if (!fallbackLogged.has(paneId) && fallbackLogged.size < FALLBACK_LOGGED_MAX) {
     fallbackLogged.add(paneId);
     console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
   }
-  return { agent, status, prompt, pane, panes, binding };
+  return { agent, status, prompt, pane, panes, binding, screen };
 }
 
 /**
@@ -1070,11 +1407,14 @@ async function readKnownPrompt(
   openCodeState = defaultOpenCodeState,
   signal?: AbortSignal,
 ): Promise<{ prompt: InteractivePrompt | null; screen?: string; stale?: boolean }> {
-  if (agent === "opencode") {
+  // no native card (no session herdr reports, no verified v2 service, no pending form): OpenCode
+  // v1's own question prompt is read off the screen below (dialogs/opencode.ts, #1386)
+  native: if (agent === "opencode") {
     const sessionID = opencodeSessionId(pane);
-    if (!sessionID) return { prompt: null };
+    if (!sessionID) break native;
     const state = openCodeState.begin(paneId, sessionID);
-    const config = readOpenCodeService(openCodeStateDir);
+    // only the process service.json names, as /api/info proves it; never a service started here
+    const config = (await openCodeService(openCodeStateDir, signal, { onWindows: true }))?.config ?? null;
     const revision = state.revision;
     const issued = ++state.issued;
     const forms = config ? await listPendingQuestionForms(config, sessionID, signal) : null;
@@ -1094,8 +1434,7 @@ async function readKnownPrompt(
     }
     // A late read renders the newer applied form and draft, never a synthetic empty card.
     const form = state.listed;
-    if (!form) return { prompt: null };
-    if (form.fields.length === 0) return { prompt: null };
+    if (!form || form.fields.length === 0) break native;
 
     // Schema changes under a reused form id are a replacement too.
     const identity = JSON.stringify({
@@ -1212,7 +1551,7 @@ async function readKnownPrompt(
     return { prompt: publicPrompt(parsed) };
   }
 
-  if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", ""].includes(agent)) return { prompt: null };
+  if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", "cmd", "opencode", ""].includes(agent)) return { prompt: null };
   const screen = await liveScreen(paneId);
   // omo's form reads its text from the session's call, the screen showing where the form stands
   const omoAsks = ["omo", "pi", "claude", ""].includes(agent) && pane.cwd && OMO_FORM_RE.test(screen)
@@ -1362,6 +1701,7 @@ async function withPlanFile(prompt: InteractivePrompt | null, transcript: string
 
 export async function handlePromptRequest(request: Request, url: URL, options: PromptRequestOptions = {}): Promise<Response | null> {
   if (url.pathname !== "/api/pane/prompt" && url.pathname !== "/api/pane/prompt/answer") return null;
+  setRequestRoute(url.pathname);
   // the answer being handled, once its body was read: what the log line says even when the handling throws
   let answerLog: { paneId: string; matched: boolean } | null = null;
   try {
@@ -1369,6 +1709,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       if (request.method !== "GET") return badRequest("method_not_allowed", "GET is required.");
       const paneId = url.searchParams.get("pane_id")?.trim();
       if (!paneId) return badRequest("missing_pane_id", "pane_id is required.");
+      const readSendId = chatSent.get(paneId)?.commands.at(-1)?.id;
       const read = await readPrompt(paneId, options.codexHome, options.openCodeStateDir, options.openCodeState, request.signal);
       if (read.stale) return promptChanged();
       const { agent, status } = read;
@@ -1381,15 +1722,18 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // only while Claude waits for the next prompt (a working agent shows none), and a failed or
       // slow read of it (a herdr without ansi reads, a busy one) leaves the prompt answer as it is,
       // on time.
-      const box = prompt === null && agent === "claude" && (status === "idle" || status === "done")
+      const identityReady = !managedDeclared(read.pane) || read.binding !== null;
+      const box = identityReady && prompt === null && agent === "claude" && (status === "idle" || status === "done")
         ? await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS })
           .then((read) => read.text, () => null)
         : null;
+      const outcomes = await commandOutcomes(paneId, read.pane, read.prompt, read.screen, readSendId, options.codexHome);
       return jsonResponse({
         prompt,
         suggestion: box === null ? null : parseClaudeSuggestion(box),
         restored: box === null ? null : await restoredOnLiveScreen(paneId, box).catch(() => null),
-      });
+        ...(outcomes.length ? { outcomes: watching ? outcomes.map(({ preview: _preview, result_text: _resultText, ...outcome }) => outcome) : outcomes } : {}),
+      } satisfies PanePromptResponse);
     }
 
     if (request.method !== "POST") return badRequest("method_not_allowed", "POST is required.");
@@ -1537,7 +1881,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           return jsonResponse({ ok: true });
         }
 
-        const config = readOpenCodeService(options.openCodeStateDir);
+        const config = (await openCodeService(options.openCodeStateDir, deadline, { onWindows: true }))?.config ?? null;
         if (!config) {
           return jsonResponse({ error: { code: "service_unavailable", message: "OpenCode service is not available." } }, 502);
         }
@@ -1545,6 +1889,9 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         if (!(await stillBound())) return promptChanged();
         const replyResult = await replyOpenCodeForm(config, openCodeForm.sessionID, openCodeForm.formId, draft.answers, deadline);
         if (replyResult.ok) {
+          const sent = chatSent.get(body.pane_id)?.commands.at(-1);
+          // OpenCode itself took the answer to the form the sent command opened
+          if (sent?.dialogId === prompt.id) noteCommandEvidence(body.pane_id, sent.id, { kind: "native", at: Date.now() });
           // An upstream acknowledgement is authoritative, even after a poll or status change.
           // Only clean up this asking: another form/session may already have replaced it.
           if (openCodeState.entries.get(body.pane_id) === state && state.revision === openCodeForm.revision) {
@@ -1643,7 +1990,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         // Claude's unnumbered rows and pi's models are read with no number to aim at: looked at
         // again before the Enter even when it needs no move. So is Claude's model list, picked
         // with a letter: typed after the list has gone, it would stand in the agent's own prompt
-        let moved = reader?.reread === "before-commit";
+        let moved = reader !== undefined && reader.reread !== "none";
         // Claude's and Codex's model lists: a window on a list, picked with a letter; Claude's effort
         // slider the same way, its levels side by side
         const list = reader !== undefined && reader.list !== "none";
@@ -1692,19 +2039,22 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           if (!(await sameManagedBinding(body.pane_id, binding))) throw new ManagedPromptChanged();
           const first = !move && !committed;
           if (!move) committed = true;
+          // the rewind card's keys go only while its requester is there, asked once more right before the
+          // write (herdrRpc's guard): the requester can leave while the connection opens
+          const guard = responder === "claude-rewind" ? () => !request.signal.aborted : undefined;
           try {
-            if (step.keys) await paneSendKeys(body.pane_id, step.keys);
-            else if (step.text !== undefined) await paneSendText(body.pane_id, step.text);
+            if (step.keys) await paneSendKeys(body.pane_id, step.keys, undefined, guard);
+            else if (step.text !== undefined) await paneSendText(body.pane_id, step.text, undefined, guard);
           } catch (error) {
-            // herdr was never reached, so nothing was pressed: the card is still to be answered
-            if (first && error instanceof HerdrError && error.code === "connect_failed") committed = false;
+            // herdr was never reached, or the guard kept the write back, so nothing was pressed: the card is still to be answered
+            if (first && error instanceof HerdrError && (error.code === "connect_failed" || error.code === "cancelled")) committed = false;
             throw error;
           }
           if (more) await Bun.sleep(30);
         };
         if (interaction) {
           const result = await executeInteractionPlan(interaction, body.option_index!, {
-            rereadMoves: list,
+            rereadMoves: list || reader?.reread === "each-move",
             active: asks,
             cancelled: () => request.signal.aborted,
             read: async () => await onRow() ? matchedScreen : null,
@@ -1739,6 +2089,11 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           }
         }
         answered = true;
+        const sent = chatSent.get(body.pane_id)?.commands.at(-1);
+        // An incidental question only unblocks the command; only its named dialog can complete it.
+        // The card's Esc row (a cancel or refusal: omp's handoff Cancel, Codex's No) is not a result.
+        if (committed && sent?.dialogId === prompt.id && sent.form?.dialog === parsed.responder
+          && body.option_index !== parsed.rejectWithEscapeIndex) noteCommandEvidence(body.pane_id, sent.id, { kind: "dialog", at: Date.now() });
       } catch (error) {
         if (error instanceof ManagedPromptChanged) return promptChanged();
         if (error instanceof InvalidAnswer) return badRequest("invalid_answer", error.message);
@@ -1769,6 +2124,10 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // the card's read right after the answer does not get the list just answered once more
       if (target.steps) form.answered = contentId(target);
       else if (responder === "claude-model" || responder === "claude-effort" || responder === "codex-model") form.answered = lastSeen ?? contentId(target);
+      // Restore conversation on Claude Code's rewind card: once its screen shows it done, the chat follows at once
+      if (responder === "claude-rewind" && body.option_index === 0) await followClaudeRestore(body.pane_id, parsedByPublicPrompt.get(target)!);
+      // Never mind went back to the list: it is closed too, so nothing is left open
+      if (responder === "claude-rewind" && target.options[body.option_index!]?.label === CLAUDE_REWIND_NEVER_MIND) await followClaudeNeverMind(body.pane_id, undefined, () => request.signal.aborted);
       return jsonResponse({ ok: true });
     });
     // the wait for the form's next step only reads the pane: after the pane's turn, so a message
