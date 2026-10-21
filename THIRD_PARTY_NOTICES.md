@@ -1,6 +1,6 @@
 # Third-party notices
 
-herdr web ui includes material from the projects below, under their own licenses.
+Ovis includes material from the projects below, under their own licenses.
 
 ## Theme palettes
 
@@ -77,7 +77,7 @@ Copyright (c) Meta Platforms, Inc. and affiliates.
 
 ## T3 Code
 
-These herdr web ui files adapt logic from [t3code](https://github.com/pingdotgg/t3code) at revision
+These Ovis files adapt logic from [t3code](https://github.com/pingdotgg/t3code) at revision
 `e82a1ce3f369f113b0b33dff8249569c345e30e8`, under the MIT License printed above, with this
 copyright notice:
 
@@ -678,8 +678,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## LobeHub Icons
 
 The agent marks in `src/components/agentSvgMarks.ts` other than droid and maki, which the
-built client in `dist/` carries, come from [LobeHub Icons](https://github.com/lobehub/lobe-icons)
-(`@lobehub/icons-static-svg`). The marks themselves belong to their owners.
+built client in `dist/` and the ovis.sh home page (`ovis-site/index.html`) carry, come from
+[LobeHub Icons](https://github.com/lobehub/lobe-icons) (`@lobehub/icons-static-svg`). The marks themselves belong to their owners.
 
 ```
 MIT License
@@ -1302,6 +1302,12 @@ DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 ```
+
+## Geist
+
+`ovis-site/assets/fonts/geist-latin-wght-normal.woff2` and `geist-latin-ext-wght-normal.woff2` are
+Geist Variable from [Geist](https://github.com/vercel/geist-font) (`@fontsource-variable/geist`
+5.3.0), under the SIL Open Font License 1.1. The full license is `ovis-site/assets/fonts/LICENSE`.
 
 ## Pretendard
 
