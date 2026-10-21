@@ -3,7 +3,7 @@ import type { Browser } from "playwright-core";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
+import { paneRead, paneSendKeys } from "../server/herdr/client.ts";
 
 /** Mac keyboard events in an isolated context, against a pane owned by the UI suite. */
 export async function checkCommandBackspace(browser: Browser, origin: string, paneId: string): Promise<void> {
@@ -81,9 +81,10 @@ process.stdin.on("data", (data) => {
 });
 `);
     try {
-      await paneSendKeys(paneId, ["ctrl+c"]);
-      await paneSendText(paneId, `node ${script}`);
-      await paneSendKeys(paneId, ["Enter"]);
+      // Keep cleanup and launch behind the earlier browser keystrokes on the same input stream.
+      await input.press("Control+c");
+      await input.pressSequentially(`node '${script.replaceAll("'", "'\\''")}'`);
+      await input.press("Enter");
       const deadline = Date.now() + 10_000;
       while (!(await paneRead({ paneId, source: "visible" })).text.includes("Owned Cmd+Backspace readline test")) {
         if (Date.now() > deadline) throw new Error("readline fixture did not start");
