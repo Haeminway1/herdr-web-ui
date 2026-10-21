@@ -64,7 +64,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     try {
       const context = await paneContext(paneId);
       if (pathname === "/api/pane/commands") {
-        const roots = await paneProcessRoots(paneId, context.agent);
+        const roots = context.pane.managed_session ? { omo: null, environ: null } : await paneProcessRoots(paneId, context.agent);
         const { agent } = resolveAgent(context.pane, roots);
         // the version comes from the store this pane's own transcript names; none resolved leaves it unverified
         const store = agent === "claude" || agent === "codex" || agent === "opencode"

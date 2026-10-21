@@ -735,6 +735,7 @@ export const KO: Record<string, string> = {
   "Resize message box": "입력창 크기 조절",
   "Drag to resize · double-click to reset": "끌어서 크기 조절 · 두 번 클릭하면 초기화",
   "Slash commands": "슬래시 명령",
+  "Close suggestions": "추천 목록 닫기",
   "Built in": "기본",
   "User": "사용자",
   "Project": "프로젝트",

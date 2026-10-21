@@ -739,6 +739,7 @@ export const ZH: Record<string, string> = {
   "Resize message box": "调整输入框大小",
   "Drag to resize · double-click to reset": "拖动以调整大小 · 双击重置",
   "Slash commands": "斜杠命令",
+  "Close suggestions": "关闭建议",
   "Built in": "内置",
   "User": "用户",
   "Project": "项目",
