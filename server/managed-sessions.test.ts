@@ -308,7 +308,14 @@ for (const code of ["ENOENT", "EACCES"]) it.skipIf(process.platform !== "linux")
   expect((await resolve()).identity.state).toBe("ready");
 });
 
-it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and isolates the whole roster", async reason => {
+it.each([
+  { code: "timeout", reason: "timeout", typed: true },
+  { code: "unavailable", reason: "unavailable", typed: true },
+  { code: "ENOENT", reason: "unavailable", typed: false },
+  { code: "EACCES", reason: "unavailable", typed: false },
+  { code: "BROKER", reason: "unavailable", typed: false },
+  { code: "ETIMEDOUT", reason: "timeout", typed: false },
+] as const)("keeps a $code SDK failure pending and isolates the whole roster", async ({ code, reason, typed }) => {
   const failedNonce = "f".repeat(32);
   const failedPane: HerdrPane = {
     ...pane,
@@ -333,7 +340,7 @@ it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and
     ...deps,
     processIdentity: pid => pid === 42 ? observed : pid === 43 ? child : null,
     gjcSession: async pids => {
-      if (pids.includes(43)) throw new GjcSdkLookupError(reason);
+      if (pids.includes(43)) throw typed ? new GjcSdkLookupError(reason) : Object.assign(new Error(`private broker ${failedFile}`), { code });
       return live;
     },
   };
@@ -346,6 +353,8 @@ it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and
   await expect(readConversation(failedPane, undefined, undefined, failedDeps)).rejects.toMatchObject({
     name: "GjcSdkLookupError", reason, message: "GJC SDK lookup failed",
   });
+  expect(JSON.stringify(result)).not.toContain("private broker");
+  expect(JSON.stringify(result)).not.toContain(failedFile);
   expect(JSON.stringify(result)).not.toContain("stale-child");
 });
 
