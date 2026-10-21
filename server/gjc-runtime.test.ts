@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { forgetTranscriptState } from "./conversation.ts";
 import * as herdr from "./herdr/client.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
+import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 import { gjcSdkQuery, type GjcSdkCommandRunner } from "./gjc-sdk.ts";
 import { forgetGjcPane, forgetGjcState, gjcNativeSkills, gjcRetainedEntries, gjcPidUnderShell, gjcSessionFile, gjcTranscriptForPane, isGjcProcess, parseGjcPs, recentProcessTable, storeRelative, terminalBreadcrumb, validateGjcSdkTranscript } from "./gjc-runtime.ts";
 
@@ -515,6 +516,52 @@ it("retires a cached transcript when native generation retires without authorizi
     expect(lookups).toBe(2);
     expect(generationChecks).toBe(6);
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it.each(["ENOENT", "EACCES", "BROKER", "ETIMEDOUT"])("keeps runtime generation %s failures typed at every fresh and cached checkpoint", async (code) => {
+  for (const route of ["fresh", "cached"]) {
+    for (const checkpoint of route === "cached" ? [1, 2, 3] : [1, 2]) {
+      forgetTranscriptState();
+      const home = tempDir("gjc-generation-unavailable-");
+      try {
+        const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+        const project = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+        mkdirSync(cwd); mkdirSync(project, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+        writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId: "live", pid: 200 }));
+        const path = join(project, "main.jsonl");
+        writeFileSync(path, JSON.stringify({ type: "session", id: "live", cwd }) + "\n");
+        let failAt = Infinity, generationChecks = 0, lookups = 0;
+        const options = {
+          platform: "linux", processBirth: () => 1000,
+          processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+          generationCurrent: (directory: string, id: string, generation: number) => gjcSdkGenerationCurrent(directory, id, generation, {
+            generationStatus: async (sessionId, endpointGeneration) => {
+              expect([directory, sessionId, endpointGeneration]).toEqual([agentDir, "live", 1]);
+              if (++generationChecks === failAt) throw Object.assign(new Error(`private generation evidence ${path}`), { code });
+              return { status: "current" };
+            },
+          }),
+          sdkTranscript: async () => { lookups += 1; return { sessionId: "live", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["live"] }; },
+        };
+        const read = () => gjcTranscriptForPane("pane", cwd, home, options);
+        if (route === "cached") {
+          expect(await read()).toBe(path);
+          expect(lookups).toBe(1);
+        }
+        generationChecks = 0;
+        failAt = checkpoint;
+        const failure = await read().catch(error => error);
+        expect(failure).toBeInstanceOf(GjcSdkLookupError);
+        expect(failure).toMatchObject({ reason: code === "ETIMEDOUT" ? "timeout" : "unavailable", message: "GJC SDK lookup failed" });
+        expect(JSON.stringify(failure)).not.toContain(path);
+        expect(generationChecks).toBe(checkpoint);
+        expect(lookups).toBe(1);
+        failAt = Infinity;
+        expect(await read()).toBe(path);
+        expect(lookups).toBe(2); // Recovery needs a fresh binding, never cached authority after a failed proof.
+      } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+    }
+  }
 });
 
 it.each(["fresh", "cached"])("rejects a %s binding when generation changes during final process info", async (route) => {
