@@ -13,6 +13,7 @@ import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.
 import { trimOutput } from "./tool-output.ts";
 import { agentGet, paneProcessInfo, paneRead, sessionSnapshot } from "./herdr/client.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
+import { resolveAgent } from "./pane-context.ts";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -488,7 +489,7 @@ export function sameDirectory(left: string, right: string): boolean {
 /** The other Codex panes herdr shows in this pane's directory, in any spelling `sameDirectory` takes. */
 export function codexPeersIn(panes: readonly HerdrPane[], paneId: string, cwd: string): HerdrPane[] {
   // the agent first: sameDirectory can ask the file system, and only Codex panes need it
-  return panes.filter((pane) => pane.pane_id !== paneId && (pane.agent ?? pane.agent_session?.agent) === "codex"
+  return panes.filter((pane) => pane.pane_id !== paneId && resolveAgent(pane).agent === "codex"
     && pane.cwd != null && sameDirectory(pane.cwd, cwd));
 }
 
@@ -1145,6 +1146,11 @@ const VALUELESS_OPTIONS = new Set([
 ]);
 
 /** A pane's Codex executables (or interpreter scripts), and their pids as one key. */
+/** The pane's first Codex process (the one paneCodexHome decides by), or null when there is none. */
+export async function paneCodexProcess(paneId: string): Promise<{ pid: number; argv?: string[] } | null> {
+  return (await codexProcessesOf(paneId)).list[0] ?? null;
+}
+
 async function codexProcessesOf(paneId: string): Promise<{ list: { pid: number; argv?: string[] }[]; key: string }> {
   const processInfo = await paneProcessInfo(paneId);
   // herdr's schema allows `argv: null`; this reader has always read argv as absent or a list
@@ -1363,7 +1369,7 @@ async function shortThreadFromProcess(
   try {
     const peers = panes ?? (await sessionSnapshot()).panes;
     if (peers.some((pane) => pane.pane_id !== paneId
-      && (pane.agent ?? pane.agent_session?.agent) === "codex" && pane.cwd == null)) return null;
+      && resolveAgent(pane).agent === "codex" && pane.cwd == null)) return null;
     db = new Database(join(home, "state_5.sqlite"), { readonly: true, create: false });
     const columns = new Set(db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('threads')").all().map((column) => column.name));
     if (!columns.has("first_user_message") || !columns.has("source")) return null;
