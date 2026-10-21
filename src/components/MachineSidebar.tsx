@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Download, Monitor, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
 import type { Machine, MachineState, MachineUpdate } from "../../shared/machines.ts";
 import { MachineContext } from "../lib/machineContext.tsx";
-import { answerMachineSetup, machineRequest } from "../lib/api.ts";
+import { answerMachineSetup, machineRequest, shareSeen } from "../lib/api.ts";
 import { describeProgress } from "../lib/bridgeProgress.ts";
 import { keepDismissed, noticeKey, readDismissed, waitingMachines, writeDismissed } from "../lib/machineNotice.ts";
 import type { AppActions } from "../lib/actions.ts";
@@ -30,14 +30,14 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
   error: "Connection error",
 };
 
-interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId: string | null; presentedPaneId: string | null; paneInFront: () => boolean; version?: string | null; actions: AppActions; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void }
+interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId: string | null; presentedPaneId: string | null; paneInFront: () => boolean; version?: string | null; actions: AppActions; watching?: boolean; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
   const { settings } = useSettings();
   const { canInstall, installed, install, help } = useInstallPrompt();
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
   // both lists draw from it: live counters per PC and the finishes looked at here (lib/sidebarActivity.tsx)
-  const activity = useSidebarActivityState(props.machines, props.selectedMachineId, props.presentedPaneId, props.paneInFront);
+  const activity = useSidebarActivityState(props.machines, props.selectedMachineId, props.presentedPaneId, props.paneInFront, shareSeen);
   // the roster's wait is a live region that is in the list from its first render, clipped while empty (never
   // display: none), and its words land a frame after it (lib/useAnnouncedText.ts)
   const loadingWords = useAnnouncedText(props.machines.length === 0 ? t("Loading PCs…") : null);
@@ -200,7 +200,7 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
   return <div className={`machine-action${update ? "" : " is-setup"}`} role={update ? "alert" : "status"}>
     <p className="machine-action-text">
       <strong>{t(update ? "Bridge update needed" : "Setup needed")}</strong>
-      <span>{t(update ? "This PC runs a bridge from a different version of herdr web ui. Update it to reconnect; herdr sessions keep running." : "Browser access uses a bridge on this PC. Review any installation or startup changes before connecting.")}</span>
+      <span>{t(update ? "This PC runs a bridge from a different version of Ovis. Update it to reconnect; herdr sessions keep running." : "Browser access uses a bridge on this PC. Review any installation or startup changes before connecting.")}</span>
       {/* the two generic reasons only repeat the sentence above */}
       {machine.error && !/different version|setup needs approval/.test(machine.error) && <span className="machine-action-reason">{machine.error}</span>}
     </p>

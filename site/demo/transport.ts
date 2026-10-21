@@ -12,16 +12,17 @@
  * one notice instead of a TUI. A message sent from a chat gets a demo answer.
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
-import type { AgentIntegration, AgentStatus, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
-import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope } from "../../shared/protocol.ts";
+import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
+import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse } from "../../shared/protocol.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { DEFAULT_RESIDENTS, sanitizeResidents } from "../../shared/residents.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
+import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
 import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
 import { rollupStatus } from "../../src/lib/status.ts";
 import { movedTabOrder } from "../../src/lib/tabOrder.ts";
-import { CHATS, PROMPT, SPECS } from "./fixtures.ts";
+import { CHATS, PROMPT, SESSION_HISTORY_AGENTS, sessionHistoryRows, SPECS } from "./fixtures.ts";
 import { DemoHistory } from "./history.ts";
 import machinesFixture from "./fixtures/machines.json";
 import agentsFixture from "./fixtures/agents.json";
@@ -40,6 +41,8 @@ function redrawHistory(paneId: string): void {
 }
 const PROMPT_ANSWER_TURN_MS = 2600;
 const CHAT_ANSWER_MS = 2400;
+/** a terminal command's screen has changed this long after the send: its preview appears then */
+const OUTCOME_PREVIEW_MS = 600;
 /** the recording's gaps, capped so the replay stays brisk */
 const MAX_FRAME_GAP_MS = 500;
 /** Settings → Agent integrations: one of each state, in herdr's order */
@@ -313,6 +316,114 @@ function agentOf(paneId: string): string {
   return SPECS.find((spec) => spec.key === key)?.agent ?? paneOf(paneId)?.agent ?? "the agent";
 }
 
+/**
+ * How Claude's builtins behave, as the bridge describes them (shared/protocol.ts CommandForm): a
+ * screen or output the chat cannot show runs in the terminal, a choice opens a dialog, the rest
+ * needs nothing. The other agents' panes keep the recorded list as it is.
+ */
+const CLAUDE_FORMS: Record<string, CommandForm[]> = {
+  clear: [{ match: "bare", interaction: "none" }],
+  compact: [{ match: "bare", interaction: "none" }, { match: "other", interaction: "none" }],
+  config: [{ match: "bare", interaction: "terminal" }],
+  cost: [{ match: "bare", interaction: "terminal" }],
+  doctor: [{ match: "bare", interaction: "terminal" }],
+  help: [{ match: "bare", interaction: "terminal" }],
+  init: [{ match: "bare", interaction: "none" }],
+  login: [{ match: "bare", interaction: "dialog", dialog: "login" }],
+  logout: [{ match: "bare", interaction: "none" }],
+  memory: [{ match: "bare", interaction: "dialog", dialog: "memory" }],
+  model: [{ match: "bare", interaction: "dialog", dialog: "model" }, { match: "other", interaction: "none" }],
+  permissions: [{ match: "bare", interaction: "dialog", dialog: "permissions" }],
+  "pr-comments": [{ match: "bare", interaction: "none" }, { match: "other", interaction: "none" }],
+  "release-notes": [{ match: "bare", interaction: "terminal" }],
+  review: [{ match: "bare", interaction: "none" }, { match: "other", interaction: "none" }],
+  status: [{ match: "bare", interaction: "terminal" }],
+  "terminal-setup": [{ match: "bare", interaction: "terminal" }],
+  vim: [{ match: "bare", interaction: "none" }],
+};
+/** Claude's own menu hides these; they still run when typed, so the chat sends them as typed and never lists them. */
+const CLAUDE_HIDDEN: SlashCommand[] = [
+  { name: "agents", description: "Manage agent configurations", source: "builtin", visibility: "agent-hidden", forms: [{ match: "bare", interaction: "dialog", dialog: "agents" }] },
+  { name: "heapdump", description: "Write a heap snapshot", source: "builtin", visibility: "agent-hidden", forms: [{ match: "bare", interaction: "none" }] },
+];
+/**
+ * Claude builtins the recording predates: a side question answered on the screen alone, a context
+ * report the transcript keeps, and the terminal's session picker (the chat opens the folder's
+ * earlier sessions for it, components/SessionHistory.tsx).
+ */
+const CLAUDE_LATER: SlashCommand[] = [
+  { name: "btw", description: "Ask a side question without adding it to the conversation", source: "builtin", forms: [{ match: "bare", interaction: "terminal" }, { match: "other", interaction: "terminal" }] },
+  { name: "resume", description: "Resume a conversation by ID or name", source: "builtin", forms: [{ match: "bare", interaction: "terminal" }, { match: "other", interaction: "terminal" }] },
+  { name: "context", description: "Show how the context window is used", source: "builtin", forms: [{ match: "bare", interaction: "none" }] },
+];
+
+/** GET /api/pane/commands: the recorded Claude list, with its forms for a Claude pane. */
+function paneCommandRows(paneId: string): SlashCommand[] {
+  const rows = (commandsFixture as { commands: SlashCommand[] }).commands;
+  if (agentOf(paneId) !== "claude") return rows;
+  const described = rows.map((row) => {
+    const forms = CLAUDE_FORMS[row.name];
+    return { ...row, provenance: { transport: "static" as const, verified: false }, ...(forms ? { forms, id: row.name } : {}) };
+  });
+  return [...described, ...[...CLAUDE_LATER, ...CLAUDE_HIDDEN].map((row) => ({ ...row, provenance: { transport: "static" as const, verified: false }, id: row.name }))];
+}
+
+/** The last five commands sent from Chat to each pane, as the bridge tracks them (GET /api/pane/prompt `outcomes`). */
+const outcomesByPane = new Map<string, CommandOutcome[]>();
+let nextOutcome = 1;
+/** per pane, the outcomes whose evidence arrives when its current mock turn ends */
+const settleAtTurnEnd = new Map<string, (() => void)[]>();
+
+function recordOutcome(paneId: string, text: string, state: CommandOutcome["state"]): CommandOutcome {
+  const at = now();
+  const outcome: CommandOutcome = { id: `demo-outcome-${nextOutcome++}`, pane_id: paneId, text, state, evidence: [], created_at: at, updated_at: at };
+  outcomesByPane.set(paneId, [...(outcomesByPane.get(paneId) ?? []), outcome].slice(-5));
+  return outcome;
+}
+
+function settleOutcome(outcome: CommandOutcome, state: CommandOutcome["state"], evidence?: CommandOutcome["evidence"][number]["kind"]): void {
+  outcome.state = state;
+  outcome.updated_at = now();
+  if (evidence !== undefined) outcome.evidence.push({ kind: evidence, at: outcome.updated_at });
+}
+
+/**
+ * The command a sent text invokes in this pane's syntax, as the composer reads it
+ * (shared/skill-syntax.ts): the leading `/word` for every agent and `$word` where `$` triggers, else
+ * an inline `/word` or `$word` for the agents that read one. Prose is null; a leading command no row
+ * lists is kept with no form, as a runtime command the bridge cannot describe.
+ */
+function sentCommand(paneId: string, text: string): { name: string; form: CommandForm | null; listed: boolean } | null {
+  const syntax = skillSyntax(agentOf(paneId));
+  const [first = "", ...rest] = text.trim().split(/\s+/);
+  const lead = /^([/$])([\w:-]+)$/.exec(first);
+  let name = lead !== null && (lead[1] === "/" || syntax.skillTriggers.includes("$")) ? lead[2]! : null;
+  if (name === null) {
+    for (const trigger of syntax.inline) {
+      const inline = new RegExp(`(?:^|\\s)\\${trigger}([\\w:-]+)`).exec(text);
+      if (inline !== null) { name = inline[1]!; break; }
+    }
+  }
+  if (name === null) return null;
+  const row = paneCommandRows(paneId).find((candidate) => candidate.name === name);
+  if (row === undefined) return lead !== null ? { name, form: null, listed: false } : null;
+  const sub = lead !== null ? rest[0] : undefined;
+  const form = row.forms?.find((candidate) => sub === undefined ? candidate.match === "bare" : typeof candidate.match === "object" && candidate.match.sub === sub)
+    ?? row.forms?.find((candidate) => candidate.match === "other") ?? null;
+  return { name, form, listed: true };
+}
+
+/** What Hermes's classic CLI printed for an informational command, as recorded (server/fixtures/hermes-results), with the demo pane's model. */
+const HERMES_PRINTED: Record<string, string> = {
+  status: ["Hermes CLI Status", "", "Session ID: 20261020_184853_b7a650", "Path: ~/.hermes", "Model: hermes-4-405b (nous)", "Approvals: smart",
+    "Created: 2026-10-20 18:48", "Last Activity: 2026-10-20 18:48", "Tokens: 0", "Agent Running: No"].join("\n"),
+};
+
+/** The screen after a terminal command, as the bridge previews it: the echo, then the lines the agent printed where the transcript does not reach. */
+function terminalPreview(paneId: string, text: string, name: string): string {
+  return [`\u276f ${text}`, "", `${agentOf(paneId)} answered /${name} here, on its screen, and wrote nothing to its transcript.`, "The real app shows the pane's own lines; this is the demo's stand-in for them.", "", "\u276f "].join("\n");
+}
+
 const now = () => new Date().toISOString();
 
 /** The bridge takes one accepted pending message when the current mock turn finishes. */
@@ -325,11 +436,36 @@ function finishDemoTurn(paneId: string, status: "idle" | "done" = "done"): void 
   }
 }
 
-/** A sent Enter joins the conversation now; another Enter steers the current mock turn. */
+/**
+ * A sent Enter joins the conversation now; another Enter steers the current mock turn. A command
+ * gets an outcome: a terminal one is answered on the screen alone (no turn, no mock answer, a
+ * preview once the screen changed), the rest settle when the mock turn ends, on the evidence the
+ * bridge would have (the transcript, or the card for a dialog); one no row lists stays unknown.
+ */
 function submitToChat(paneId: string, text: string): void {
   const key = keyOfPane.get(paneId);
   const chat = key ? chats.get(key) : undefined;
   if (!chat) return;
+  const command = sentCommand(paneId, text);
+  if (command?.form?.interaction === "terminal") {
+    const outcome = recordOutcome(paneId, text, "terminal-required");
+    setTimeout(() => { outcome.preview = terminalPreview(paneId, text, command.name); outcome.updated_at = now(); }, OUTCOME_PREVIEW_MS);
+    return;
+  }
+  const printed = agentOf(paneId) === "hermes" && command !== null ? HERMES_PRINTED[command.name] : undefined;
+  if (printed !== undefined) {
+    // Hermes prints /status on its screen and keeps no turn for it: the bridge's result reader shows what it printed
+    const outcome = recordOutcome(paneId, text, "accepted");
+    setTimeout(() => { outcome.result_text = printed; settleOutcome(outcome, "result-observed", "recognized-result"); }, OUTCOME_PREVIEW_MS);
+    return;
+  }
+  if (command !== null) {
+    const outcome = recordOutcome(paneId, text, command.form?.interaction === "dialog" ? "interaction-required" : "accepted");
+    settleAtTurnEnd.set(paneId, [...(settleAtTurnEnd.get(paneId) ?? []), () => {
+      if (!command.listed) settleOutcome(outcome, "unknown");
+      else settleOutcome(outcome, "result-observed", command.form?.interaction === "dialog" ? "dialog" : "transcript");
+    }]);
+  }
   chat.turns.push({ role: "user", ts: now(), parts: [{ kind: "text", text }] });
   conversationChanged(paneId);
   const agent = agentOf(paneId);
@@ -339,6 +475,8 @@ function submitToChat(paneId: string, text: string): void {
   setTimeout(() => {
     chat.turns.push({ role: "assistant", ts: now(), end_ts: now(), parts: [{ kind: "text", phase: "final_answer", text: `This is the demo, so nothing ran. In the real app that message went to ${agent} in this pane, and its answer would be written here as it arrives, with its commands and edits folded above it.` }] });
     conversationChanged(paneId);
+    for (const settle of settleAtTurnEnd.get(paneId) ?? []) settle();
+    settleAtTurnEnd.delete(paneId);
     finishDemoTurn(paneId);
   }, CHAT_ANSWER_MS);
 }
@@ -518,6 +656,8 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   // the demo sends no counts: a server without telemetry answers 404, and the app shows neither its notice nor its switch
   // Connection breadcrumbs stay inside the fictional demo; never send them to a real endpoint.
   if (path === "/api/connection-diagnostics") return new Response(null, { status: 204 });
+  // the demo is one browser: a finish read here is kept in its own storage, with no other browser to tell
+  if (path === "/api/seen") return method === "POST" ? new Response(null, { status: 204 }) : json({ finishes: [] }, 200, { "cache-control": "no-store" });
   if (path === "/api/telemetry") return json({ error: { code: "not_found", message: "This server sends no telemetry" } }, 404, { "cache-control": "no-store" });
   if (path === "/api/herdr/update") return json({ supported: false, phase: "idle", server_version: null, binary_version: null, stale: false, output: null, finished_at: null }, 200, { "cache-control": "no-store" });
   // the demo opens no public address: the Portal section stays hidden
@@ -549,6 +689,19 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/push" || path.startsWith("/api/push/")) return error("push_unavailable", "the demo sends no alerts", 404);
   if (path === "/api/machines/settings") return json({ auto_update_bridges: true });
   if (path.startsWith("/api/machines/")) return error("demo", "remote PCs need a real machine", 404);
+
+  if (path === "/api/sessions/history") {
+    if (method !== "GET") return error("method_not_allowed", "use GET", 400);
+    const workspaceId = query.get("workspace_id");
+    if (!workspaceId) return error("missing_workspace_id", "workspace_id is required", 400);
+    const agent = query.get("agent") ?? "";
+    if (!(SESSION_HISTORY_AGENTS as string[]).includes(agent)) return error("invalid_agent", "agent must name an agent whose sessions are listed", 400);
+    const workspace = snapshot().workspaces.find((candidate) => candidate.workspace_id === workspaceId);
+    if (!workspace) return error("workspace_not_found", "no such workspace", 404);
+    const cwd = workspace.worktree?.checkout_path || snapshot().panes.find((pane) => pane.workspace_id === workspaceId)?.cwd || "";
+    const answer: SessionHistoryResponse = { workspace_id: workspaceId, agent: agent as SessionHistoryAgent, cwd, sessions: sessionHistoryRows(agent as SessionHistoryAgent) };
+    return json(answer, 200, { "cache-control": "no-store" });
+  }
 
   if (path === "/api/worktree/list" || path === "/api/worktree/create" || path === "/api/worktree/open" || path === "/api/worktree/remove") {
     const listing = path === "/api/worktree/list";
@@ -617,7 +770,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     const chat = key ? chats.get(key) : undefined;
     const agent = agentOf(paneId);
     if (!chat) return json({ source: "scrollback", turns: [] });
-    const source = agent === "claude" ? "claude-transcript" : agent === "codex" ? "codex-transcript" : agent === "gjc" ? "gjc-transcript" : agent === "omo" ? "omo-transcript" : agent === "pi" ? "pi-transcript" : agent === "devin" ? "devin-transcript" : agent === "hermes" ? "hermes-transcript" : "omp-transcript";
+    const source = agent === "claude" ? "claude-transcript" : agent === "codex" ? "codex-transcript" : agent === "gjc" ? "gjc-transcript" : agent === "omo" ? "omo-transcript" : agent === "pi" ? "pi-transcript" : agent === "cmd" ? "cmd-transcript" : agent === "devin" ? "devin-transcript" : agent === "hermes" ? "hermes-transcript" : "omp-transcript";
     // These demo fixtures have no native Grok/Agy lifecycle: omit optional activity.
     return json({ source, turns: chat.turns, metadata: chat.metadata, cursor: null });
   }
@@ -626,7 +779,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);
     return json({ plan: keyOfPane.get(paneId) === "api" ? { steps: planSteps } : null, server_time: new Date().toISOString() } satisfies PanePlan);
   }
-  if (path === "/api/pane/prompt") return json({ prompt: keyOfPane.get(paneId) === "web" && promptOpen ? { ...PROMPT, id: promptId } : null });
+  if (path === "/api/pane/prompt") return json({ prompt: keyOfPane.get(paneId) === "web" && promptOpen ? { ...PROMPT, id: promptId } : null, outcomes: outcomesByPane.get(paneId) ?? [] });
   if (path === "/api/pane/prompt/answer") {
     const body = await bodyOf(init, input);
     const target = String(body["pane_id"] ?? "");
@@ -634,7 +787,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     answerPrompt(target, typeof body["option_index"] === "number" ? body["option_index"] : undefined);
     return json({ ok: true });
   }
-  if (path === "/api/pane/commands") return json(commandsFixture);
+  if (path === "/api/pane/commands") return json({ commands: paneCommandRows(paneId) });
   if (path === "/api/pane/scroll") {
     const body = method === "POST" ? await bodyOf(init, input) : {};
     const target = method === "POST" ? String(body["pane_id"] ?? "") : paneId;
@@ -987,7 +1140,11 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     const snap = snapshot();
     const workspace = snap.workspaces.find((w) => w.workspace_id === body["workspace_id"]);
     if (!workspace) return error("not_found", "no such workspace", 404);
-    const agent = (body["agent"] as { kind?: string } | null | undefined)?.kind ?? null;
+    const launch = body["agent"] as { kind?: string; args?: unknown } | null | undefined;
+    const agent = launch?.kind ?? null;
+    // a session resumed from the history dialog (`codex resume <id>`, `claude --resume <id>`: the id
+    // last) is the one the new pane shows, as herdr reports a pane's session
+    const resumed = agent !== null && Array.isArray(launch?.args) && launch.args.length === 2 && typeof launch.args[1] === "string" ? launch.args[1] : null;
     const id = workspace.workspace_id;
     const siblings = snap.panes.filter((p) => p.workspace_id === id);
     const cwd = String(body["cwd"] ?? siblings[0]?.cwd ?? "/home/demo");
@@ -995,7 +1152,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     const number = Math.max(0, ...tabs.map((tab) => tab.number)) + 1;
     const tabId = `${id}:t${number}`;
     const template = snap.panes[0]!;
-    const pane: Pane = { ...structuredClone(template), pane_id: `${id}:p${(nextWorkspace++).toString(36)}`, tab_id: tabId, terminal_id: `${id}:term${number}`, workspace_id: id, label: null, title: null, agent, agent_session: null, agent_status: agent ? "working" : "unknown", cwd, foreground_cwd: cwd, focused: false, terminal_title: null, terminal_title_stripped: null, revision: 1 };
+    const pane: Pane = { ...structuredClone(template), pane_id: `${id}:p${(nextWorkspace++).toString(36)}`, tab_id: tabId, terminal_id: `${id}:term${number}`, workspace_id: id, label: null, title: null, agent, agent_session: resumed === null || agent === null ? null : { agent, kind: "id", source: "demo", value: resumed }, agent_status: agent ? "working" : "unknown", cwd, foreground_cwd: cwd, focused: false, terminal_title: null, terminal_title_stripped: null, revision: 1 };
     snap.panes.push(pane);
     addAgent(pane);
     const label = String(body["label"] ?? "");
