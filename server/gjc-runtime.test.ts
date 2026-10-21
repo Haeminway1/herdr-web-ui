@@ -492,7 +492,7 @@ it("does not absorb a session change written during an SDK lookup into the kept 
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
-it("retires a cached transcript when native generation retires without authorizing its old file", async () => {
+it.each([1, 2, 3])("rejects revocation at cached generation checkpoint %s even with stale broker and index", async (checkpoint) => {
   forgetTranscriptState();
   const home = tempDir("gjc-generation-revoked-");
   try {
@@ -502,21 +502,30 @@ it("retires a cached transcript when native generation retires without authorizi
     writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId: "live", pid: 200 }));
     const path = join(project, "main.jsonl");
     writeFileSync(path, JSON.stringify({ type: "session", id: "live", cwd }) + "\n");
-    let live = true, lookups = 0, generationChecks = 0;
+    let retireAt = Infinity, lookups = 0, generationChecks = 0;
     const options = {
       platform: "linux", processBirth: () => 1000,
       processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
-      generationCurrent: async () => { generationChecks += 1; return live; },
+      generationCurrent: (directory: string, id: string, generation: number) => gjcSdkGenerationCurrent(directory, id, generation, {
+        generationStatus: async (sessionId, endpointGeneration) => {
+          expect([directory, sessionId, endpointGeneration]).toEqual([agentDir, "live", 1]);
+          return { status: ++generationChecks < retireAt ? "current" : "retired" };
+        },
+      }),
       // Stale broker pages and the index remain unchanged: only the independent
       // runtime generation proof can revoke this otherwise valid binding.
       sdkTranscript: async () => { lookups += 1; return { sessionId: "live", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["live"] }; },
     };
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
-    live = false;
+    retireAt = generationChecks + checkpoint;
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
-    expect(lookups).toBe(2);
-    expect(generationChecks).toBe(7);
+    const revokedLookups = checkpoint === 1 ? 2 : 1;
+    expect(lookups).toBe(revokedLookups);
+    expect(generationChecks).toBe(5 + checkpoint + (checkpoint === 1 ? 1 : 0));
+    // A later read must not recover authority from the same stale broker answer.
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
+    expect(lookups).toBe(revokedLookups + 1);
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
