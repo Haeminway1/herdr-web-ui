@@ -10,6 +10,12 @@
  * Placeholders in braces keep their English names.
  */
 export const ZH: Record<string, string> = {
+  "Claude teammate messages": "Claude 队友消息",
+  "More than one could be picked": "可多选",
+  "Original delivery": "原始消息",
+  "Teammate idle": "空闲",
+  "Teammate message": "消息",
+  "The teammate is available; no result was included": "该队友当前空闲，未附带结果",
   "A dim resident row starts this agent in its folder": "点击灰色的常驻行会在其文件夹中启动此智能体",
   "Click again to close": "再次点击以关闭",
   "Close {title}": "关闭 {title}",
@@ -739,6 +745,7 @@ export const ZH: Record<string, string> = {
   "Resize message box": "调整输入框大小",
   "Drag to resize · double-click to reset": "拖动以调整大小 · 双击重置",
   "Slash commands": "斜杠命令",
+  "Close suggestions": "关闭建议",
   "Built in": "内置",
   "User": "用户",
   "Project": "项目",

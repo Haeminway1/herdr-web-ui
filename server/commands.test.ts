@@ -3,13 +3,30 @@ import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { paneCommands } from "./commands.ts";
+import { cachedPaneCommands, paneCommands, rememberPaneCommands } from "./commands.ts";
 import { walkSkills } from "./skills/walk.ts";
 import { AGENT_SOURCES } from "./skills/index.ts";
 import type { AgentCommandSource } from "./skills/index.ts";
-import type { SlashCommand } from "../shared/protocol.ts";
+import type { HerdrPane, SlashCommand } from "../shared/protocol.ts";
 
 const roots: string[] = [];
+
+it("invalidates a command catalog across managed nonce and generation transitions even with the same saved session", () => {
+  const pane = {
+    pane_id: "managed-catalog", terminal_id: "same-terminal", agent: "gjc", cwd: "/fixture",
+    agent_session: { agent: "gjc", kind: "id", source: "herdr-manager", value: "same-session" },
+    managed_session: { id: "a".repeat(32), generation: 1, harness: "gjc", state: "ready", session_id: "same-session", reason: null },
+  } as HerdrPane;
+  const commands: SlashCommand[] = [{ name: "review", description: "managed command", source: "skill" }];
+  rememberPaneCommands(pane, "gjc", commands);
+  expect(cachedPaneCommands(pane)?.commands).toBe(commands);
+  for (const identity of [
+    { ...pane.managed_session!, generation: 2 },
+    { ...pane.managed_session!, id: "b".repeat(32) },
+    { ...pane.managed_session!, state: "identity_pending" as const },
+  ]) expect(cachedPaneCommands({ ...pane, managed_session: identity })).toBeUndefined();
+});
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });

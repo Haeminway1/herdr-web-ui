@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright-core";
+import type { SessionSnapshot } from "../shared/protocol.ts";
 import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
@@ -74,17 +75,21 @@ try {
     const context = await browser.newContext({ viewport: { width, height: touch ? 844 : 800 }, hasTouch: touch, isMobile: touch, colorScheme: scheme, locale: "en-US" });
     try {
       await context.addInitScript((theme) => {
-        localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme }));
-        for (const pane of ["w1H:p1", "w1D:p1", "w1K:p1"]) localStorage.setItem(`herdr-web-ui:view:${pane}`, "chat");
+        localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme, sidebarLayout: "upstream" }));
       }, scheme);
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       page.setDefaultTimeout(SETTLE_MS);
-      await page.goto(url(panes.flaky));
+      await page.goto(url(panes.api));
       await page.locator(".conn-live").waitFor({ state: "attached" });
-      await chatStack(page, panes.flaky).waitFor();
+      await chatStack(page, panes.api).waitFor();
       await page.locator(".chat-turn-user").first().waitFor();
+      // The recorded Claude pane opens mid-turn; commands need its completed turn, not a queued send.
+      await page.waitForFunction(async (paneId) => {
+        const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: SessionSnapshot };
+        return snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status === "done";
+      }, panes.api);
       await appFaces(page);
       await run(page, errors);
       assert.deepEqual(errors, [], `page errors at ${width}px (${scheme})`);
@@ -101,7 +106,7 @@ try {
       try {
         await withPane(browser, width, scheme, async (page) => {
           // happy: a Claude /context is accepted, then done on the transcript, on the one bubble for it
-          const claude = await chatOf(page, panes.flaky);
+          const claude = await chatOf(page, panes.api);
           const turnsBefore = await claude.locator(".chat-turn-user").count();
           await send(page, "/context");
           const context = chipFor(claude, "/context");
@@ -120,8 +125,8 @@ try {
           // Terminal sends it, and back in the chat its sent row says so and never turns done
           await send(page, "/btw is the retry test flaky on CI too?");
           await page.getByRole("button", { name: "Run in Terminal", exact: true }).click();
-          await chatStack(page, panes.flaky).waitFor({ state: "detached" });
-          const back = await chatOf(page, panes.flaky);
+          await chatStack(page, panes.api).waitFor({ state: "detached" });
+          const back = await chatOf(page, panes.api);
           const btw = chipFor(back, "/btw is the retry test flaky");
           await btw.and(page.locator('[data-outcome-state="terminal-required"]')).waitFor();
           assert.equal(await back.locator(".chat-turn-sent").count(), 1, "the send has a row of its own: the transcript holds no turn for it");
@@ -162,8 +167,9 @@ try {
             await preview.locator(".chat-outcome-preview-text").waitFor({ state: "hidden" });
             // Open Terminal from the chip shows the terminal and sends nothing
             await btw.getByRole("button", { name: "Open Terminal", exact: true }).click();
-            await chatStack(page, panes.flaky).waitFor({ state: "detached" });
-            const again = await chatOf(page, panes.flaky);
+            await chatStack(page, panes.api).waitFor({ state: "detached" });
+            const again = await chatOf(page, panes.api);
+            await chipFor(again, "/btw is the retry test flaky").and(page.locator('[data-outcome-state="terminal-required"]')).waitFor();
             assert.equal(await again.locator(".chat-turn-sent").count(), 1);
             console.log(`PASS ${label}: the chip's controls are reached by Tab, and Open Terminal switches the lens`);
           }
@@ -185,7 +191,13 @@ try {
           console.log(`PASS ${label}: an inline $review to the Codex pane shows its chip`);
 
           // an unlisted /myext run to the pi pane: accepted, then unknown, since nothing can show its result
-          const pi = await chatOf(page, panes.cli);
+          // pi is backfilled by the demo transport, so its ID is not in the recorded panes.json.
+          const piPanes = await page.evaluate(async () => {
+            const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: SessionSnapshot };
+            return snapshot.panes.filter((pane) => pane.agent === "pi").map((pane) => pane.pane_id);
+          });
+          assert.equal(piPanes.length, 1, "the demo exposes exactly one pi pane");
+          const pi = await chatOf(page, piPanes[0]!);
           await send(page, "/myext run");
           const myext = chipFor(pi, "/myext run");
           await myext.and(page.locator('[data-outcome-state="unknown"]')).waitFor();

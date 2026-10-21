@@ -1,10 +1,13 @@
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, it, spyOn } from "bun:test";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { cmdContextWindow, cmdSlug, cmdTranscriptInStore, unwrittenSession } from "./cmd.ts";
-import { transcriptPage } from "./conversation.ts";
+import * as cmd from "./cmd.ts";
+import * as herdr from "./herdr/client.ts";
+import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
+import { conversationImage, forgetTranscriptState, transcriptPage } from "./conversation.ts";
 import { parseInteractivePrompt } from "./prompt.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-cmd-store-"));
@@ -90,6 +93,32 @@ describe("Command Code transcripts render as chat", () => {
     expect(page.source).toBe("cmd-transcript");
     expect(page.turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
     expect(page.turns[1]?.parts.some((part) => part.kind === "thinking")).toBe(true);
+  });
+
+  it("serves only the command pane's active-branch tool images through conversationImage", async () => {
+    const bytes = Buffer.from("fictional image bytes");
+    const path = session("images", [
+      ...conversation,
+      { type: "message", id: "r1", parentId: "a1", message: { role: "toolResult", toolCallId: "c1", toolName: "read", content: [
+        { type: "image", mimeType: "image/png", data: bytes.toString("base64") },
+      ] } },
+    ]);
+    const pane = { pane_id: "cmd-image-fixture", agent: "cmd", cwd: root } as HerdrPane;
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({ process_info: { foreground_processes: [] } } as never);
+    const transcript = spyOn(cmd, "cmdTranscriptPath").mockResolvedValue({ path });
+    try {
+      const image = await conversationImage(pane.pane_id, "pi:c1:0");
+      expect(image?.mediaType).toBe("image/png");
+      expect(image?.bytes).toEqual(new Uint8Array(bytes));
+      expect(await conversationImage(pane.pane_id, "pi:other-call:0")).toBeNull();
+      expect(await conversationImage(pane.pane_id, "managed-0123456789abcdef0123456789abcdef-1:pi:c1:0")).toBeNull();
+      expect(await conversationImage("another-pane", "pi:c1:0")).toBeNull();
+      appendFileSync(path, JSON.stringify({ type: "message", id: "a2", parentId: "u1", message: { role: "assistant", content: [{ type: "text", text: "a different branch" }] } }) + "\n");
+      expect(await conversationImage(pane.pane_id, "pi:c1:0")).toBeNull();
+    } finally {
+      transcript.mockRestore(); rpc.mockRestore(); snapshot.mockRestore(); forgetTranscriptState();
+    }
   });
 });
 

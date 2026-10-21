@@ -8,6 +8,12 @@
  * in English. Placeholders in braces keep their English names.
  */
 export const JA: Record<string, string> = {
+  "Claude teammate messages": "Claude チームメイトのメッセージ",
+  "More than one could be picked": "複数選択可",
+  "Original delivery": "元のメッセージ",
+  "Teammate idle": "待機中",
+  "Teammate message": "メッセージ",
+  "The teammate is available; no result was included": "このチームメイトは待機中です。結果は含まれていません",
   "A dim resident row starts this agent in its folder": "薄い常駐の行を押すと、このエージェントをそのフォルダーで起動します",
   "Click again to close": "もう一度クリックすると閉じます",
   "Close {title}": "{title} を閉じる",
@@ -737,6 +743,7 @@ export const JA: Record<string, string> = {
   "Resize message box": "入力欄のサイズを変更",
   "Drag to resize · double-click to reset": "ドラッグでサイズ変更 · ダブルクリックでリセット",
   "Slash commands": "スラッシュコマンド",
+  "Close suggestions": "候補を閉じる",
   "Built in": "組み込み",
   "User": "ユーザー",
   "Project": "プロジェクト",

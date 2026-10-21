@@ -40,7 +40,7 @@ export function builtinCommands(agent: string | null | undefined, version?: stri
 }
 
 const paneCatalogs = new Map<string, { identity: string; agent: string | null; commands: SlashCommand[] }>();
-const catalogIdentity = (pane: HerdrPane): string => JSON.stringify([pane.terminal_id, pane.agent_session, pane.agent, pane.foreground_cwd ?? pane.cwd]);
+const catalogIdentity = (pane: HerdrPane): string => JSON.stringify([pane.terminal_id, pane.agent_session, pane.agent, pane.foreground_cwd ?? pane.cwd, pane.managed_session]);
 
 /** Remember only catalogs already requested by the browser; never discover during a send. */
 export function rememberPaneCommands(pane: HerdrPane, agent: string | null, commands: SlashCommand[]): void {

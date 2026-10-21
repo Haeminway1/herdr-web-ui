@@ -6,6 +6,12 @@
  * braces keep their English names.
  */
 export const KO: Record<string, string> = {
+  "Claude teammate messages": "Claude 팀원 메시지",
+  "More than one could be picked": "여러 개를 고를 수 있었음",
+  "Original delivery": "원본 메시지",
+  "Teammate idle": "대기 중",
+  "Teammate message": "메시지",
+  "The teammate is available; no result was included": "이 팀원은 대기 중이며 결과를 남기지 않았습니다",
   "A dim resident row starts this agent in its folder": "흐린 상시 행을 누르면 이 에이전트를 그 폴더에서 시작합니다",
   "Click again to close": "한 번 더 누르면 닫힙니다",
   "Close {title}": "{title} 닫기",
@@ -735,6 +741,7 @@ export const KO: Record<string, string> = {
   "Resize message box": "입력창 크기 조절",
   "Drag to resize · double-click to reset": "끌어서 크기 조절 · 두 번 클릭하면 초기화",
   "Slash commands": "슬래시 명령",
+  "Close suggestions": "추천 목록 닫기",
   "Built in": "기본",
   "User": "사용자",
   "Project": "프로젝트",

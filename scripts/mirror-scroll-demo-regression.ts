@@ -91,7 +91,7 @@ try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
       for (const kind of ["native", "pi", "other"] as const) {
-        const pane = kind === "pi" ? panes.cli : kind === "native" ? panes.shell : panes.web;
+        let pane = kind === "native" ? panes.shell : panes.web;
         const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, hasTouch: true, locale: "en-US" });
         try {
           await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", defaultView: "terminal", terminalInputMode: "direct", terminalWheelSpeed: 2, alertsOn: false })));
@@ -99,6 +99,15 @@ try {
           page.setDefaultTimeout(10000);
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
+          // Pi is backfilled by the demo when recorded fixtures predate it; read its
+          // actual id instead of assuming every SPECS entry has a recorded pane.
+          if (kind === "pi") {
+            await page.goto(`http://127.0.0.1:${server.port}${prefix}?view=terminal&history=${kind}`);
+            pane = await page.evaluate(async () => {
+              const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: { panes: { pane_id: string; agent: string | null }[] } };
+              return snapshot.panes.find((candidate) => candidate.agent === "pi")!.pane_id;
+            });
+          }
           await page.goto(`http://127.0.0.1:${server.port}${prefix}?pane=${encodeURIComponent(pane)}&view=terminal&history=${kind}`);
           await page.locator(".conn-live").waitFor();
           await appFaces(page);
