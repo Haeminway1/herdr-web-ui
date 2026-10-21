@@ -27,7 +27,33 @@ reset the throttle. Only a visible failure episode emits a recovery. Abnormal br
 coalesced separately for local and relayed connections; normal closes and server shutdown are quiet.
 The close reason, input, credentials, peer names, socket paths and raw exception messages are never
 included. A remote machine's opaque UUID may appear, not its name or SSH address. These records are
-not a per-request HTTP access log and do not add timestamps to older console messages.
+separate from the request-completion log and do not add timestamps to older console messages.
+
+Every request reaching the server's fetch boundary gets a new server UUID in `X-Request-Id`.
+Same-origin API calls also send a fresh client UUID unless the caller supplies one. Client IDs
+are accepted only as 1-64 ASCII letters, digits, dots, underscores or hyphens; repeated client
+IDs never replace server uniqueness. Unexpected-error handles use the same server ID.
+
+The server keeps `http-requests.jsonl` in its resolved state directory, rotating before a write
+would exceed 1 MiB and retaining only `http-requests.jsonl.1`: at most two 1 MiB files. The
+directory is created with mode 0700 when missing; an existing directory keeps the operator's
+permissions. Regular log files use mode 0600 on platforms with POSIX permissions; the writer
+refuses symlinked log paths where no-follow opens are supported.
+Each line is at most 1024 bytes and contains only `request_id`, optional `client_request_id`,
+normalized `method`, fixed `route` template, `status` and monotonic `latency_ms`. Unknown
+methods become `OTHER`; static and unmatched routes are fixed categories, and dynamic
+identifiers become placeholders. Matched dispatch branches assign the templates; the writer
+never reconstructs them from URLs. Startup and access refusals use fixed categories too.
+No URL queries, bodies, credentials, labels, file or socket
+paths, or exception text enter this file. Storage failures never change HTTP responses.
+The per-server writer has no pending queue and closes at shutdown.
+
+A completion means response creation, not completion of body delivery: an SSE or file stream
+is recorded without reading or waiting for it. A successful local or relayed WebSocket upgrade
+is one 101 completion; its handshake carries the same response headers, and the fetch handler
+still returns `undefined`. Ordinary responses carry the server ID too. The default
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` fill absent headers only,
+preserving each route's CSP, framing, MIME, caching and compression headers.
 
 ## Checks
 
@@ -126,6 +152,7 @@ bun scripts/key-bar-hold-repeat-regression.ts # phone touch key-bar taps, holds 
 bun scripts/settings-pages-demo-regression.ts # every Settings page on a 390px and a 320px phone, and Back stepping out of the dialog
 bun scripts/chat-browser-qa.ts  # chat lens end to end
 bun scripts/pane-input-focus-demo-regression.ts # the input focus shortcut against fictional panes
+bun scripts/mirror-scroll-demo-regression.ts # fixed mirror wheel/touch, native history, no guessed program input, observe guards
 bun scripts/shortcut-exact-modifiers-demo-regression.ts # recording exact-modifier chords: confirm, refusals, dispatch
 bun scripts/output-browser-qa.ts # terminal output flow control end to end
 bun scripts/math-browser-qa.ts  # chat math: KaTeX loads with the first expression
@@ -160,6 +187,7 @@ bun scripts/chat-greeting-demo-regression.ts  # an empty chat's greeting: centre
 bun scripts/composer-fit-demo-regression.ts   # one Send/Stop control, pending Send now actions, context/label fit and Chat font sizing
 bun scripts/held-rows-demo-regression.ts      # held messages: the fold under an approval card, its button, a row's error
 bun scripts/sidebar-activity-demo-regression.ts # Agents order Activity and pins: blocked pinned, recency, Pin agent / Unpin agent and Pin workspace / Unpin workspace from a right-click and the context-menu key, the ⋯ on a phone, and a finish opened here drawn as ready until the next one
+bun scripts/attention-jump-demo-regression.ts # Mod+Shift+A and the palette's Next agent needing attention over two demo PCs that reuse every pane id: pinned first, blocked before unread finishes, the list's order and wrap, a finish opened here leaving the cycle, a PC away, nothing to go to, a composing chord, and no focus, input or take-over on the wire; with UI_EVIDENCE_DIR, the capture set
 bun scripts/sidebar-branch-line-demo-regression.ts # herdr's branch line: a repository and an unmarked git folder say their branch under the name, worktrees and folders outside git stay one line, desktop and phone, dark and light
 bun scripts/sidebar-tokens-demo-regression.ts # herdr plugin tokens on agent rows: a dim line of their own on One line and Two lines, cut with the whole text in the tooltip and a phone's sheet, as text, following herdr's `$name` rows, and changing live
 bun scripts/prompt-dock-demo-regression.ts    # the prompt card docked over the input card: its place, its height on a short phone, the grip, a typed pick
