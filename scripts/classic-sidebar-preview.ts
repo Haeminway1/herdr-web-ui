@@ -66,6 +66,10 @@ const FIXTURE_TRANSPORT = `<script src="./demo-transport.js"></script><script>((
     if (body.type === "machines") body.machines = body.machines.map(machine => ({ ...machine, snapshot: expandSnapshot(machine.snapshot) }));
     const message = body.type === "machine-message" ? body.message : body;
     if (message.type === "snapshot") message.snapshot = expandSnapshot(message.snapshot);
+    if (body.type === "machines" || message.type === "snapshot") {
+      const root = document.documentElement;
+      root.dataset.classicPreviewStreamSnapshots = String(Number(root.dataset.classicPreviewStreamSnapshots || 0) + 1);
+    }
     return new MessageEvent("message", { data: JSON.stringify(body) });
   };
   const wrapStream = stream => {

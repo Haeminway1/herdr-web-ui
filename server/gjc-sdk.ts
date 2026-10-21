@@ -74,12 +74,19 @@ interface SessionListQueue {
   starts: number[];
 }
 
-interface SessionListRequest {
+interface SdkReadRequest {
   readonly agentDir: string;
-  readonly jsonInput: Record<string, unknown>;
   readonly deadline: number;
   readonly commandTimeoutMs: number;
   readonly cacheClock: () => number;
+}
+
+interface SessionListRequest extends SdkReadRequest {
+  readonly jsonInput: Record<string, unknown>;
+}
+
+interface SessionQueryRequest extends SdkReadRequest {
+  readonly args: string[];
 }
 
 const sessionListStates = new WeakMap<GjcSdkCommandRunner, Map<string, SessionListState>>();
@@ -386,13 +393,13 @@ async function reserveSessionListStart(queue: SessionListQueue, deadline: number
   }
 }
 
-async function runSerializedSessionList(
+async function runSerializedSdkRead(
   runner: GjcSdkCommandRunner,
-  request: SessionListRequest,
+  request: SessionListRequest | SessionQueryRequest,
   state: SessionListState,
-  key: string,
+  key?: string,
 ): Promise<string> {
-  const { agentDir, jsonInput, deadline, commandTimeoutMs, cacheClock } = request;
+  const { agentDir, deadline, commandTimeoutMs, cacheClock } = request;
   const previous = state.queue.tail;
   let releaseQueue: (() => void) | undefined;
   const queueTurn = new Promise<void>((resolve) => {
@@ -411,20 +418,24 @@ async function runSerializedSessionList(
     await waitForSessionList(previous, deadline);
     acquired = true;
 
-    const cachedAfterWait = cachedSessionList(state, key, cacheClock());
-    if (cachedAfterWait !== null) return cachedAfterWait;
+    if (key !== undefined) {
+      const cachedAfterWait = cachedSessionList(state, key, cacheClock());
+      if (cachedAfterWait !== null) return cachedAfterWait;
+    }
 
     await reserveSessionListStart(state.queue, deadline, cacheClock);
-    const args = sdkArgs(agentDir, jsonInput);
+    const args = "args" in request ? request.args : sdkArgs(agentDir, request.jsonInput);
     runnerPending = true;
     const output = await runBounded(runner, args, deadline, commandTimeoutMs, () => {
       runnerPending = false;
       releaseWhenFinished();
     });
-    const parsed = parseBrokerPage(output);
-    const exactLookup = Object.hasOwn(jsonInput, "resolveSessionId");
-    if (parsed.sessions.length <= PAGE_LIMIT && (!exactLookup || parsed.continuationCursor === null)) {
-      state.cache.set(key, { output, expiresAt: cacheClock() + SESSION_LIST_CACHE_TTL_MS });
+    if (key !== undefined && "jsonInput" in request) {
+      const parsed = parseBrokerPage(output);
+      const exactLookup = Object.hasOwn(request.jsonInput, "resolveSessionId");
+      if (parsed.sessions.length <= PAGE_LIMIT && (!exactLookup || parsed.continuationCursor === null)) {
+        state.cache.set(key, { output, expiresAt: cacheClock() + SESSION_LIST_CACHE_TTL_MS });
+      }
     }
     return output;
   } catch (error) {
@@ -455,7 +466,7 @@ function runCachedSessionList(
     return waitForSessionList(inFlight, Math.min(request.deadline, Date.now() + request.commandTimeoutMs));
   }
 
-  const requestPromise = runSerializedSessionList(runner, request, state, key);
+  const requestPromise = runSerializedSdkRead(runner, request, state, key);
   state.inFlight.set(key, requestPromise);
   const removeInFlight = () => {
     if (state.inFlight.get(key) === requestPromise) state.inFlight.delete(key);
@@ -625,7 +636,8 @@ export function gjcSdkCurrentSessionWithRunner(
   generationCurrent: typeof gjcSdkGenerationCurrent = gjcSdkGenerationCurrent,
 ): Promise<GjcSdkSessionIdentity | null> {
   return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock, "status")
-    .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? currentIdentity(binding) : null);
+    .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? currentIdentity(binding) : null)
+    .catch((error: unknown) => { throw lookupExecutionError(error); });
 }
 
 /** Resolves the current readable GJC transcript for one of the pane's known GJC processes. */
@@ -650,5 +662,38 @@ export function gjcSdkTranscriptWithRunner(
   purpose: "chat" | "status" = "chat",
 ): Promise<GjcSdkBinding | null> {
   return resolveTranscript(pids, cwd, agentDir, runner, worktreeRootResolver, cacheClock, purpose)
-    .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? savedTranscript(binding) : null);
+    .then(async (binding) => binding && await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration) ? savedTranscript(binding) : null)
+    .catch((error: unknown) => { throw lookupExecutionError(error); });
+}
+
+/** The only broker queries the bridge asks: reads, never a control or lifecycle operation. */
+export type GjcSdkReadQuery = "runtime.capabilities" | "skill.list/state";
+const READ_QUERIES: ReadonlySet<string> = new Set<GjcSdkReadQuery>(["runtime.capabilities", "skill.list/state"]);
+const QUERY_TIMEOUT_MS = 1_200;
+
+/**
+ * One read-only query of a live session through the broker, attach-only: a broker that is not
+ * already running fails the call instead of being started. Resolves the broker's response
+ * (`{ ok: true, page | result }`), or null when it answered anything else.
+ */
+export async function gjcSdkQuery(
+  agentDir: string,
+  sessionId: string,
+  query: GjcSdkReadQuery,
+  options: { runner?: GjcSdkCommandRunner; cacheClock?: () => number } = {},
+): Promise<Record<string, unknown> | null> {
+  if (!READ_QUERIES.has(query) || !nonEmptyString(sessionId) || sessionId.startsWith("-") || !nodePath.isAbsolute(agentDir)) return null;
+  const args = ["sdk", "session", "raw", "query", sessionId, "--query", query, "--agent-dir", agentDir, "--attach-only", "--json"];
+  const runner = options.runner ?? runGjcSdkCommand;
+  let stdout: string;
+  try {
+    stdout = await runSerializedSdkRead(runner, {
+      agentDir, args, deadline: Date.now() + QUERY_TIMEOUT_MS,
+      commandTimeoutMs: QUERY_TIMEOUT_MS, cacheClock: options.cacheClock ?? sessionListCacheClock,
+    }, sessionListState(runner, agentDir));
+  } catch (error) { throw lookupExecutionError(error); }
+  try {
+    const response: unknown = JSON.parse(stdout);
+    return isRecord(response) && response.ok === true ? response : null;
+  } catch { return null; }
 }
