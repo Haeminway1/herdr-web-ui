@@ -19,6 +19,13 @@ export interface AppActions {
   selectPane: (paneId: string) => void;
   /** the previous/next pane in sidebar order; wraps around */
   selectAdjacentPane: (direction: -1 | 1) => void;
+  /**
+   * The next agent that waits for a person, on any connected PC (lib/attentionJump.ts): the Agents
+   * list's blocked rows first, then its finishes nobody looked at, in the list's order, round and
+   * round from the selection; nothing when none waits. This browser's pick alone, as a sidebar tap.
+   * Whether it moved the selection.
+   */
+  selectNextAttention: () => boolean;
   setView: (view: PaneView) => void;
   toggleView: () => void;
   /** Focus the selected pane's mounted input without sending any text or keys. */
@@ -35,6 +42,13 @@ export interface AppActions {
    * new pane opens unless another one was opened meanwhile. Rejects with herdr's refusal.
    */
   openTerminalTab: (target?: { machineId: string; workspaceId: string }) => Promise<void>;
+  /**
+   * The earlier sessions of a workspace's folder (components/SessionHistory.tsx): the named
+   * workspace's, listed for `agent` first (a pane's, or the row's), else the selected pane's
+   * workspace and agent. A `pane` request lists that agent or opens nothing (lib/sessionHistory.ts
+   * sessionHistoryListAgent). Nothing opens without a workspace.
+   */
+  openSessionHistory: (target?: { machineId: string; workspaceId: string; agent?: string | null; scope?: "pane" | "workspace" }) => void;
   /** the palette, blank or opened on `query` (a `>` prefix keeps the actions alone) */
   openPalette: (query?: string) => void;
   /** A pane this page started an agent in opens in an agent's lens, whatever its first snapshot says. */
