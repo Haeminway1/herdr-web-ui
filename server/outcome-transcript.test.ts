@@ -29,11 +29,15 @@ it.each(["identity_pending", "blocked", "ready"] as const)("does not borrow comm
   pane.managed_session = { ...pane.managed_session!, generation: 2, state };
   const url = new URL(`http://localhost/api/pane/prompt?pane_id=${pane.pane_id}`);
   const shown = await (await handlePromptRequest(new Request(url), url))?.json() as PanePromptResponse;
+  expect(shown.outcomes ?? []).toEqual([]);
   if (state === "ready") {
-    expect(shown.outcomes?.some(outcome => outcome.state === "result-observed")).toBe(false);
-    expect(prepareCommandSend(pane, "/context")?.identity).not.toBe(sent.identity);
+    const current = prepareCommandSend(pane, "/context")!;
+    expect(current.identity).not.toBe(sent.identity);
+    transcript.mockResolvedValue({ identity: "current-generation", records: [] });
+    noteSubmitted(pane.pane_id, current.text, current);
+    const refreshed = await (await handlePromptRequest(new Request(url), url))?.json() as PanePromptResponse;
+    expect(refreshed.outcomes?.map(({ id, state }) => [id, state])).toEqual([[current.id, "accepted"]]);
   } else {
-    expect(shown.outcomes ?? []).toEqual([]);
     expect(screen).not.toHaveBeenCalled();
     expect(transcript).not.toHaveBeenCalled();
   }
