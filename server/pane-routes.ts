@@ -5,19 +5,25 @@
  * server's own state. The dispatcher in index.ts runs the access gate first.
  */
 import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
-import { paneCommands } from "./commands.ts";
+import { mergeCatalogSources } from "./catalog-sources.ts";
+import { paneCommands, rememberPaneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject } from "./http.ts";
-import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, toolOutput } from "./conversation.ts";
+import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
+import { openCodeInstalledVersion } from "./opencode-service.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { agentRename, HerdrError, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
-import { paneContext } from "./pane-context.ts";
+import { paneContext, resolveAgent, versionSourceOf } from "./pane-context.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
+import { handleRewindRequest } from "./rewind.ts";
+import { CLAUDE_REWIND_OPEN_MESSAGE } from "./dialogs/claude.ts";
+import { claudeRewindOpen } from "./prompt.ts";
+import { expandedDirectory } from "./workspace-routes.ts";
 
 /** the native stores createServer was given; unset, each reader finds its own */
-export type PaneStores = { codexHome?: string; grokHome?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string };
+export type PaneStores = { codexHome?: string; grokHome?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string; openCodeStateDir?: string };
 
 /** the sides herdr's pane.swap and pane.resize take; anything else is refused before the RPC, which would answer invalid_request */
 const isPaneDirection = (value: unknown): value is PaneDirection => value === "left" || value === "right" || value === "up" || value === "down";
@@ -26,7 +32,11 @@ const READ_SOURCES = new Set<ReadSource>(["detection", "recent", "recent_unwrapp
 const READ_FORMATS = new Set<ReadFormat>(["ansi", "text"]);
 
 /** The answer for a pane route, or null when the path is not one. */
-export async function handlePaneRequest(request: Request, url: URL, pathname: string, options: PaneStores): Promise<Response | null> {
+export async function handlePaneRequest(request: Request, url: URL, pathname: string, options: PaneStores,
+  /** the pane's input order (core/input.ts): a rewind's keys wait behind a message in flight */
+  serialize: <T>(paneId: string, task: () => Promise<T>) => Promise<T> = (_paneId, task) => task()): Promise<Response | null> {
+  if (pathname === "/api/pane/rewind") return handleRewindRequest(request, serialize);
+
   if (pathname === "/api/pane/rename") {
     if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
     const payload = await readJsonObject<{ pane_id?: unknown; label?: unknown }>(request);
@@ -56,6 +66,26 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     }
   }
 
+  // The commands an agent would offer in a folder before any pane runs it (the new workspace and
+  // tab dialogs list its skills): the same rows GET /api/pane/commands gives a pane, read from the
+  // bridge's own tables and a scan of the folder and home. No process exists, so nothing is asked
+  // of an agent binary (the catalog's convention), no process roots refine the scan, and no row is
+  // verified against a running version.
+  if (pathname === "/api/agent/commands") {
+    if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+    const agent = url.searchParams.get("agent");
+    if (!agent) return badRequest("missing_agent", "agent query parameter is required");
+    const directory = (url.searchParams.get("cwd") ?? "").trim();
+    const cwd = directory === "" ? null : expandedDirectory(directory);
+    if (directory !== "" && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
+    try {
+      // OpenCode types its skills one way per version: before any pane runs it, its service file says which
+      return jsonResponse({ commands: paneCommands(agent, cwd, undefined, undefined, agent === "opencode" ? openCodeInstalledVersion(options.openCodeStateDir) : undefined) });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
   if (pathname === "/api/pane/commands" || pathname === "/api/pane/files") {
     if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
     const paneId = url.searchParams.get("pane_id");
@@ -63,9 +93,17 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     try {
       const context = await paneContext(paneId);
       if (pathname === "/api/pane/commands") {
-        const roots = await paneProcessRoots(paneId, context.agent);
-        const agent = roots.omo ? "omo" : context.agent;
-        return jsonResponse({ commands: paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }) });
+        const roots = context.pane.managed_session ? { omo: null, environ: null } : await paneProcessRoots(paneId, context.agent);
+        const { agent } = resolveAgent(context.pane, roots);
+        // the version comes from the store this pane's own transcript names; none resolved leaves it unverified
+        const store = agent === "claude" || agent === "codex" || agent === "opencode"
+          ? await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome).then(versionSourceOf, () => null)
+          : null;
+        const { version } = resolveAgent(context.pane, roots, store);
+        const scanned = paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }, version);
+        const commands = await mergeCatalogSources(agent, context.pane, context.cwd, scanned, undefined, { codexHome: options.codexHome, openCodeStateDir: options.openCodeStateDir });
+        rememberPaneCommands(context.pane, agent, commands);
+        return jsonResponse({ commands });
       }
       const limitRaw = url.searchParams.get("limit");
       const limit = limitRaw === null ? 20 : Number(limitRaw);
@@ -232,6 +270,12 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     try {
       if (pathname === "/api/pane/input") {
         if (typeof payload.text !== "string") return badRequest("missing_text", "text is required");
+        // text over Claude Code's rewind dialog would land in a Summarize row's add-context field
+        // (core/composer.ts); keys still go, so Esc can close it
+        const { agent } = await paneContext(payload.pane_id).catch(() => ({ agent: null }));
+        if (agent === "claude" && claudeRewindOpen((await paneRead({ paneId: payload.pane_id, source: "detection", format: "text" })).text)) {
+          return conflictResponse("rewind_dialog_open", CLAUDE_REWIND_OPEN_MESSAGE);
+        }
         await paneSendText(payload.pane_id, payload.text);
       } else {
         const keys = payload.keys;

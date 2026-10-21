@@ -8,7 +8,8 @@ import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { MAX_LABEL_CHARS } from "../shared/labels.ts";
-import type { DirectoryCreated, ServerMessage, TabMoved } from "../shared/protocol.ts";
+import { firstMessageFault } from "../shared/launch-rules.ts";
+import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved } from "../shared/protocol.ts";
 import { agentFault, agentLaunch, type AgentPayload } from "./agent-launch.ts";
 import { createDirectory, listDirectories } from "./directories.ts";
 import { HerdrError, tabClose, tabCreate, tabMove, tabRename, workspaceClose, workspaceCreate, workspaceMove, workspaceRename, worktreeCreate, worktreeList, worktreeOpen, worktreeRemove } from "./herdr/client.ts";
@@ -16,7 +17,8 @@ import { badRequest, conflictResponse, errorResponse, isJsonObject, jsonResponse
 import { paneContext } from "./pane-context.ts";
 import { repoDiffResponse } from "./repo-diff.ts";
 
-function expandedDirectory(value: string): string | null {
+/** `value` as an absolute path (`~` expanded) when it is a directory this user can read; null otherwise. */
+export function expandedDirectory(value: string): string | null {
   const expanded = value === "~" ? homedir() : value.startsWith("~/") ? resolve(homedir(), value.slice(2)) : resolve(value);
   try {
     return statSync(expanded).isDirectory() ? expanded : null;
@@ -25,8 +27,15 @@ function expandedDirectory(value: string): string | null {
   }
 }
 
+/** a create request's first message the bridge could not queue for the agent that did start: its own refusal */
+const notQueued = (error: unknown): { error: { code: string; message: string } } => ({ error: {
+  code: typeof (error as { code?: unknown } | null)?.code === "string" ? (error as { code: string }).code : "first_message_not_queued",
+  message: error instanceof Error ? error.message : String(error),
+} });
+
 /** The answer for a workspace route, or null when the path is not one. */
-export async function handleWorkspaceRequest(request: Request, url: URL, pathname: string, bunServer: Pick<Server<unknown>, "timeout">, broadcastAll: (message: ServerMessage) => void): Promise<Response | null> {
+export async function handleWorkspaceRequest(request: Request, url: URL, pathname: string, bunServer: Pick<Server<unknown>, "timeout">, broadcastAll: (message: ServerMessage) => void,
+  queueFirstMessage: (paneId: string, text: string, kind: string, requester: string | null) => Promise<PendingMessage>): Promise<Response | null> {
   if (pathname === "/api/workspace/directories" && request.method === "POST") {
     let payload: unknown;
     try { payload = await request.json(); } catch { return badRequest("invalid_json", "request body must be JSON"); }
@@ -86,7 +95,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
   if (pathname === "/api/workspace/create" || pathname === "/api/tab/create") {
     const inWorkspace = pathname === "/api/tab/create";
     if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
-    const payload = await readJsonObject<{ workspace_id?: unknown; cwd?: unknown; label?: unknown; agent?: { kind?: unknown; name?: unknown; args?: unknown } | null }>(request);
+    const payload = await readJsonObject<{ workspace_id?: unknown; cwd?: unknown; label?: unknown; agent?: { kind?: unknown; name?: unknown; args?: unknown } | null; first_message?: unknown; first_message_connection?: unknown }>(request);
     if (payload instanceof Response) return payload;
     if (inWorkspace && (typeof payload.workspace_id !== "string" || payload.workspace_id.trim() === "")) {
       return badRequest("missing_workspace_id", "workspace_id is required");
@@ -95,6 +104,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     if (payload.cwd === null) delete payload.cwd;
     if (payload.label === null) delete payload.label;
     if (payload.agent === null) delete payload.agent;
+    if (payload.first_message === null) delete payload.first_message;
     if (payload.cwd !== undefined && typeof payload.cwd !== "string") return badRequest("invalid_cwd", "cwd must be an existing directory");
     const cwd = payload.cwd === undefined ? undefined : expandedDirectory(payload.cwd);
     if (payload.cwd !== undefined && cwd === null) return badRequest("invalid_cwd", "cwd must be an existing directory");
@@ -108,6 +118,13 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     }
     const fault = agentFault(payload.agent);
     if (fault !== null) return badRequest("invalid_agent", fault);
+    const messageFault = firstMessageFault(payload.first_message, payload.agent);
+    if (messageFault !== null) return badRequest("invalid_first_message", messageFault);
+    // the page connection that asked: the only one that may type the message on its own (server/core/pending.ts)
+    const requester = payload.first_message_connection ?? null;
+    if (requester !== null && (typeof requester !== "string" || requester.length === 0 || requester.length > 128)) {
+      return badRequest("invalid_first_message", "first_message_connection must be the id of this page's connection");
+    }
     // agent.start can legitimately take a minute; Bun's default idle timeout is shorter.
     if (payload.agent) bunServer.timeout(request, 75);
     try {
@@ -122,7 +139,17 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
       if (!payload.agent) {
         return jsonResponse({ workspace_id: workspaceId, pane_id: created.root_pane.pane_id, agent_started: false });
       }
-      return jsonResponse({ workspace_id: workspaceId, pane_id: created.root_pane.pane_id, ...(await agentLaunch(created.root_pane.pane_id, payload.agent)) });
+      const launched = await agentLaunch(created.root_pane.pane_id, payload.agent);
+      // the request's first message is the user's send: queued for the agent's first ready turn through the
+      // bridge's pending path (server/core/pending.ts), never typed here; an agent that did not start gets none
+      const firstMessage = launched.agent_started && typeof payload.first_message === "string"
+        ? await queueFirstMessage(created.root_pane.pane_id, payload.first_message, payload.agent.kind as string, requester).then((message): { id: string } | ReturnType<typeof notQueued> => ({ id: message.id }), (error: unknown) => {
+          console.warn(`first message for ${created.root_pane.pane_id} not queued: ${error instanceof Error ? error.message : String(error)}`);
+          // the agent runs and the message did not go in: told apart from an agent that did not start (null)
+          return notQueued(error);
+        })
+        : null;
+      return jsonResponse({ workspace_id: workspaceId, pane_id: created.root_pane.pane_id, ...launched, ...(typeof payload.first_message === "string" ? { first_message: firstMessage } : {}) });
     } catch (error) {
       return errorResponse(error);
     }
