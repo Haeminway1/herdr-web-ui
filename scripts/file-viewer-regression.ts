@@ -172,12 +172,12 @@ try {
     for (const [index, source] of fidelitySources.entries()) {
       const block = codeBlocks.nth(3 + index);
       // The real focus pins this row while native selection is compared across browser calls.
-      await block.scrollIntoViewIfNeeded();
       await block.getByRole("button", { name: "Copy code", exact: true }).focus();
       await page.waitForFunction(() => {
         const chat = document.activeElement?.closest(".chat-view-virtual");
         return Number(chat?.getAttribute("data-chat-pinned")) > 0;
       });
+      await block.scrollIntoViewIfNeeded();
       assert.equal(await block.locator("code").textContent(), source, `${mode}: source whitespace`);
       assert.equal(await block.locator("pre").evaluate((pre) => getComputedStyle(pre).visibility), "visible", `${mode}: selection comes from the current pane, not a hidden cached pane`);
       const selections = await block.locator("pre").evaluate((pre, source) => {

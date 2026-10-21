@@ -82,12 +82,16 @@ it("projects both panes and agents without converting identity ready into engine
   expect(JSON.stringify(result.panes[0]?.managed_session)).not.toContain("session_file");
 });
 
-it.each(["ENOENT", "EACCES", "BROKER", "ETIMEDOUT"])("keeps an unsaved live managed session pending during cached generation %s failures", async code => {
+it.each(["ENOENT", "EACCES", "BROKER", "ETIMEDOUT"].flatMap(code => [
+  { code, savedSession: null },
+  { code, savedSession: { id: sessionId, path: "relative.jsonl" } },
+  { code, savedSession: { id: "wrong-session", path: "/untrusted/saved.jsonl" } },
+]))("keeps live managed identity independent of saved metadata during cached generation %j failures", async ({ code, savedSession }) => {
   let starts = 0, unavailable = false, current = true, observations = 0;
   const runner: GjcSdkCommandRunner = async () => {
     starts += 1;
     return JSON.stringify({ type: "broker_response", ok: true, result: {
-      indexSeq: 1, savedSession: null, sessions: [{
+      indexSeq: 1, savedSession, sessions: [{
         sessionId, pid: 42, hostIncarnation: "linux:123", endpointGeneration: 1,
         locator: { cwd: root, worktreeRoot: root, stateRoot: join(root, ".gjc", "state") },
         identityProvenance: "composite", terminalUncertain: false, ambiguous: false, terminal: false, live: true,
