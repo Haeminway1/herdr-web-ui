@@ -1,7 +1,7 @@
 import { type CSSProperties, type DragEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
-import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane } from "../shared/protocol.ts";
+import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane, SessionHistoryAgent } from "../shared/protocol.ts";
 import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, markPaneSeen, pairDevice, routeMissing, sendTestPush, signOut, splitPane, zoomPane, type HealthInfo } from "./lib/api.ts";
 import { deviceLabel, takePairCode } from "./lib/phone.ts";
 import { alertPaneTitle, displayPaneTitle } from "./components/Sidebar.tsx";
@@ -14,6 +14,9 @@ import { worktreeRepoName } from "./lib/composerStrip.ts";
 import { AccessGate } from "./components/AccessGate.tsx";
 import { AgentMark } from "./components/AgentMark.tsx";
 import { NewSessionDialog, type NewTabTarget } from "./components/NewSessionDialog.tsx";
+import { SessionHistory } from "./components/SessionHistory.tsx";
+import { sessionHistoryAgent, sessionHistoryListAgent } from "./lib/sessionHistory.ts";
+import { useRecentResumes } from "./lib/useRecentResumes.ts";
 import { passingFolder, recentDirectories } from "./lib/recent-directories.ts";
 import { usePreferencesSync } from "./lib/preferencesSync.ts";
 import { TabStrip } from "./components/TabStrip.tsx";
@@ -28,6 +31,7 @@ import { MachineContext } from "./lib/machineContext.tsx";
 import { MachineActionBanner, MachineSidebar } from "./components/MachineSidebar.tsx";
 import { SidebarResizer } from "./components/SidebarResizer.tsx";
 import { storedSidebarWidth } from "./lib/sidebarWidth.ts";
+import { receiveSeen } from "./lib/seenFinishes.ts";
 import { FilePanelResizer } from "./components/FilePanelResizer.tsx";
 import { FILE_PANEL_DOCK_QUERY, storedFilePanelWidth } from "./lib/filePanelWidth.ts";
 import { openPresentation, type FilePresentation } from "./lib/filePresentation.ts";
@@ -73,10 +77,11 @@ import { panelUrl, WebPanelContext, wantsPanel } from "./lib/webPanel.ts";
 import { RepoDiffViewer } from "./components/RepoDiffViewer.tsx";
 import { OpenFileContext } from "./lib/filePaths.ts";
 import { useFileViewer } from "./lib/useFileViewer.ts";
-import { useFocusReturn } from "./lib/useFocusTrap.ts";
+import { FocusReturnContext, useFocusReturn } from "./lib/useFocusTrap.ts";
 import { useRepoDiffViewer } from "./lib/useRepoDiffViewer.ts";
 import { useT } from "./lib/i18n.ts";
 import { markSelection, selectionStill, type SelectionMark } from "./lib/selectionMark.ts";
+import { followsHerdrFocus } from "./lib/followFocus.ts";
 import { useScreenWakeLock } from "./lib/wakeLock.ts";
 import { watchDrawerSwipe } from "./lib/edgeSwipe.ts";
 import { Droplet } from "./components/Droplet.tsx";
@@ -90,7 +95,7 @@ import { SplitDropPreview } from "./components/SplitDropPreview.tsx";
 import { CrashProbe, RegionCrash } from "./components/AppCrash.tsx";
 import { RenderBoundary } from "./components/RenderBoundary.tsx";
 
-const APP_TITLE = "herdr web ui";
+const APP_TITLE = "Ovis";
 /** how soon after a key press a focus counts as the user's own (lastKeyAtRef) */
 const KEY_FOCUS_MS = 1000;
 const POLL_MS = 5000;
@@ -200,7 +205,7 @@ function Brand() {
     <h1 className="brand">
       <img src="/icons/icon-192.png?v=ram1" alt="" width="22" height="22" className="brand-mark" />
       <span className="brand-name">
-        herdr <span className="brand-sub">web ui</span>
+        Ovis
       </span>
     </h1>
   );
@@ -452,7 +457,7 @@ export function App() {
   }, [settings.webLinks, viewing, fileDocked, closeFile]);
   // the panel is no dialog, so no trap gives the focus back when it closes: what opened the file
   // (a link in the chat, a row of Files) gets it, as it does from the popup
-  useFocusReturn(viewing !== null && fileDocked);
+  const fileOpener = useFocusReturn(viewing !== null && fileDocked);
   // a collapse (below) whose two steps back have not landed: a second click on Show beside the
   // pane, or the kind correction in the same moment, must not queue two steps more and the file twice
   const collapsing = useRef(false);
@@ -517,6 +522,8 @@ export function App() {
   const pendingCreate = useRef<CreateDraft | null>(initialLink?.create ?? null);
   // the dialog makes a tab in this workspace instead of a workspace, while set
   const [newTab, setNewTab] = useState<NewTabTarget | null>(null);
+  // the earlier sessions of a workspace's folder (components/SessionHistory.tsx), while open
+  const [sessionHistory, setSessionHistory] = useState<{ machineId: string; workspaceId: string; agent: SessionHistoryAgent } | null>(null);
   const [connected, setConnected] = useState(false);
   /** the active terminal's socket has been connected on this page before (PaneTerminal reports it): not
    *  connected, the chip says reconnecting; before this page's first connection to the PC, connecting */
@@ -544,6 +551,8 @@ export function App() {
   alertInAppRef.current = settings.alertInApp;
   const alertSoundRef = useRef(settings.alertSound);
   alertSoundRef.current = settings.alertSound;
+  const followFocusRef = useRef(settings.followHerdrFocus);
+  followFocusRef.current = settings.followHerdrFocus;
   const refetchTimer = useRef<number | null>(null);
   const snapshotRef = useRef<typeof snapshot>(null);
   snapshotRef.current = snapshot;
@@ -672,6 +681,7 @@ export function App() {
       try { payload = JSON.parse(event.data); } catch { return; }
       if (payload.type === "preferences") { receivePreferencesRef.current(payload.preferences); return; }
       if (payload.type === "herdr-sidebar") { setAgentRowTokens(payload.agents); return; }
+      if (payload.type === "seen") { receiveSeen(payload.finishes); return; }
       // A poll started before this event can carry an older roster or pane status.
       snapshotRequests.current.invalidate();
       if (payload.type === "machines") {
@@ -726,6 +736,18 @@ export function App() {
       if (message.type === "pane-exited" && alertsOnRef.current && !pushOnRef.current && alertsRef.current.done !== "off") {
         const pane = machine.snapshot?.panes.find((p) => p.pane_id === message.pane_id);
         if (pane) showPaneEndedNotification(message.pane_id, `${machine.name} · ${alertPaneTitle(pane)}`, () => takeNotificationTargetRef.current({ machine_id: machine.id, pane_id: message.pane_id, view: "chat", workspace_id: pane.workspace_id }), machine.id, pane.workspace_id);
+      }
+      // herdr's own window moved to another pane: this device follows it when asked to. As an
+      // automatic pick it raises no keyboard and adds no Back entry; a pane too new for the roster
+      // is confirmed with its PC first, as a pane made here is (the selection effect below)
+      if (message.type === "pane-focused" && followsHerdrFocus({
+        enabled: followFocusRef.current, machineId: machine.id, paneId: message.pane_id, selection: selectionRef.current,
+        splitOther: splitShownRef.current ? splitRef.current?.other ?? null : null, linkPending: pendingLink.current !== null,
+      })) {
+        selectionHint.current = null;
+        setSelectedPaneId(message.pane_id);
+        setNotificationViewTarget(null);
+        setAutoSelected(true);
       }
       if (message.type === "session-changed" || message.type === "pane-exited") scheduleRefetch();
     };
@@ -1352,7 +1374,7 @@ export function App() {
     : null;
 
   useEffect(() => {
-    document.title = selectedTitle ? `${selectedTitle} · herdr` : APP_TITLE;
+    document.title = selectedTitle ? `${selectedTitle} · Ovis` : APP_TITLE;
   }, [selectedTitle]);
 
   // A new tab's workspace: the named one, else the selected pane's. Its folder is the workspace's:
@@ -1370,7 +1392,7 @@ export function App() {
     const inFront = panes.find((pane) => pane.pane_id === selectedPaneId)
       ?? panes.find((pane) => pane.pane_id === roster.layouts?.find((layout) => layout.tab_id === workspace.active_tab_id)?.focused_pane_id)
       ?? panes[0];
-    return { machineId, workspace, cwd: workspace.worktree?.checkout_path ?? inFront?.cwd ?? null };
+    return { machineId, workspace, cwd: workspace.worktree?.checkout_path ?? inFront?.cwd ?? null, agent: inFront?.agent ?? null, panes };
   };
 
   const actions = useMemo<AppActions>(
@@ -1411,6 +1433,15 @@ export function App() {
         void load();
         // what the user went to while herdr answered is theirs to keep
         if (selectionStill(asked, selectionRef.current)) selectTargetRef.current(found.machineId, created.pane_id);
+      },
+      openSessionHistory: (target) => {
+        const found = newTabTarget(target);
+        if (!found) return;
+        // a pane's own agent, or nothing; for a workspace, the agent named, else the pane in front's, else any of it
+        const agent = sessionHistoryListAgent(target, found.agent, found.panes.map((pane) => pane.agent));
+        if (agent === null) return;
+        setDrawerOpen(false);
+        setSessionHistory({ machineId: found.machineId, workspaceId: found.workspace.workspace_id, agent });
       },
       openPalette,
       agentStarted: (machineId, paneId) => lenses.startedAgent(paneStorageId(machineId, paneId), window.matchMedia?.("(pointer: coarse)").matches === true),
@@ -1507,6 +1538,17 @@ export function App() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
   const closeNewSession = useCallback(() => { setNewSessionOpen(false); setNewPrefill(null); setNewFields(null); }, []);
+  const closeSessionHistory = useCallback(() => setSessionHistory(null), []);
+  // the Resumes of a moment ago, kept across the list's openings until herdr reports their panes' sessions
+  const { standing: recentResumes, remember: rememberResume } = useRecentResumes(machines);
+  // the workspace the open session list is of, as its PC's roster has it now; the list leaves with the workspace
+  const sessionHistoryWorkspace = useMemo(() => {
+    if (sessionHistory === null) return null;
+    const roster = machines.find((m) => m.id === sessionHistory.machineId)?.snapshot;
+    const workspace = roster?.workspaces.find((candidate) => candidate.workspace_id === sessionHistory.workspaceId);
+    return roster && workspace ? { workspace, panes: roster.panes } : null;
+  }, [machines, sessionHistory]);
+  useEffect(() => { if (sessionHistory !== null && sessionHistoryWorkspace === null) setSessionHistory(null); }, [sessionHistory, sessionHistoryWorkspace]);
 
   // the palette's shortcut, said beside its item where a hardware keyboard is likely (a fine pointer)
   const keyboardLikely = useMediaQuery("(hover: hover) and (pointer: fine)");
@@ -1542,7 +1584,7 @@ export function App() {
           <main className="terminal-host">
             <div className="terminal-placeholder">
               <div className="terminal-placeholder-inner">
-                <span>{t("Connecting to herdr web ui…")}</span>
+                <span>{t("Connecting to Ovis…")}</span>
               </div>
             </div>
           </main>
@@ -1678,7 +1720,7 @@ export function App() {
           {/* a sidebar that cannot be drawn leaves the panes working */}
           <RenderBoundary resetKey={null} fallback={(retry) => <RegionCrash message={t("The sidebar can't be shown.")} retry={retry} />}>
             <CrashProbe region="sidebar" />
-            <MachineSidebar machines={machines} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} presentedPaneId={presentedPaneId} paneInFront={paneInFront} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} />
+            <MachineSidebar machines={machines} watching={auth?.role === "watch"} selectedMachineId={selectedMachineId} selectedPaneId={selectedPaneId} presentedPaneId={presentedPaneId} paneInFront={paneInFront} actions={actions} onSelect={selectTarget} onSetup={(machine, update = false) => { setUpdateRemote(update); setMachineDialog(machine); }} onNew={(id) => { setNewSessionMachineId(id); setNewTab(null); setNewSessionOpen(true); setDrawerOpen(false); }} />
           </RenderBoundary>
           <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
         </aside>
@@ -1688,6 +1730,7 @@ export function App() {
 
         {/* a file path in the chat opens in the viewer, relative to the selected pane's folder */}
         <OpenFileContext.Provider value={selectedPaneId !== null ? viewFile : null}>
+        <FocusReturnContext.Provider value={fileOpener}>
         <WebPanelContext.Provider value={filePanelAvailable ? openWebPage : null}>
         <div className={`pane-column${chatShown ? " is-chat" : ""}`}>
         {/* over the pane only: a bar across the window would cut the sidebar off from its top row in the header */}
@@ -1802,6 +1845,10 @@ export function App() {
                         worktreeRepo={worktreeRepoName(item === null ? undefined : slotSnapshot?.workspaces.find((workspace) => workspace.workspace_id === item.workspace_id))}
                         machineName={machine?.name ?? machineId}
                         view={item ? lensOf(item) : slotView}
+                        // the composer's way to the terminal: the selected pane's lens, or the pane's own remembered one
+                        onOpenTerminal={item ? () => { if (active && item.pane_id === selectedPaneId) setView("terminal"); else pickView(machineId, item.pane_id, "terminal"); } : undefined}
+                        // /resume lists the pane's own agent's sessions, and only for an agent whose store is read
+                        onOpenHistory={item && sessionHistoryAgent(item.agent) !== null ? () => actions.openSessionHistory({ machineId, workspaceId: item.workspace_id, agent: item.agent, scope: "pane" }) : undefined}
                         // the other half never takes the keyboard: a press in it makes it active first
                         active={active && itemActive}
                         // the paging shortcuts reach the selected pane of the active half only
@@ -1829,6 +1876,7 @@ export function App() {
         </div>
         </div>
         </WebPanelContext.Provider>
+        </FocusReturnContext.Provider>
         </OpenFileContext.Provider>
         {/* last in the row: the file beside the pane (from 980px), the pane column shrinks and its terminal refits */}
         {viewing !== null && fileDocked && <MachineContext.Provider value={viewing.machineId}>
@@ -1855,6 +1903,23 @@ export function App() {
           void load();
         }}
       /></MachineContext.Provider>
+      {sessionHistory && sessionHistoryWorkspace && <MachineContext.Provider value={sessionHistory.machineId}><SessionHistory
+        workspace={sessionHistoryWorkspace.workspace}
+        panes={sessionHistoryWorkspace.panes}
+        agent={sessionHistory.agent}
+        recent={recentResumes}
+        onClose={closeSessionHistory}
+        onSelectPane={(paneId) => { closeSessionHistory(); selectTarget(sessionHistory.machineId, paneId); }}
+        onResumed={(opened, session) => {
+          closeSessionHistory();
+          if (opened.agent_started) {
+            rememberResume({ machineId: sessionHistory.machineId, workspaceId: sessionHistory.workspaceId, agent: session.agent, id: session.id, paneId: opened.pane_id });
+            actions.agentStarted(sessionHistory.machineId, opened.pane_id);
+          }
+          selectTarget(sessionHistory.machineId, opened.pane_id);
+          void load();
+        }}
+      /></MachineContext.Provider>}
       {machineDialog && <MachineDialog updateRemote={updateRemote} machine={machineDialog === "new" ? undefined : machineDialog} onClose={closeMachineDialog} onConnected={(id) => { closeMachineDialog(); selectTarget(id, null); void load(); }} />}
       <Droplet onOpen={(machineId, paneId) => {
         // an ended pane's card outlives the pane: the refetch has dropped it, and selecting it attaches nothing

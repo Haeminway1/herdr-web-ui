@@ -218,8 +218,8 @@ try {
       await movedRow.locator(".row-menu-toggle").click();
       const workspaceSheet = page.locator(".row-sheet");
       await workspaceSheet.waitFor();
-      assert.deepEqual(await workspaceSheet.locator(".row-sheet-item").allTextContents(), ["Pin workspace", "Rename workspace", "Close workspace", "New worktree", "Open worktree…"],
-        "the touch menu contains native workspace actions, with no pane or reorder actions");
+      assert.deepEqual(await workspaceSheet.locator(".row-sheet-item").allTextContents(), ["Pin workspace", "Rename workspace", "Earlier sessions…", "Close workspace", "New worktree", "Open worktree…"],
+        "the touch menu contains native workspace actions and session history, with no pane or reorder actions");
       await workspaceSheet.getByRole("button", { name: "Cancel", exact: true }).click();
       await workspaceSheet.waitFor({ state: "detached" });
       // Keyboard reordering remains available on the row itself.
