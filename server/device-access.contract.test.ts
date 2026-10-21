@@ -182,6 +182,11 @@ it("watch credentials cannot mutate HTTP state, read credential files, or elevat
     // the shared settings: a watching device reads them, and cannot change them for every browser
     expect((await fetch(`${base}/api/preferences`, { headers })).status).toBe(200);
     expect((await fetch(`${base}/api/preferences`, { method: "PUT", headers, body: JSON.stringify({ settings: { theme: "light" }, pins: [] }) })).status).toBe(403);
+    // what was read in the other browsers: a watching device sees it, and its own views stay its own
+    expect((await fetch(`${base}/api/seen`, { headers })).status).toBe(200);
+    const told = await fetch(`${base}/api/seen`, { method: "POST", headers, body: JSON.stringify({ pc: "local", epoch: "e", pane: "p", id: 1 }) });
+    expect(told.status).toBe(403);
+    expect(await told.json()).toMatchObject({ error: { code: "read_only" } });
     expect((await fetch(`${base}/api/fs/file?path=${encodeURIComponent(join(root, "devices.json"))}`, { headers })).status).toBe(403);
     // a PC's file is read without the origin check (#448, Android's Open button): the watch refusal still comes first, for GET and HEAD alike
     for (const method of ["GET", "HEAD"]) {
@@ -220,6 +225,46 @@ it("watch credentials cannot mutate HTTP state, read credential files, or elevat
     for (const socket of sockets) socket.close();
     for (const relay of relays) relay.close();
     proxy.stop(true); server.stop(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("a route spelled with a trailing, doubled or encoded slash is no route, for a watching and a driving device alike", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-route-spelling-"));
+  const store = new DeviceStore(root);
+  const watch = store.pair(store.startPairing().code, "Watch", "watch")!;
+  store.match(watch.token);
+  const drive = store.pair(store.startPairing().code, "Drive", "drive")!;
+  store.match(drive.token);
+  const server = createServer({ port: 0, stateDir: root, token: "test-route-spelling", tailscaleOwner: null });
+  const base = `http://127.0.0.1:${server.port}`;
+  const query = "?workspace_id=w1&agent=pi";
+  try {
+    // the PC proxy drops empty segments before it forwards with the PC's own credential, so each
+    // of these would reach the PC's history past the watch refusal if it were taken for a route
+    const spellings = [
+      "api/sessions/history/", "api/sessions//history", "api/sessions%2Fhistory", "api/sessions%2fhistory", "api/machines/local/sessions/history/",
+      "api/machines/pc1/sessions/history/", "api/machines/pc1/sessions//history", "api/machines/pc1//sessions/history", "api/machines/pc1/sessions%2Fhistory",
+      "api/machines/pc1/workspace/directories/", "api/machines/pc1/pane/commands/",
+    ];
+    for (const [label, token] of [["watch", watch.token], ["drive", drive.token]] as const) {
+      const headers = { cookie: `herdr_web_device=${token}` };
+      for (const path of spellings) {
+        const response = await fetch(`${base}/${path}${query}`, { headers });
+        expect([label, path, response.status]).toEqual([label, path, 404]);
+      }
+    }
+    // the canonical spellings: refused to a watching device on this PC, its alias and another PC's route
+    for (const path of ["api/sessions/history", "api/machines/local/sessions/history", "api/machines/pc1/sessions/history"]) {
+      const response = await fetch(`${base}/${path}${query}`, { headers: { cookie: `herdr_web_device=${watch.token}` } });
+      expect([path, response.status, ((await response.json()) as { error: { code: string } }).error.code]).toEqual([path, 403, "read_only"]);
+    }
+    // and answered for a driving one (no such workspace here; no such PC connected)
+    const driving = { cookie: `herdr_web_device=${drive.token}` };
+    const absent = await fetch(`${base}/api/sessions/history?workspace_id=herdr-web-ui-test-absent&agent=pi`, { headers: driving });
+    expect([absent.status, ((await absent.json()) as { error: { code: string } }).error.code]).toEqual([404, "workspace_not_found"]);
+    expect((await fetch(`${base}/api/machines/pc1/sessions/history${query}`, { headers: driving })).status).toBe(503);
+  } finally {
+    server.stop(); rmSync(root, { recursive: true, force: true });
   }
 });
 
