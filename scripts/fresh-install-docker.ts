@@ -7,7 +7,7 @@
  *
  * ONE_LINE=1 is the other door: a box with curl and git but no Node, herdr or Bun, and this
  * checkout's install.sh piped into sh as `curl … | sh` would, before herdr ever runs. It installs
- * the plugin at `ref` (install.sh reads HERDR_WEB_UI_REF), and the startup hook brings the app up.
+ * the plugin at `ref` (install.sh reads OVIS_REF), and the startup hook brings the app up.
  *
  *   bun scripts/fresh-install-docker.ts [owner/repo] [ref]      KEEP=1 leaves the container behind
  */
@@ -63,7 +63,7 @@ try {
 /** install.sh as `curl … | sh` runs it, before herdr ever ran; then herdr's startup hook starts the app */
 async function oneLineInstall(): Promise<void> {
   await docker(["cp", "install.sh", `${name}:/tmp/install.sh`]);
-  const out = await step("install.sh: herdr, Bun, Node and the plugin", () => asUser(`cat /tmp/install.sh | HERDR_WEB_UI_REF=${ref} sh 2>&1; echo "exit=$?"`));
+  const out = await step("install.sh: herdr, Bun, Node and the plugin", () => asUser(`cat /tmp/install.sh | OVIS_REF=${ref} sh 2>&1; echo "exit=$?"`));
   assert.match(out, /exit=0/, `install.sh failed:\n${out.slice(-2500)}`);
   assert.match(out, /Installed /, `the plugin install did not finish:\n${out.slice(-2500)}`);
   assert.doesNotMatch(out, /gyp ERR|node-gyp/, "nothing compiled");
@@ -85,11 +85,11 @@ async function oneLineInstall(): Promise<void> {
   assert.doesNotMatch(again, /not running yet/, "the app is up");
   // the usual case: herdr already runs, and builds the plugin with its own PATH, not install.sh's
   await asUser("herdr plugin uninstall devswha.herdr-web-ui >/dev/null 2>&1; curl -sf http://127.0.0.1:7317/api/health >/dev/null && pkill -f server/managed.ts; true");
-  const running = await step("install.sh with herdr running: builds, starts and waits", () => asUser(`cat /tmp/install.sh | HERDR_WEB_UI_REF=${ref} sh 2>&1; echo "exit=$?"`));
+  const running = await step("install.sh with herdr running: builds, starts and waits", () => asUser(`cat /tmp/install.sh | OVIS_REF=${ref} sh 2>&1; echo "exit=$?"`));
   assert.match(running, /exit=0/, running.slice(-2500));
   assert.match(running, /Installed /, running.slice(-2500));
   assert.doesNotMatch(running, /not running yet|did not start/, running.slice(-1500));
-  console.log(`\nA bare Ubuntu 24.04 goes from one line to a running herdr web ui. install.sh said:\n${out.split("\n").filter((line) => /^herdr web ui|Installed /.test(line)).map((l) => `  ${l.trim()}`).join("\n")}`);
+  console.log(`\nA bare Ubuntu 24.04 goes from one line to Ovis running. install.sh said:\n${out.split("\n").filter((line) => /^Ovis|Installed /.test(line)).map((l) => `  ${l.trim()}`).join("\n")}`);
 }
 
 async function pluginInstall(): Promise<void> {
@@ -124,5 +124,5 @@ async function pluginInstall(): Promise<void> {
     console.log(`  ${/up after \d+s/.exec(health)?.[0] ?? health.trim().split("\n").pop()}`);
   });
   const said = install.split("\n").filter((line) => /Installed |Config:/.test(line));
-  console.log(`\nA new user on a bare Ubuntu 24.04 gets a working herdr web ui. herdr said:\n${said.map((l) => `  ${l.trim()}`).join("\n")}`);
+  console.log(`\nA new user on a bare Ubuntu 24.04 gets Ovis working. herdr said:\n${said.map((l) => `  ${l.trim()}`).join("\n")}`);
 }
