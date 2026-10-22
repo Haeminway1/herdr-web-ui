@@ -1,6 +1,6 @@
 # Security
 
-herdr web ui gives a browser the terminals of the PC it runs on. Anyone who gets past its access
+Ovis gives a browser the terminals of the PC it runs on. Anyone who gets past its access
 check can type into them, so a flaw in who gets in is as serious as it gets here.
 
 ## Reporting a vulnerability
@@ -24,7 +24,7 @@ the details private until that release is out.
 ## Supported versions
 
 Only the latest `vX.Y.Z` release gets fixes. Installs update to it from **Settings → About** (or
-by themselves with `HERDR_WEB_AUTO_UPDATE=1`). A fix in the remote-PC runtime ships as a new
+by themselves with `OVIS_AUTO_UPDATE=1`). A fix in the remote-PC runtime ships as a new
 `remote-vN` bundle together with the release that uses it.
 
 ## Scope
