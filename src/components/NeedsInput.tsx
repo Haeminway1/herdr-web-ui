@@ -18,7 +18,7 @@ interface Props {
   onSelect(machineId: string, paneId: string): void;
 }
 
-const WORKING_OPEN_KEY = "herdr-web-ui:attention-working-open";
+const WORKING_OPEN_KEY = "ovis:attention-working-open";
 
 function timeAgo(timestamp: string): string {
   const minutes = Math.round((Date.parse(timestamp) - Date.now()) / 60_000);
