@@ -23,6 +23,14 @@ acknowledgement removes only an unchanged sent prefix; replacement text stays ev
 to equal the text sent before it. Editing remains available while disconnected; sending does not.
 Passwords continue to use the separate non-persistent secret-input path.
 
+The terminal's inputs (the input line and xterm's helper textarea) turn off autocorrect,
+autocapitalize and spell-check, and also say `autocomplete="off"`, the one attribute Chrome on
+Android turns into the keyboard's `TYPE_TEXT_FLAG_NO_SUGGESTIONS` (`ImeUtils.computeEditorInfo`
+reads `WebTextInputFlags.AUTOCOMPLETE_OFF`, which Blink's `InputMethodController::TextInputFlags`
+sets from that attribute alone). That asks the keyboard for no word suggestions, and a keyboard
+that honors the request hides its suggestion strip. Gboard 18.4 (tested on Chrome 133, 2026-10-22)
+ignores it and keeps the strip. The chat composer keeps its suggestions.
+
 Chat Send during work asks a `pending-input` bridge to retain an identified message until the
 current response ends. The same server ID is claimed by automatic delivery or a pending row's
 explicit send-now action. The bridge checks its original connection, attachment, agent and

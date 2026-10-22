@@ -5,10 +5,10 @@
  * `--term-*` tokens of each theme for PaneTerminal's theme object.
  */
 
-import type { TelemetrySettings } from "../../shared/telemetry.ts";
+import { TELEMETRY_THEME_IDS, type TelemetrySettings, type TelemetryThemeId } from "../../shared/telemetry.ts";
 import { mirrorPalette, SHARED_SETTING_KEYS, type SharedSettingKey } from "../../shared/preferences.ts";
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { isThemeId, terminalColors, themeColor as themeTableColor, type ThemeId, type ThemeEntry } from "./themes.ts";
+import { DEFAULT_THEME, terminalColors, themeColor as themeTableColor, type ThemeId, type ThemeEntry } from "./themes.ts";
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
 import type { AlertPrefs, DoneAlerts } from "../../shared/notify-policy.ts";
 import { chatFontStack, sanitizeFontFamily } from "./fontFamily.ts";
@@ -16,9 +16,10 @@ import { fontScale, sanitizeUiFontSize } from "./typography.ts";
 import { sanitizeKeyBarExtras, type KeyBarExtra } from "./keys.ts";
 import { themeFor } from "./themeFor.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems, sanitizeKeyBarItems, type KeyBarItem } from "./keyBar.ts";
+import { applyThemeEntry, DARK_QUERY, readStoredAppearance, resolveTheme, sanitizeAppearance, SETTINGS_STORAGE_KEY, THEMES_STORAGE_KEY, type ResolvedTheme, type ThemeSetting } from "./themeBoot.ts";
 
-export type ThemeSetting = "dark" | "light" | "system";
-export type ResolvedTheme = "dark" | "light";
+export { resolveTheme };
+export type { ResolvedTheme, ThemeSetting };
 export type Density = "compact" | "comfortable";
 /** One line names the workspace; two lines say what its pane is doing, with the workspace under it. */
 export type SidebarRows = "one" | "two";
@@ -101,6 +102,9 @@ export interface Settings {
   /** a desktop tab out of use for a moment detaches its pane (PaneTerminal's release) and only watches it, so herdr's own
    *  window keeps the pane at its size; paused where the server cannot watch. Off: the tab keeps the pane and its size. */
   releasePaneAway: boolean;
+  /** this device opens the pane herdr's own focus moves to (a `pane-focused` frame from the selected PC), as
+   *  herdr's window does after `herdr tab focus` or a click there; off: only this device's own picks move it */
+  followHerdrFocus: boolean;
   /** chat text size in px (its body text; the rest scales with it); null follows the interface size */
   chatFontSize: number | null;
   /** fonts tried before the UI font in the chat's prose (code stays mono), as a CSS font-family list; "" keeps the UI font */
@@ -115,6 +119,9 @@ export interface Settings {
   enterSends: boolean;
   /** true: a message sent while the agent works goes by itself when the turn ends; false: it waits for Send now */
   autoSendQueued: boolean;
+  /** a New tab with an agent… button in the chat's composer, in a mouse-driven window; off until chosen, so the
+   *  composer's row stays minimal: the tab menu opens the same dialog either way */
+  composerNewTabButton: boolean;
   /** on a touch screen, a chip above the message box offers the prompt the agent suggests next.
    * Not `showSuggestionChip`: that key was on by default until 0.4.9 and is still stored on phones */
   suggestionChip: boolean;
@@ -173,11 +180,14 @@ export const DIFF_STYLES = ["unified", "split"] as const;
 export type DiffStyle = (typeof DIFF_STYLES)[number];
 
 /** Raw custom text, key combinations and account keys are never copied. Requiring every other
- * Settings field in the projection makes a new field require an explicit collection decision. */
+ * Settings field in the projection makes a new field require an explicit collection decision.
+ * fileOpen, webLinks, the launch modes, followHerdrFocus and composerNewTabButton are not collected: the
+ * telemetry schema (shared/telemetry.ts) does not carry them. */
 type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
-  | "quickReplies" | "usageOrder" | "usageHidden" | "sidebarLayout" | "sidebarGrouping" | "palette" | "paletteLight" | "paletteDark" | "darkTheme" | "lightTheme"
-  | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode">;
+  | "quickReplies" | "usageOrder" | "usageHidden" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
+  | "sidebarLayout" | "sidebarGrouping" | "palette" | "paletteLight" | "paletteDark" | "darkTheme" | "lightTheme"
+  | "followHerdrFocus" | "composerNewTabButton">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
@@ -186,10 +196,11 @@ function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
 
 /** Full allowlisted snapshot. Text and account-key values are only used for safe summaries. */
 export function telemetrySettingsSnapshot(settings: Settings): (TelemetrySettings & TelemetrySourceSettings) | null {
-  // The deployed upstream receiver has no Report enum. Do not misreport it as another
-  // theme or require a telemetry deployment just to restore a local fork palette.
+  // The deployed receiver does not represent every selectable theme. Omit the snapshot
+  // rather than mislabel a theme or require an unrelated receiver deployment.
   const { palette, paletteLight, paletteDark, darkTheme, lightTheme } = settings;
-  if (palette === "report" || paletteLight === "report" || paletteDark === "report" || darkTheme === "report" || lightTheme === "report") return null;
+  const supported = (id: ThemeId): id is TelemetryThemeId => (TELEMETRY_THEME_IDS as readonly string[]).includes(id);
+  if (!supported(palette) || !supported(paletteLight) || !supported(paletteDark) || !supported(darkTheme) || !supported(lightTheme)) return null;
   return {
     terminalInputMode: settings.terminalInputMode,
     theme: settings.theme,
@@ -259,7 +270,11 @@ export const SETTING_SCOPE = {
   terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", shortcutOverrides: "device", density: "device",
   terminalFontSize: "device",
   terminalWheelSpeed: "device", terminalFontFamily: "device", paneClipboard: "device", releasePaneAway: "device",
+  // a desk that follows herdr's focus must not move a phone open on another pane
+  followHerdrFocus: "device",
   chatFontSize: "device", chatFontFamily: "device", uiFontSize: "device", chatWidth: "device", enterSends: "device",
+  // a desk's composer button: a phone never shows it
+  composerNewTabButton: "device",
   keepScreenOn: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertInApp: "device", alertSound: "device",
   paletteLight: "device", paletteDark: "device", statusIndicators: "device",
   voiceInput: "device", voiceLanguage: "device", voicePolishChat: "device", voicePolishTerminal: "device",
@@ -289,19 +304,21 @@ export const DEFAULT_SETTINGS: Settings = {
   palette: "report",
   paletteLight: "report",
   paletteDark: "report",
-  darkTheme: "report",
-  lightTheme: "report",
+  darkTheme: DEFAULT_THEME,
+  lightTheme: DEFAULT_THEME,
   terminalFontSize: 13,
   terminalWheelSpeed: 1,
   terminalFontFamily: "",
   paneClipboard: true,
   releasePaneAway: false,
+  followHerdrFocus: false,
   chatFontSize: null,
   chatFontFamily: "",
   uiFontSize: null,
   chatWidth: "default",
   enterSends: true,
   autoSendQueued: true,
+  composerNewTabButton: false,
   suggestionChip: false,
   showThinking: false,
   keepScreenOn: false,
@@ -367,8 +384,6 @@ export function alertPrefs(settings: Settings): AlertPrefs {
   return { input: settings.alertInput, done: settings.alertDone };
 }
 
-const STORAGE_KEY = "herdr-web-ui:settings";
-const THEMES_STORAGE_KEY = "herdr-web-ui:themes";
 export const TERMINAL_FONT_MIN = 10;
 export const TERMINAL_FONT_MAX = 22;
 export const TERMINAL_WHEEL_SPEED_MIN = 1;
@@ -437,15 +452,8 @@ export function chatLaneWidth(paneWidth: number, rootFontPx: number = ROOT_FONT_
 /** Only known keys with the right type survive: a stale or hand-edited record never breaks the UI. */
 export function sanitizeSettings(raw: unknown): Settings {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
-  const theme = record["theme"] === "dark" || record["theme"] === "light" || record["theme"] === "system" ? record["theme"] : DEFAULT_SETTINGS.theme;
-  const palette = isThemeId(record["palette"]) ? record["palette"] : DEFAULT_SETTINGS.palette;
-  // Absence migrates; an explicitly unknown id uses the default, not a stale pair.
-  const darkTheme = "darkTheme" in record
-    ? (isThemeId(record["darkTheme"]) ? record["darkTheme"] : DEFAULT_SETTINGS.darkTheme)
-    : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? DEFAULT_SETTINGS.darkTheme : palette;
-  const lightTheme = "lightTheme" in record
-    ? (isThemeId(record["lightTheme"]) ? record["lightTheme"] : DEFAULT_SETTINGS.lightTheme)
-    : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? DEFAULT_SETTINGS.lightTheme : palette;
+  // the same reading the page's boot script draws its first frame with (themeBoot.ts)
+  const { theme, darkTheme, lightTheme } = sanitizeAppearance(record);
   const density = record["density"];
   const font = record["terminalFontSize"];
   const chatFont = record["chatFontSize"];
@@ -458,7 +466,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     keyBarExtras,
     keyBarItems: sanitizeKeyBarItems(record["keyBarItems"], keyBarFallback),
     shortcutOverrides: sanitizeShortcutOverrides(record["shortcutOverrides"]),
-    theme: theme === "dark" || theme === "light" || theme === "system" ? theme : DEFAULT_SETTINGS.theme,
+    theme,
     density: density === "compact" || density === "comfortable" ? density : DEFAULT_SETTINGS.density,
     sidebarRows: record["sidebarRows"] === "one" || record["sidebarRows"] === "two" ? record["sidebarRows"] : DEFAULT_SETTINGS.sidebarRows,
     sidebarLayout: record["sidebarLayout"] === "upstream" ? "upstream" : "classic",
@@ -482,10 +490,12 @@ export function sanitizeSettings(raw: unknown): Settings {
     uiFontSize: sanitizeUiFontSize(record["uiFontSize"]),
     paneClipboard: typeof record["paneClipboard"] === "boolean" ? record["paneClipboard"] : DEFAULT_SETTINGS.paneClipboard,
     releasePaneAway: typeof record["releasePaneAway"] === "boolean" ? record["releasePaneAway"] : DEFAULT_SETTINGS.releasePaneAway,
+    followHerdrFocus: typeof record["followHerdrFocus"] === "boolean" ? record["followHerdrFocus"] : DEFAULT_SETTINGS.followHerdrFocus,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     autoSendQueued: typeof record["autoSendQueued"] === "boolean" ? record["autoSendQueued"] : DEFAULT_SETTINGS.autoSendQueued,
+    composerNewTabButton: typeof record["composerNewTabButton"] === "boolean" ? record["composerNewTabButton"] : DEFAULT_SETTINGS.composerNewTabButton,
     suggestionChip: typeof record["suggestionChip"] === "boolean" ? record["suggestionChip"] : DEFAULT_SETTINGS.suggestionChip,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
@@ -521,21 +531,10 @@ export function sanitizeSettings(raw: unknown): Settings {
 }
 
 export function loadSettings(): Settings {
-  let settings = DEFAULT_SETTINGS;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    settings = raw === null ? DEFAULT_SETTINGS : sanitizeSettings(JSON.parse(raw));
-  } catch {
-    /* a damaged main record does not hide the protected theme choice */
-  }
-  try {
-    const raw = window.localStorage.getItem(THEMES_STORAGE_KEY);
-    const themes: unknown = raw === null ? null : JSON.parse(raw);
-    if (typeof themes === "object" && themes !== null && "darkTheme" in themes && "lightTheme" in themes) {
-      return sanitizeSettings({ ...settings, darkTheme: themes.darkTheme, lightTheme: themes.lightTheme });
-    }
-  } catch { /* denied or damaged storage: keep the main record */ }
-  return settings;
+  // read as the page's boot script reads them (themeBoot.ts), so React starts on the row the first frame showed
+  const stored = readStoredAppearance(() => window.localStorage);
+  const settings = stored.main === null ? DEFAULT_SETTINGS : sanitizeSettings(stored.main.value);
+  return stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
 }
 
 export function saveSettings(settings: Settings): void {
@@ -545,17 +544,10 @@ export function saveSettings(settings: Settings): void {
       darkTheme: mirrored.darkTheme, lightTheme: mirrored.lightTheme,
       mirror: { palette: mirrored.palette, paletteDark: mirrored.paletteDark, paletteLight: mirrored.paletteLight },
     }));
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(mirrored));
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(mirrored));
   } catch {
     /* private mode: preferences last for the session */
   }
-}
-
-const DARK_QUERY = "(prefers-color-scheme: dark)";
-
-export function resolveTheme(setting: ThemeSetting): ResolvedTheme {
-  if (setting !== "system") return setting;
-  return typeof window !== "undefined" && window.matchMedia?.(DARK_QUERY).matches === false ? "light" : "dark";
 }
 
 type TerminalColors = { background: string; foreground: string; cursor: string; selectionBackground: string };
@@ -572,9 +564,12 @@ export function themeColor(theme: ResolvedTheme, palette: Palette = "report"): s
 export function applyToDocument(settings: Settings, entry: ThemeEntry, language: Language): void {
   const root = document.documentElement;
   root.lang = LOCALE_TAGS[language];
-  root.dataset["theme"] = entry.mode;
+  applyThemeEntry(root, entry);
+  // the boot script's background (src/theme-bootstrap.ts) holds the row's surface until the stylesheet's theme
+  // blocks own it; a stylesheet that never loaded leaves the page to it, kept on the row drawn now
+  if (getComputedStyle(root).getPropertyValue("--bg").trim() !== "") root.style.removeProperty("background-color");
+  else root.style.backgroundColor = entry.bg;
   root.dataset["density"] = settings.density;
-  root.dataset["palette"] = entry.id;
   root.dataset["chatWidth"] = settings.chatWidth;
   // src/components/AgentMark.css keys the mono logos on it
   root.dataset["marks"] = settings.agentMarks;
@@ -588,8 +583,6 @@ export function applyToDocument(settings: Settings, entry: ThemeEntry, language:
   const chatFont = chatFontStack(settings.chatFontFamily);
   if (chatFont === null) root.style.removeProperty("--font-chat");
   else root.style.setProperty("--font-chat", chatFont);
-  root.style.colorScheme = entry.mode;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themeColor(entry.mode, entry.id));
 }
 
 interface SettingsContextValue {
