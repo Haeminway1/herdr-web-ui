@@ -68,14 +68,14 @@ function installReplayFixture(): void {
   state.restore = () => { delete (clipboard as unknown as Record<string, unknown>)["writeText"]; };
   // the demo's roster, with the `unrestored` pane marked as herdr could not restore it
   const demoFetch = window.fetch.bind(window);
-  window.fetch = async (input, init) => {
+  window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const response = await demoFetch(input, init);
     const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (state.unrestored === null || new URL(href, location.href).pathname !== "/api/machines") return response;
     const body = await response.json() as { machines: Array<{ snapshot?: { panes: Array<{ pane_id: string }> } }> };
     for (const machine of body.machines) if (machine.snapshot) machine.snapshot.panes = machine.snapshot.panes.map((pane) => pane.pane_id === state.unrestored ? { ...pane, restore_error: "held by the fixture" } : pane);
     return new Response(JSON.stringify(body), { status: response.status, headers: response.headers });
-  };
+  }, demoFetch);
   // xterm parses each write from a setTimeout(_innerWrite) of its own: the gate keeps that one callback
   state.hold = (paneId, steps) => {
     const schedule = window.setTimeout;
@@ -221,7 +221,7 @@ async function runCase(page: Page, test: Case): Promise<Record<string, unknown>>
   return result;
 }
 
-const settings = (extra: Record<string, unknown>) => JSON.stringify({ language: "en", theme: "dark", defaultView: "terminal", terminalInputMode: "direct", alertsOn: false, paneClipboard: true, ...extra });
+const settings = (extra: Record<string, unknown>) => JSON.stringify({ language: "en", theme: "dark", sidebarLayout: "upstream", defaultView: "terminal", terminalInputMode: "direct", alertsOn: false, paneClipboard: true, ...extra });
 
 async function openPage(context: BrowserContext, url: string, pane = panes.shell): Promise<Page> {
   const page = await context.newPage();
@@ -409,7 +409,7 @@ try {
       const atDispose = await probeOf(page);
       assert.equal(atDispose.replayOscOpen, true);
       const acksBefore = await fixture(page, (state) => state.acks.length);
-      for (const pane of [panes.web, panes.flaky, panes.omp, panes.cli]) {
+      for (const pane of [panes.web, panes.api, panes.infra, panes.docs]) {
         await page.locator(`.workspace-select[data-pane="${pane}"]`).click();
         await page.locator(`.pane-frame.is-current[data-layout-pane="${pane}"]`).waitFor({ state: "attached" });
       }
@@ -598,7 +598,7 @@ try {
         const host = await page.locator(".pane-frame.is-current .pane-terminal").evaluateHandle((element) => element);
         const before = await acked();
         const held = await hold(PENDING[0]!.steps);
-        for (const pane of [panes.web, panes.flaky, panes.omp, panes.cli]) {
+        for (const pane of [panes.web, panes.api, panes.infra, panes.docs]) {
           await page.locator(`.workspace-select[data-pane="${pane}"]`).click();
           await page.locator(`.pane-frame.is-current[data-layout-pane="${pane}"]`).waitFor({ state: "attached" });
         }

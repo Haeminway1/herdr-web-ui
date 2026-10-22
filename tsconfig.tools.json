@@ -46,6 +46,7 @@
     "scripts/terminal-cjk-punctuation-regression.ts",
     "scripts/terminal-autoswitch-demo-regression.ts",
     "scripts/command-outcome-demo-regression.ts",
+    "scripts/replay-clipboard-demo-regression.ts",
     "scripts/pane-paging-demo-regression.ts",
     "scripts/omp-question-compat.ts",
     "app/scripts/build-web.ts"
