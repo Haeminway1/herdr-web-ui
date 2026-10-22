@@ -11,7 +11,7 @@ import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
 
-const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-chat-browser-"));
+const root = mkdtempSync(join(tmpdir(), "ovis-chat-browser-"));
 const codexHome = join(root, "codex");
 const rollout = join(codexHome, "sessions", "rollout.jsonl");
 const answer = "The conversation is now clean. Native transcript records preserve the user request and final answer while internal instructions stay hidden.";
@@ -48,7 +48,7 @@ try {
   const executable = join(root, "bin", "codex");
   writeFileSync(executable, `#!/bin/sh\nexec 3<"$1"\nprintf '%s\\n' '${answer}'\nwhile IFS= read -r line; do :; done\n`);
   chmodSync(executable, 0o755);
-  const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-chat-browser" });
+  const created = await workspaceCreate({ cwd: root, label: "ovis-test-chat-browser" });
   workspaceId = created.workspace.workspace_id;
   const paneId = created.root_pane.pane_id;
   await herdrRpc("pane.send_text", { pane_id: paneId, text: `${executable} ${rollout}\n` });
@@ -237,7 +237,8 @@ try {
   await insecureLog.getByRole("button", { name: "Copied", exact: true }).waitFor();
   assert.equal(await clipboard(), answer);
   assert.equal(await insecureLog.getByRole("button", { name: "Copied", exact: true }).evaluate((node) => node === document.activeElement), true, "fallback restores the triggering button's focus");
-  assert.equal(await insecure.locator("textarea[readonly]").count(), 0);
+  // the copy fallback's own field is appended to the body; the composer's measurement textarea is readonly for good
+  assert.equal(await insecure.locator("body > textarea[readonly]").count(), 0);
   await insecureLog.getByRole("button", { name: "Copy code", exact: true }).focus();
   await insecureLog.getByRole("button", { name: "Copy code", exact: true }).click();
   await insecureLog.getByRole("button", { name: "Code copied", exact: true }).waitFor();
@@ -276,7 +277,7 @@ try {
   await insecureLog.getByRole("alert").filter({ hasText: "Couldn't copy. Select the text and copy it manually." }).nth(1).waitFor();
   assert.equal(await insecureLog.getByRole("alert").filter({ hasText: "Couldn't copy. Select the text and copy it manually." }).count(), 2);
   assert.equal(await insecureLog.getByRole("button", { name: "Code copied", exact: true }).count(), 0);
-  assert.equal(await insecure.locator("textarea[readonly]").count(), 0, "temporary copy field is removed");
+  assert.equal(await insecure.locator("body > textarea[readonly]").count(), 0, "temporary copy field is removed");
   await insecure.screenshot({ path: "evidence/chat-mode/clipboard-refused.png", fullPage: true, animations: "disabled" });
   await insecure.close();
   console.log("PASS actual clipboard contents on HTTP, denied API fallback, and refused-copy feedback");

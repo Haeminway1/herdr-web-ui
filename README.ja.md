@@ -1,7 +1,7 @@
-# herdr web ui
+# Ovis
 
 <p align="center">
-  <img src="public/icons/icon-192.png" alt="herdr web ui" width="100">
+  <img src="public/icons/icon-192.png" alt="Ovis" width="100">
 </p>
 
 <p align="center">
@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="https://herdrweb.dev/">公式サイト</a> ·
+  <a href="https://ovis.sh/">公式サイト</a> ·
   <a href="#install">インストール</a> ·
-  <a href="https://herdrweb.dev/demo/">デモを試す</a> ·
+  <a href="https://ovis.sh/demo/">デモを試す</a> ·
   <a href="docs/guide.md#quick-start">クイックスタート</a> ·
   <a href="#faq">よくある質問</a> ·
   <a href="#docs">ドキュメント</a>
@@ -91,7 +91,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 ## インストール
 
 ```bash
-curl -fsSL https://herdrweb.dev/install.sh | sh
+curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
 glibc を使う Linux（x64、arm64）と macOS（Intel、Apple Silicon）に対応しています。Alpine（musl）と 32 ビット ARM は対象外です。`curl`、Git、`tar` が必要で、Bun がない場合は Bash と `unzip` も必要です。必要なバージョンは herdr 0.9.0+、Bun 1.4+、Node 18+ です。不足するツールを現在のユーザー向けにインストールし、古い Bun は更新します。Node がない、または 18 より古い場合は Node 22 をインストールし、その後アプリを herdr プラグインとしてインストールします。既存の herdr が 0.9.0 より古い場合は、自分で herdr を更新・再起動してからインストーラーを再実行してください。
@@ -101,7 +101,7 @@ glibc を使う Linux（x64、arm64）と macOS（Intel、Apple Silicon）に対
 Windows x64 では PowerShell で:
 
 ```powershell
-irm https://herdrweb.dev/install.ps1 | iex
+irm https://ovis.sh/install.ps1 | iex
 ```
 
 [Git for Windows](https://git-scm.com/download/win) が必要です。足りない herdr と Bun を現在のユーザー向けにインストールし、同じプラグインをインストールします。Node や WSL は不要です。スマートフォンから使うには herdr で **Phone setup** を開いてください。herdr が Windows でターミナルのアタッチに対応するまで、Windows のターミナルは入力でき、グリッドが固定された[画面ミラー](docs/remote-pcs.md#windows-pcs)になります。
@@ -118,7 +118,7 @@ herdr plugin install devswha/herdr-web-ui
 
 古い herdr は先に更新・再起動してください。各手順と問題の対処方法は [INSTALL.md](INSTALL.md) を参照してください。
 
-herdr が起動した状態で、インストーラーが表示または開いたアドレスを使います。通常は **[127.0.0.1:7317](http://127.0.0.1:7317)** ですが、そのポートが使用中ならプラグインは別のポートを選んで記憶します。プラグインだけをインストールした場合は、herdr の **Start herdr web ui** を実行してください。デスクトップ環境のある PC への新規インストールではブラウザーが自動で開きます。アドレスバーの **Install** でアプリを追加し、同じアドレスを使い続けてください。`127.0.0.1` と `localhost` はブラウザーにとって別のアプリのアドレスです。自動で開くのを省くには、インストール前に `HERDR_WEB_NO_OPEN=1` を設定します。ペインを選ぶか、**New workspace（新規ワークスペース）** からエージェントを起動してください。スマートフォンではインストーラーの QR コード（herdr の **Phone setup** でも確認できます）を読み取り、ホーム画面に追加します。[クイックスタート →](docs/guide.md#quick-start)
+herdr が起動した状態で、インストーラーが表示または開いたアドレスを使います。通常は **[127.0.0.1:7317](http://127.0.0.1:7317)** ですが、そのポートが使用中ならプラグインは別のポートを選んで記憶します。プラグインだけをインストールした場合は、herdr の **Start Ovis** を実行してください。デスクトップ環境のある PC への新規インストールではブラウザーが自動で開きます。アドレスバーの **Install** でアプリを追加し、同じアドレスを使い続けてください。`127.0.0.1` と `localhost` はブラウザーにとって別のアプリのアドレスです。自動で開くのを省くには、インストール前に `HERDR_WEB_NO_OPEN=1` を設定します。ペインを選ぶか、**New workspace（新規ワークスペース）** からエージェントを起動してください。スマートフォンではインストーラーの QR コード（herdr の **Phone setup** でも確認できます）を読み取り、ホーム画面に追加します。[クイックスタート →](docs/guide.md#quick-start)
 
 サーバーのデフォルトの待ち受けアドレスは `127.0.0.1` です。別のデバイスからアクセスする場合は、[スマートフォンの設定](docs/guide.md#on-your-phone)と[アクセスと安全性](docs/guide.md#access-and-safety)を参照してください。
 

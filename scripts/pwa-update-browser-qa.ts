@@ -11,7 +11,7 @@ import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/clien
 import { chromePath } from "./chrome-path.ts";
 
 const repo = resolve(import.meta.dir, "..");
-const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-pwa-"));
+const root = mkdtempSync(join(tmpdir(), "ovis-pwa-"));
 const app = join(root, "app");
 const baseline = join(root, "baseline");
 const current = join(repo, "dist");
@@ -24,7 +24,8 @@ let server: ReturnType<typeof import("../server/index.ts").createServer> | undef
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 
 function entryScript(html: string): string {
-  const entry = html.match(/<script\b[^>]*\bsrc="([^"]+)"/)?.[1];
+  // the module entry, not the classic theme boot script ahead of it (scripts/theme-bootstrap-build.ts)
+  const entry = html.match(/<script\b(?=[^>]*\btype="module")[^>]*\bsrc="([^"]+)"/)?.[1];
   assert.ok(entry, "the real built shell has a module entry");
   return entry;
 }
@@ -122,7 +123,7 @@ try {
   const standIn = join(root, "codex");
   writeFileSync(standIn, `#!/bin/sh\nprintf ready > "${join(root, "ready")}"\nwhile IFS= read -r line; do :; done\n`);
   chmodSync(standIn, 0o755);
-  const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-pwa" });
+  const created = await workspaceCreate({ cwd: root, label: "ovis-test-pwa" });
   workspace = created.workspace.workspace_id;
   const pane = created.root_pane.pane_id;
   const processReady = new Promise<void>((resolveReady, reject) => {

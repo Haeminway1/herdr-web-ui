@@ -1,14 +1,18 @@
 import { expect, it, spyOn } from "bun:test";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
-import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { promisify } from "node:util";
 import { forgetTranscriptState } from "./conversation.ts";
 import * as herdr from "./herdr/client.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
-import { forgetGjcState, gjcPidUnderShell, gjcSessionFile, gjcTranscriptForPane, isGjcProcess, parseGjcPs, recentProcessTable, storeRelative, terminalBreadcrumb, validateGjcSdkTranscript } from "./gjc-runtime.ts";
+import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
+import { gjcSdkQuery, type GjcSdkCommandRunner } from "./gjc-sdk.ts";
+import { forgetGjcPane, forgetGjcState, gjcNativeSkills, gjcRetainedEntries, gjcPidUnderShell, gjcSessionFile, gjcTranscriptForPane, isGjcProcess, parseGjcPs, recentProcessTable, storeRelative, terminalBreadcrumb, validateGjcSdkTranscript } from "./gjc-runtime.ts";
 
 // Session paths come back canonical and the store root is passed in canonical; macOS's tmpdir is a symlink into /private.
 const tempDir = (prefix: string) => realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -488,7 +492,7 @@ it("does not absorb a session change written during an SDK lookup into the kept 
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
 });
 
-it("retires a cached transcript when native generation retires without authorizing its old file", async () => {
+it.each(["retired", "replaced", "unknown"].flatMap(status => [1, 2, 3].flatMap(checkpoint => ["chat", "status"].map(purpose => ({ status, checkpoint, purpose: purpose as "chat" | "status" })))))("rejects $status at cached $purpose generation checkpoint $checkpoint even with stale broker and index", async ({ status, checkpoint, purpose }) => {
   forgetTranscriptState();
   const home = tempDir("gjc-generation-revoked-");
   try {
@@ -498,20 +502,82 @@ it("retires a cached transcript when native generation retires without authorizi
     writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId: "live", pid: 200 }));
     const path = join(project, "main.jsonl");
     writeFileSync(path, JSON.stringify({ type: "session", id: "live", cwd }) + "\n");
-    let live = true, lookups = 0, generationChecks = 0;
+    let retireAt = Infinity, lookups = 0, generationChecks = 0;
     const options = {
+      purpose,
       platform: "linux", processBirth: () => 1000,
       processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
-      generationCurrent: async () => { generationChecks += 1; return live; },
-      sdkTranscript: async () => { lookups += 1; return live ? { sessionId: "live", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["live"] } : null; },
+      generationCurrent: (directory: string, id: string, generation: number) => gjcSdkGenerationCurrent(directory, id, generation, {
+        generationStatus: async (sessionId, endpointGeneration) => {
+          expect([directory, sessionId, endpointGeneration]).toEqual([agentDir, "live", 1]);
+          return { status: ++generationChecks < retireAt ? "current" : status };
+        },
+      }),
+      // Stale broker pages and the index remain unchanged: only the independent
+      // runtime generation proof can revoke this otherwise valid binding.
+      sdkTranscript: async () => { lookups += 1; return { sessionId: "live", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["live"] }; },
     };
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
-    live = false;
+    retireAt = generationChecks + checkpoint;
     expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
-    expect(lookups).toBe(2);
-    expect(generationChecks).toBe(6);
+    const revokedLookups = checkpoint === 1 ? 2 : 1;
+    expect(lookups).toBe(revokedLookups);
+    expect(generationChecks).toBe(5 + checkpoint + (checkpoint === 1 ? 1 : 0));
+    // A later read must not recover authority from the same stale broker answer.
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBeNull();
+    expect(lookups).toBe(revokedLookups + 1);
+    retireAt = Infinity;
+    expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+    expect(lookups).toBe(revokedLookups + 2);
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it.each(["ENOENT", "EACCES", "BROKER", "EPIPE", "ECONNREFUSED", "ETIMEDOUT"].flatMap(code => ["chat", "status"].map(purpose => ({ code, purpose: purpose as "chat" | "status" }))))("keeps $purpose runtime generation $code failures typed at every fresh and cached checkpoint", async ({ code, purpose }) => {
+  for (const route of ["fresh", "cached"]) {
+    for (const checkpoint of route === "cached" ? [1, 2, 3] : [1, 2]) {
+      forgetTranscriptState();
+      const home = tempDir("gjc-generation-unavailable-");
+      try {
+        const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+        const project = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+        mkdirSync(cwd); mkdirSync(project, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+        writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId: "live", pid: 200 }));
+        const path = join(project, "main.jsonl");
+        writeFileSync(path, JSON.stringify({ type: "session", id: "live", cwd }) + "\n");
+        let failAt = Infinity, generationChecks = 0, lookups = 0;
+        const options = {
+          purpose,
+          platform: "linux", processBirth: () => 1000,
+          processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+          generationCurrent: (directory: string, id: string, generation: number) => gjcSdkGenerationCurrent(directory, id, generation, {
+            generationStatus: async (sessionId, endpointGeneration) => {
+              expect([directory, sessionId, endpointGeneration]).toEqual([agentDir, "live", 1]);
+              if (++generationChecks === failAt) throw Object.assign(new Error(`private generation evidence ${path}`), { code });
+              return { status: "current" };
+            },
+          }),
+          sdkTranscript: async () => { lookups += 1; return { sessionId: "live", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["live"] }; },
+        };
+        const read = () => gjcTranscriptForPane("pane", cwd, home, options);
+        if (route === "cached") {
+          expect(await read()).toBe(path);
+          expect(lookups).toBe(1);
+        }
+        generationChecks = 0;
+        failAt = checkpoint;
+        const failure = await read().catch(error => error);
+        expect(failure).toBeInstanceOf(GjcSdkLookupError);
+        expect(failure).toMatchObject({ reason: code === "ETIMEDOUT" ? "timeout" : "unavailable", message: "GJC SDK lookup failed" });
+        expect(JSON.stringify(failure)).not.toContain(path);
+        expect(generationChecks).toBe(checkpoint);
+        expect(lookups).toBe(1);
+        failAt = Infinity;
+        expect(await read()).toBe(path);
+        expect(lookups).toBe(2); // Recovery needs a fresh binding, never cached authority after a failed proof.
+      } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+    }
+  }
 });
 
 it.each(["fresh", "cached"])("rejects a %s binding when generation changes during final process info", async (route) => {
@@ -731,6 +797,47 @@ it.each(["timeout", "unavailable"] as const)("propagates cached generation %s an
     expect(lookups).toBe(2);
     expect(observations).toBe(5);
   } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it.each(["fresh", "cached"] as const)("sanitizes late %s generation failures and discards reusable bindings", async (mode) => {
+  for (const code of ["ENOENT", "EACCES", "BROKER", "ETIMEDOUT"]) {
+    forgetTranscriptState();
+    const home = tempDir("gjc-final-generation-unavailable-");
+    try {
+      const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+      const store = join(agentDir, "sessions", "project"), indexDir = join(agentDir, "sdk", "sessions");
+      mkdirSync(cwd); mkdirSync(store, { recursive: true }); mkdirSync(indexDir, { recursive: true });
+      const path = join(store, "session.jsonl"), sessionId = "session";
+      writeFileSync(path, JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n");
+      writeFileSync(join(indexDir, "index.jsonl"), sdkIndexRow(cwd, 1, { type: "host_registered", sessionId, pid: 200 }));
+      const binding = { path, sessionId, pid: 200, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [sessionId] };
+      const secret = `private generation execution ${code} ${path}`;
+      let failing = false, lookups = 0, observations = 0;
+      const finalObservation = mode === "cached" ? 3 : 2;
+      const options = {
+        platform: "linux", now: () => 0, processBirth: () => 1000,
+        processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["gjc"] }] } }),
+        sdkTranscript: async () => { lookups += 1; return binding; },
+        generationCurrent: async () => {
+          observations += 1;
+          if (failing && observations === finalObservation) throw Object.assign(new Error(secret), { code });
+          return true;
+        },
+      };
+      if (mode === "cached") expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+      observations = 0; failing = true;
+      const failure = await gjcTranscriptForPane("pane", cwd, home, options).catch(error => error);
+      expect(failure).toBeInstanceOf(GjcSdkLookupError);
+      expect(failure).toMatchObject({ reason: code === "ETIMEDOUT" ? "timeout" : "unavailable", message: "GJC SDK lookup failed" });
+      expect(JSON.stringify(failure)).not.toContain(secret);
+      expect(observations).toBe(finalObservation);
+      expect(lookups).toBe(1);
+      failing = false;
+      expect(await gjcTranscriptForPane("pane", cwd, home, options)).toBe(path);
+      expect(lookups).toBe(2);
+      expect(observations).toBe(finalObservation + 2);
+    } finally { forgetTranscriptState(); rmSync(home, { recursive: true, force: true }); }
+  }
 });
 
 it.each(["fresh", "cached"] as const)("rejects a %s transcript when the pane changes while generation is awaited", async (mode) => {
@@ -1252,4 +1359,583 @@ it("reports an unreadable Windows process table as unavailable rather than proce
     await expect(gjcTranscriptForPane("pane", cwd, home, options)).rejects.toMatchObject({ reason: "unavailable" });
     expect(sdkCalls).toBe(0);
   } finally { rmSync(home, { recursive: true, force: true }); forgetTranscriptState(); }
+});
+
+// The broker is a fake gjc executable that counts its launches and answers each --query from a file.
+function nativeFixture(answers: Record<string, string | null>) {
+  const home = tempDir("gjc-native-");
+  const cwd = join(home, "work"), agentDir = join(home, ".gjc", "agent");
+  const project = join(agentDir, "sessions", "v2-project"), path = join(project, "main.jsonl");
+  const bin = join(home, "bin"), answerDir = join(home, "answers"), count = join(home, "launches");
+  for (const dir of [cwd, project, bin, answerDir, join(agentDir, "sdk", "sessions")]) mkdirSync(dir, { recursive: true });
+  writeFileSync(path, JSON.stringify({ type: "session", id: "native-session", cwd }) + "\n");
+  appendFileSync(join(agentDir, "sdk", "sessions", "index.jsonl"), JSON.stringify({ type: "host_registered", sessionId: "native-session", pid: 200 }) + "\n");
+  writeFileSync(count, "");
+  writeFileSync(join(bin, "gjc"), `#!/bin/sh
+echo x >> "${count}"
+sid="$5"; q=""
+while [ $# -gt 0 ]; do if [ "$1" = "--query" ]; then q="$2"; fi; shift; done
+cat "${answerDir}/$sid.$(echo "$q" | tr '/' '_').json" 2>/dev/null || exit 1
+`);
+  chmodSync(join(bin, "gjc"), 0o755);
+  for (const [query, body] of Object.entries(answers)) if (body !== null) writeFileSync(join(answerDir, `native-session.${query.replace("/", "_")}.json`), body);
+  const binding = { sessionId: "native-session", pid: 200, path, hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: ["native-session"] };
+  let clock = 0, held: typeof binding | null = binding, calls = 0, gateAt = -1, gate: Promise<void> | null = null, reached: () => void = () => {};
+  const transcript = {
+    platform: "linux",
+    processInfo: async () => { const n = ++calls; if (n === gateAt) { reached(); await gate; } return { process_info: { foreground_processes: [{ pid: 200, argv: ["/usr/bin/gjc"] }] } }; },
+    processBirth: () => 1000,
+    sdkTranscript: async () => held,
+    generationCurrent: async () => true,
+    now: () => clock,
+  };
+  const savedPath = process.env["PATH"];
+  process.env["PATH"] = `${bin}:${savedPath ?? ""}`;
+  const runner: GjcSdkCommandRunner = async (command, args, options) => {
+    const execution = promisify(execFile)(command, args, options);
+    execution.child.stdin?.end();
+    return (await execution).stdout;
+  };
+  return {
+    home, cwd, count: () => readFileSync(count, "utf8").split("\n").length - 1,
+    options: {
+      home, platform: "linux", now: () => clock,
+      generationCurrent: (directory: string, id: string, generation: number) => gjcSdkGenerationCurrent(directory, id, generation, {
+        generationStatus: async () => ({ status: "current" }),
+      }),
+      query: (directory: string, id: string, query: "runtime.capabilities" | "skill.list/state") =>
+        gjcSdkQuery(directory, id, query, { runner, cacheClock: () => clock }),
+    },
+    prove: (pane = "pane") => gjcTranscriptForPane(pane, cwd, home, transcript),
+    advance: (ms: number) => { clock += ms; },
+    hold: (next: typeof binding | null) => { held = next; },
+    // the second process read of the next lookup (its final identity check) waits for the returned release
+    block: () => {
+      let release!: () => void;
+      gate = new Promise<void>((resolve) => { release = resolve; });
+      const waiting = new Promise<void>((resolve) => { reached = resolve; });
+      gateAt = calls + 2;
+      return { release, waiting };
+    },
+    session: (id: string, answers: Record<string, string>) => {
+      const file = join(project, `${id}.jsonl`);
+      writeFileSync(file, JSON.stringify({ type: "session", id, cwd }) + "\n");
+      for (const [query, body] of Object.entries(answers)) writeFileSync(join(answerDir, `${id}.${query.replace("/", "_")}.json`), body);
+      return { ...binding, sessionId: id, path: realpathSync(file), guardSessionIds: [id] };
+    },
+    done: () => { process.env["PATH"] = savedPath; rmSync(home, { recursive: true, force: true }); },
+  };
+}
+const capabilities = (operations: string[]) => JSON.stringify({ ok: true, page: { items: [{ operations }], complete: true, revision: "r" } });
+const skillList = (items: unknown[], complete = true) => JSON.stringify({ ok: true, page: { items, complete, revision: "r" } });
+const nativeIt = it.skipIf(process.platform === "win32");
+
+nativeIt("serves kept native skill rows without starting a process on a request, refreshing once per period", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({
+    "runtime.capabilities": capabilities(["skill.list/state"]),
+    "skill.list/state": skillList([{ name: "review", description: "Review code" }, { name: "skill:plan" }, { name: "review" }, { name: "bad name" }, 7]),
+  });
+  try {
+    // no binding yet: nothing to ask, nothing launched
+    expect((await gjcNativeSkills("pane", f.options))).toEqual({ rows: null });
+    expect(f.count()).toBe(0);
+    await f.prove();
+    const first = (await gjcNativeSkills("pane", f.options));
+    expect(first.rows).toBeNull();
+    // a burst of requests shares the one background refresh
+    const burst = await Promise.all(Array.from({ length: 10 }, () => gjcNativeSkills("pane", f.options)));
+    expect(burst.every(({ rows }) => rows === null)).toBe(true);
+    await first.refreshed;
+    expect(f.count()).toBe(2); // capabilities and skill.list/state, once
+    const served = await Promise.all(Array.from({ length: 10 }, () => gjcNativeSkills("pane", f.options)));
+    expect(served.every(({ refreshed }) => refreshed === undefined)).toBe(true);
+    expect(served[0]!.rows?.map(({ name, source, provenance }) => [name, source, provenance])).toEqual([
+      ["skill:review", "skill", { transport: "native", verified: true }],
+      ["skill:plan", "skill", { transport: "native", verified: true }],
+    ]);
+    expect(f.count()).toBe(2);
+    // a period later the adapter's binding is proven again and one more refresh runs
+    f.advance(31_000);
+    expect((await gjcNativeSkills("pane", f.options))).toEqual({ rows: null }); // the binding aged out
+    await f.prove();
+    const again = (await gjcNativeSkills("pane", f.options));
+    expect(again.rows?.length).toBe(2); // the same session proven again keeps its rows while one refresh runs
+    await again.refreshed;
+    expect(f.count()).toBe(4);
+    expect((await gjcNativeSkills("pane", f.options)).rows?.length).toBe(2);
+  } finally { f.done(); }
+});
+
+nativeIt("requires current broker generation for every native cache read and denies failures", async () => {
+  for (const outcome of ["retired", "replaced", "unknown", "ENOENT", "EACCES", "BROKER", "EPIPE", "ECONNREFUSED", "ETIMEDOUT"]) {
+    forgetTranscriptState();
+    const f = nativeFixture({ "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "old" }]) });
+    let status = "current";
+    const options = { ...f.options, generationCurrent: (directory: string, id: string, generation: number) =>
+      gjcSdkGenerationCurrent(directory, id, generation, { generationStatus: async () => {
+        if (/^[A-Z]/.test(status)) throw Object.assign(new Error("private generation evidence"), { code: status });
+        return { status };
+      } }) };
+    try {
+      await f.prove();
+      await (await gjcNativeSkills("pane", options)).refreshed;
+      expect((await gjcNativeSkills("pane", options)).rows?.map(({ name }) => name)).toEqual(["skill:old"]);
+      const launches = f.count();
+      status = outcome;
+      if (/^[A-Z]/.test(outcome)) await expect(gjcNativeSkills("pane", options)).rejects.toMatchObject({ reason: outcome === "ETIMEDOUT" ? "timeout" : "unavailable" });
+      else expect((await gjcNativeSkills("pane", options)).rows).toBeNull();
+      status = "current";
+      expect((await gjcNativeSkills("pane", options)).rows).toBeNull();
+      expect(f.count()).toBe(launches);
+    } finally { f.done(); }
+  }
+});
+
+nativeIt("does not reuse native rows for a new generation with the same session id", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({ "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "old" }]) });
+  try {
+    await f.prove();
+    await (await gjcNativeSkills("pane", f.options)).refreshed;
+    expect((await gjcNativeSkills("pane", f.options)).rows?.length).toBe(1);
+    f.advance(31_000);
+    f.hold({ ...f.session("native-session", { "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "new" }]) }), endpointGeneration: 2 });
+    await f.prove();
+    const next = await gjcNativeSkills("pane", f.options);
+    expect(next.rows).toBeNull();
+    await next.refreshed;
+    expect((await gjcNativeSkills("pane", f.options)).rows?.map(({ name }) => name)).toEqual(["skill:new"]);
+  } finally { f.done(); }
+});
+
+nativeIt("does not publish a revoked generation or a forgotten pane after asynchronous proof", async () => {
+  for (const revoke of [true, false]) {
+    forgetTranscriptState();
+    const f = nativeFixture({ "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "old" }]) });
+    let checks = 0, release!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const options = { ...f.options, generationCurrent: (directory: string, id: string, generation: number) =>
+      gjcSdkGenerationCurrent(directory, id, generation, { generationStatus: async () => {
+        if (++checks === 2) { entered(); await gate; }
+        return { status: revoke && checks >= 2 ? "retired" : "current" };
+      } }) };
+    try {
+      await f.prove();
+      const first = await gjcNativeSkills("pane", options);
+      await waiting;
+      if (!revoke) forgetGjcPane("pane");
+      release();
+      await first.refreshed;
+      expect((await gjcNativeSkills("pane", options)).rows).toBeNull();
+      expect(f.count()).toBe(2);
+    } finally { f.done(); }
+  }
+});
+
+nativeIt("a forgotten pane wins over an in-flight native generation read", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({ "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "old" }]) });
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const waiting = new Promise<void>((resolve) => { entered = resolve; });
+  const options = { ...f.options, generationCurrent: (directory: string, id: string, generation: number) =>
+    gjcSdkGenerationCurrent(directory, id, generation, { generationStatus: async () => { entered(); await gate; return { status: "current" }; } }) };
+  try {
+    await f.prove();
+    const pending = gjcNativeSkills("pane", options);
+    await waiting;
+    forgetGjcPane("pane");
+    release();
+    expect(await pending).toEqual({ rows: null });
+    expect(f.count()).toBe(0);
+  } finally { f.done(); }
+});
+
+nativeIt("launches nothing without a proven binding and backs off after a failed refresh", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({});
+  try {
+    f.hold(null); // the adapter cannot resolve a binding: the broker is unavailable to it
+    await f.prove();
+    for (let i = 0; i < 10; i++) expect((await gjcNativeSkills("pane", f.options))).toEqual({ rows: null });
+    expect(f.count()).toBe(0);
+
+    forgetTranscriptState();
+    const g = nativeFixture({ "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": null }); // the CLI exits 1
+    try {
+      await g.prove();
+      const first = (await gjcNativeSkills("pane", g.options));
+      await first.refreshed;
+      for (let i = 0; i < 10; i++) expect((await gjcNativeSkills("pane", g.options)).rows).toBeNull();
+      expect(g.count()).toBe(2);
+    } finally { g.done(); }
+  } finally { f.done(); }
+});
+
+nativeIt("keeps scan rows when runtime.capabilities does not offer skill.list/state or the list is partial", async () => {
+  for (const answers of [
+    { "runtime.capabilities": capabilities(["turn.result"]), "skill.list/state": skillList([{ name: "a" }]) },
+    { "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "a" }], false) },
+  ]) {
+    forgetTranscriptState();
+    const f = nativeFixture(answers);
+    try {
+      await f.prove();
+      await (await gjcNativeSkills("pane", f.options)).refreshed;
+      expect((await gjcNativeSkills("pane", f.options)).rows).toBeNull();
+    } finally { f.done(); }
+  }
+});
+
+nativeIt("drops a pane's binding and native rows when the pane ends, even from a refresh still running", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({
+    "runtime.capabilities": capabilities(["skill.list/state"]),
+    "skill.list/state": skillList([{ name: "review" }]),
+  });
+  try {
+    await f.prove();
+    const first = (await gjcNativeSkills("pane", f.options));
+    await first.refreshed;
+    expect((await gjcNativeSkills("pane", f.options)).rows?.length).toBe(1);
+    const launches = f.count();
+    forgetGjcPane("pane");
+    for (let i = 0; i < 10; i++) expect((await gjcNativeSkills("pane", f.options))).toEqual({ rows: null });
+    expect(f.count()).toBe(launches);
+
+    // a refresh running when the pane ends stores nothing afterwards
+    f.advance(31_000);
+    await f.prove();
+    const running = (await gjcNativeSkills("pane", f.options));
+    expect(running.refreshed).toBeDefined();
+    forgetGjcPane("pane");
+    await running.refreshed;
+    expect((await gjcNativeSkills("pane", f.options))).toEqual({ rows: null });
+  } finally { f.done(); }
+});
+
+nativeIt("a lookup still running when its pane ends publishes no binding", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({ "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "old" }]) });
+  try {
+    const { release, waiting } = f.block();
+    const lookup = f.prove();
+    await waiting;
+    forgetGjcPane("pane");
+    release();
+    await lookup;
+    for (let i = 0; i < 10; i++) expect((await gjcNativeSkills("pane", f.options))).toEqual({ rows: null });
+    expect(f.count()).toBe(0);
+  } finally { f.done(); }
+});
+
+nativeIt("an older lookup never overwrites the binding of a reused pane id", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({});
+  try {
+    const old = f.session("old-session", { "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "old" }]) });
+    const fresh = f.session("new-session", { "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "new" }]) });
+    f.hold(old);
+    const { release, waiting } = f.block();
+    const stale = f.prove();
+    await waiting;
+    forgetGjcPane("pane");
+    f.hold(fresh);
+    await f.prove(); // the reused pane id gets its own binding while the old lookup waits
+    release();
+    await stale;
+    await (await gjcNativeSkills("pane", f.options)).refreshed;
+    expect((await gjcNativeSkills("pane", f.options)).rows?.map(({ name }) => name)).toEqual(["skill:new"]);
+  } finally { f.done(); }
+});
+
+const deferred = () => { let resolve!: () => void; const promise = new Promise<void>((done) => { resolve = done; }); return { promise, resolve }; };
+
+/** Lookups whose SDK answers wait for the test: `answers[n]` is what the n-th SDK call returns once `release(n)` runs. */
+function gatedLookups(f: ReturnType<typeof nativeFixture>, answers: (() => unknown)[]) {
+  const started = answers.map(deferred), gates = answers.map(deferred);
+  let calls = 0;
+  const options = {
+    platform: "linux",
+    processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 200, argv: ["/usr/bin/gjc"] }] } }),
+    processBirth: () => 1000,
+    sdkTranscript: async () => { const n = calls++; started[n]!.resolve(); await gates[n]!.promise; return answers[n]!() as never; },
+    generationCurrent: async () => true,
+  };
+  return {
+    options, calls: () => calls,
+    start: (purpose: "chat" | "status") => gjcTranscriptForPane("pane", f.cwd, f.home, { ...options, purpose }),
+    started: (n: number) => started[n]!.promise, release: (n: number) => gates[n]!.resolve(),
+    read: () => gjcTranscriptForPane("pane", f.cwd, f.home, { ...options, purpose: "chat" }),
+  };
+}
+
+nativeIt("the newest of two overlapping lookups of a pane wins, whichever finishes last", async () => {
+  for (const order of [[1, 0], [0, 1]] as const) {
+    forgetTranscriptState();
+    const f = nativeFixture({});
+    try {
+      const old = f.session("old-session", {}), fresh = f.session("new-session", {});
+      const l = gatedLookups(f, [() => old, () => fresh]);
+      const status = l.start("status");
+      await l.started(0);
+      const chat = l.start("chat");
+      await l.started(1);
+      for (const n of order) { l.release(n); await (n === 0 ? status : chat); }
+      expect(await l.read()).toBe(fresh.path);
+      expect(l.calls()).toBe(2); // the newer binding was kept, no third lookup
+    } finally { f.done(); }
+  }
+});
+
+nativeIt("a lookup released after a global reset restores nothing, whether it succeeded or timed out", async () => {
+  for (const outcome of ["success", "timeout"] as const) {
+    forgetTranscriptState();
+    const f = nativeFixture({});
+    try {
+      const session = f.session("old-session", {});
+      const l = gatedLookups(f, [() => { if (outcome === "timeout") throw new GjcSdkLookupError("timeout"); return session; }]);
+      const lookup = l.start("status");
+      await l.started(0);
+      forgetGjcState();
+      l.release(0);
+      await lookup.catch(() => null);
+      expect(gjcRetainedEntries()).toBe(0);
+      expect((await gjcNativeSkills("pane", f.options))).toEqual({ rows: null });
+      expect(f.count()).toBe(0);
+    } finally { f.done(); }
+  }
+});
+
+nativeIt("keeps nothing about ended panes that never ran gjc", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({});
+  try {
+    const shell = { processInfo: async () => ({ process_info: { foreground_processes: [{ pid: 300, argv: ["/bin/zsh"] }] } }), processBirth: () => 1000, platform: "linux" };
+    for (let i = 0; i < 40; i++) {
+      await gjcTranscriptForPane(`shell-${i}`, f.cwd, f.home, shell);
+      forgetGjcPane(`shell-${i}`);
+    }
+    expect(gjcRetainedEntries()).toBe(0);
+  } finally { f.done(); }
+});
+
+nativeIt("a cancelled lookup never deletes a newer cached failure", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({});
+  try {
+    let pid = 200, mode: "timeout" | "null" = "timeout", sdkCalls = 0;
+    const held = deferred(), reached = deferred();
+    let hold = true;
+    const options = {
+      platform: "linux", purpose: "status" as const,
+      processInfo: async () => {
+        const mine = pid; // the pid this read saw, whenever it answers
+        if (hold) { hold = false; reached.resolve(); await held.promise; }
+        return { process_info: { foreground_processes: [{ pid: mine, argv: ["/usr/bin/gjc"] }] } };
+      },
+      processBirth: () => 1000,
+      sdkTranscript: async () => { sdkCalls += 1; if (mode === "timeout") throw new GjcSdkLookupError("timeout"); return null; },
+    };
+    const read = () => gjcTranscriptForPane("pane", f.cwd, f.home, options);
+    const old = read().catch(() => null); // sees pid 200 and waits
+    await reached.promise;
+    forgetGjcState();
+    pid = 201;
+    await read().then(() => { throw new Error("expected a timeout"); }, (error) => expect(error).toBeInstanceOf(GjcSdkLookupError));
+    expect(sdkCalls).toBe(1);
+    mode = "null";
+    held.resolve();
+    await old; // finds the newer failure, differs from it and must leave it alone
+    const calls = sdkCalls;
+    await read().then(() => { throw new Error("expected the cached timeout"); }, (error) => expect(error).toBeInstanceOf(GjcSdkLookupError));
+    expect(sdkCalls).toBe(calls);
+  } finally { f.done(); }
+});
+
+nativeIt("keeps native rows while a binding is momentarily absent during a reproof of the same session", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({ "runtime.capabilities": capabilities(["skill.list/state"]), "skill.list/state": skillList([{ name: "review" }]) });
+  try {
+    await f.prove();
+    await (await gjcNativeSkills("pane", f.options)).refreshed;
+    expect(f.count()).toBe(2);
+    // the index changes, so the next lookup asks the broker again and drops the kept binding first
+    appendFileSync(join(f.home, ".gjc", "agent", "sdk", "sessions", "index.jsonl"), JSON.stringify({ type: "host_unregistered", sessionId: "native-session", pid: 200 }) + "\n");
+    const { release, waiting } = f.block();
+    const reproof = f.prove();
+    await waiting;
+    expect((await gjcNativeSkills("pane", f.options))).toEqual({ rows: null });
+    release();
+    await reproof;
+    expect((await gjcNativeSkills("pane", f.options)).rows?.map(({ name }) => name)).toEqual(["skill:review"]);
+    expect(f.count()).toBe(2); // the same period: no second refresh
+  } finally { f.done(); }
+});
+
+/** One pane proving sessions under two cwds: the fake broker answers by the cwd the lookup asked about. */
+function twoCwds() {
+  const f = nativeFixture({});
+  const root = join(f.home, ".gjc", "agent", "sessions", "v2-project");
+  const answer = (id: string, name: string, cwd: string) => {
+    const file = join(root, `${id}.jsonl`);
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(file, JSON.stringify({ type: "session", id, cwd }) + "\n");
+    for (const [query, body] of [["runtime.capabilities", capabilities(["skill.list/state"])], ["skill.list/state", skillList([{ name }])]] as const) {
+      writeFileSync(join(f.home, "answers", `${id}.${query.replace("/", "_")}.json`), body);
+    }
+    return { sessionId: id, pid: 200, path: realpathSync(file), hostIncarnation: "host", endpointGeneration: 1, guardSessionIds: [id] };
+  };
+  const cwdA = join(f.home, "work-a"), cwdB = join(f.home, "work-b");
+  const bindings: Record<string, ReturnType<typeof answer> | null> = { [cwdA]: answer("old-a", "old", cwdA), [cwdB]: answer("new-b", "new", cwdB) };
+  // a lookup for `cwd` can be held in its SDK call, or at the process read that follows it (its final identity check)
+  const timeouts = new Set<string>();
+  const held = { sdk: null as null | { cwd: string; reached: () => void; gate: Promise<void> }, final: null as null | { reached: () => void; gate: Promise<void> }, armFinal: null as null | string };
+  const options = {
+    platform: "linux",
+    processInfo: async () => {
+      const hold = held.final;
+      if (hold && held.armFinal === "taken") { held.final = null; hold.reached(); await hold.gate; }
+      return { process_info: { foreground_processes: [{ pid: 200, argv: ["/usr/bin/gjc"] }] } };
+    },
+    processBirth: () => 1000,
+    sdkTranscript: async (_pids: readonly number[], cwd: string) => {
+      const real = realpathSync(cwd);
+      if (timeouts.has(real)) throw new GjcSdkLookupError("timeout");
+      if (held.sdk && held.sdk.cwd === real) { const hold = held.sdk; held.sdk = null; hold.reached(); await hold.gate; }
+      if (held.final && held.armFinal === real) held.armFinal = "taken";
+      return bindings[real] ?? null;
+    },
+    generationCurrent: async () => true,
+  };
+  const hold = (where: "sdk" | "final", cwd: string) => {
+    let release!: () => void, reached!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const waiting = new Promise<void>((resolve) => { reached = resolve; });
+    if (where === "sdk") held.sdk = { cwd, reached, gate };
+    else { held.final = { reached, gate }; held.armFinal = cwd; }
+    return { release, waiting };
+  };
+  return {
+    f, cwdA: realpathSync(cwdA), cwdB: realpathSync(cwdB), bindings, hold, timeouts,
+    prove: (cwd: string) => gjcTranscriptForPane("pane", cwd, f.home, options),
+    index: (sessionId: string) => appendFileSync(join(f.home, ".gjc", "agent", "sdk", "sessions", "index.jsonl"), JSON.stringify({ type: "host_unregistered", sessionId, pid: 200 }) + "\n"),
+  };
+}
+
+nativeIt("serves the session of the pane's most recent proof, even under another cwd", async () => {
+  forgetTranscriptState();
+  const t = twoCwds();
+  try {
+    await t.prove(t.cwdA);
+    await t.prove(t.cwdB);
+    const served = (await gjcNativeSkills("pane", t.f.options));
+    await served.refreshed;
+    expect((await gjcNativeSkills("pane", t.f.options)).rows?.map(({ name }) => name)).toEqual(["skill:new"]);
+  } finally { t.f.done(); }
+});
+
+nativeIt("never falls back to an older proof of the pane when the newest one is null", async () => {
+  forgetTranscriptState();
+  const t = twoCwds();
+  try {
+    await t.prove(t.cwdA);
+    await t.prove(t.cwdB);
+    await (await gjcNativeSkills("pane", t.f.options)).refreshed;
+    const launches = t.f.count();
+    // the index changes, so B is proven again, and the broker no longer names a session for it
+    t.index("new-b");
+    t.bindings[t.cwdB] = null;
+    expect(await t.prove(t.cwdB)).toBeNull();
+    for (let i = 0; i < 5; i++) expect((await gjcNativeSkills("pane", t.f.options))).toEqual({ rows: null });
+    expect(t.f.count()).toBe(launches); // old-a is never queried
+  } finally { t.f.done(); }
+});
+
+nativeIt("a slow chat lookup still publishes its binding when a status lookup replaying a cached failure settles first", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({});
+  try {
+    const session = f.session("slow-session", {});
+    const l = gatedLookups(f, [() => { throw new GjcSdkLookupError("timeout"); }, () => session]);
+    const first = l.start("status");
+    await l.started(0);
+    l.release(0);
+    await first.then(() => { throw new Error("expected a timeout"); }, (error) => expect(error).toBeInstanceOf(GjcSdkLookupError));
+    const chat = l.start("chat");
+    await l.started(1); // the chat proof is waiting on a slow broker
+    // the newer status lookup only replays the cached failure and settles first: it must not overtake the chat proof
+    await l.start("status").then(() => { throw new Error("expected the cached timeout"); }, (error) => expect(error).toBeInstanceOf(GjcSdkLookupError));
+    expect(l.calls()).toBe(2); // replayed from the cache, no SDK call
+    l.release(1);
+    expect(await chat).toBe(session.path);
+    expect(await l.read()).toBe(session.path);
+    expect(l.calls()).toBe(2); // the chat binding was kept
+  } finally { f.done(); }
+});
+
+for (const where of ["sdk", "final"] as const) {
+  for (const newer of ["fresh", "null"] as const) {
+    nativeIt(`an old lookup held ${where === "sdk" ? "in its SDK call" : "at its final process read"} publishes nothing once a newer lookup of the pane settled (${newer} proof)`, async () => {
+      forgetTranscriptState();
+      const t = twoCwds();
+      try {
+        if (newer === "null") await t.prove(t.cwdB); // an earlier proof of B, then B is reproved and the broker names nothing
+        const held = t.hold(where, t.cwdA);
+        const old = t.prove(t.cwdA);
+        await held.waiting;
+        if (newer === "null") { t.index("new-b"); t.bindings[t.cwdB] = null; }
+        expect(await t.prove(t.cwdB)).toBe(newer === "null" ? null : t.bindings[t.cwdB]?.path ?? null);
+        const launches = t.f.count();
+        held.release();
+        await old;
+        const served = (await gjcNativeSkills("pane", t.f.options));
+        if (newer === "null") {
+          for (let i = 0; i < 5; i++) expect((await gjcNativeSkills("pane", t.f.options))).toEqual({ rows: null });
+          expect(t.f.count()).toBe(launches); // old-a is never queried
+        } else {
+          await served.refreshed;
+          expect((await gjcNativeSkills("pane", t.f.options)).rows?.map(({ name }) => name)).toEqual(["skill:new"]);
+        }
+      } finally { t.f.done(); }
+    });
+  }
+}
+
+nativeIt("an older slow chat lookup still publishes when a newer status lookup of its own key times out fresh", async () => {
+  forgetTranscriptState();
+  const f = nativeFixture({});
+  try {
+    const session = f.session("slow-session", {});
+    const l = gatedLookups(f, [() => session, () => { throw new GjcSdkLookupError("timeout"); }]);
+    const chat = l.start("chat");
+    await l.started(0); // the chat proof waits on a slow broker
+    const status = l.start("status").then(() => { throw new Error("expected a timeout"); }, (error) => expect(error).toBeInstanceOf(GjcSdkLookupError));
+    await l.started(1);
+    l.release(1);
+    await status; // a fresh failure, settled after the older chat lookup started
+    l.release(0);
+    expect(await chat).toBe(session.path);
+    expect(await l.read()).toBe(session.path);
+    expect(l.calls()).toBe(2); // the chat binding was kept
+  } finally { f.done(); }
+});
+
+nativeIt("a fresh timeout under another cwd still stops an older lookup of the pane from publishing", async () => {
+  forgetTranscriptState();
+  const t = twoCwds();
+  try {
+    const held = t.hold("sdk", t.cwdA);
+    const old = t.prove(t.cwdA);
+    await held.waiting;
+    t.timeouts.add(t.cwdB);
+    await t.prove(t.cwdB).then(() => { throw new Error("expected a timeout"); }, (error) => expect(error).toBeInstanceOf(GjcSdkLookupError));
+    const launches = t.f.count();
+    held.release();
+    await old;
+    for (let i = 0; i < 5; i++) expect((await gjcNativeSkills("pane", t.f.options))).toEqual({ rows: null });
+    expect(t.f.count()).toBe(launches); // old-a is never queried
+  } finally { t.f.done(); }
 });

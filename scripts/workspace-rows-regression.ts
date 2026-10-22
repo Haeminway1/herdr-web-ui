@@ -75,7 +75,7 @@ try {
   // any of those silently target the user's current socket.
   assert.notEqual(process.env.HERDR_TEST_LIVE, "1", "Live-session mode is forbidden");
   assert.notEqual(process.env.HERDR_TEST_MODE, "unit", "This regression requires isolated herdr");
-  process.env.HERDR_TEST_SESSION ||= "herdr-web-ui-test";
+  process.env.HERDR_TEST_SESSION ||= "ovis-test";
   const { testSocketPath } = await import("./test-herdr.ts");
   assert.equal(process.env.HERDR_SOCKET, testSocketPath(), "test-herdr must select its isolated socket");
 
@@ -215,7 +215,7 @@ try {
   const workspaceMenu = page.getByRole("menu");
   await workspaceMenu.waitFor();
   const workspaceActions = await workspaceMenu.getByRole("menuitem").allTextContents();
-  assert.deepEqual(workspaceActions, ["Pin workspace", "Rename workspace", "Close workspace"],
+  assert.deepEqual(workspaceActions, ["Pin workspace", "Rename workspace", "Earlier sessions…", "Close workspace"],
     "a non-Git workspace's keyboard menu contains only native workspace actions");
   assert.equal(await page.locator(paneSelector(split.pane.pane_id)).getAttribute("aria-current"), "true",
     "opening another workspace's keyboard menu keeps the active pane");

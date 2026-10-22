@@ -1,7 +1,7 @@
-# herdr web ui
+# Ovis
 
 <p align="center">
-  <img src="public/icons/icon-192.png" alt="herdr web ui" width="100">
+  <img src="public/icons/icon-192.png" alt="Ovis" width="100">
 </p>
 
 <p align="center">
@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="https://herdrweb.dev/">官网</a> ·
+  <a href="https://ovis.sh/">官网</a> ·
   <a href="#install">安装</a> ·
-  <a href="https://herdrweb.dev/demo/">体验演示</a> ·
+  <a href="https://ovis.sh/demo/">体验演示</a> ·
   <a href="docs/guide.md#quick-start">快速入门</a> ·
   <a href="#faq">常见问题</a> ·
   <a href="#docs">文档</a>
@@ -91,7 +91,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 ## 安装
 
 ```bash
-curl -fsSL https://herdrweb.dev/install.sh | sh
+curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
 支持基于 glibc 的 Linux（x64、arm64）和 macOS（Intel、Apple Silicon）；不支持 Alpine/musl 或 32 位 ARM。需预先安装 `curl`、Git 和 `tar`；如果没有 Bun，还需要 Bash 和 `unzip`。所需版本为 herdr 0.9.0+、Bun 1.4+ 和 Node 18+。安装程序为当前用户安装缺少的工具、升级旧版 Bun，并在 Node 缺失或低于 18 时安装 Node 22，然后将应用安装为 herdr 插件。如果已安装的 herdr 低于 0.9.0，请先自行更新并重启 herdr，再重新运行安装程序。
@@ -101,7 +101,7 @@ curl -fsSL https://herdrweb.dev/install.sh | sh
 Windows x64 请在 PowerShell 中运行：
 
 ```powershell
-irm https://herdrweb.dev/install.ps1 | iex
+irm https://ovis.sh/install.ps1 | iex
 ```
 
 需要 [Git for Windows](https://git-scm.com/download/win)。安装程序会为当前用户补齐 herdr 和 Bun，然后安装同一个插件，无需 Node 或 WSL。要在手机上使用，请在 herdr 中打开 **Phone setup**。在 herdr 支持 Windows 终端附加之前，Windows 上的终端是一个可以输入、网格固定的[屏幕镜像](docs/remote-pcs.md#windows-pcs)。
@@ -118,7 +118,7 @@ herdr plugin install devswha/herdr-web-ui
 
 旧版 herdr 必须先更新并重启。[INSTALL.md](INSTALL.md) 说明了各步操作及失败时的处理方法。
 
-在 herdr 运行时，使用安装程序打印或打开的地址，通常是 **[127.0.0.1:7317](http://127.0.0.1:7317)**；默认端口被占用时，插件会选择并记住其他端口。如果只安装了插件，请在 herdr 中运行 **Start herdr web ui**。首次安装到有桌面环境的电脑时，安装程序会自动打开浏览器；点击地址栏中的 **Install（安装）** 即可添加应用。安装后的应用属于这个确切地址，请继续使用同一地址，不要在 `127.0.0.1` 和 `localhost` 之间切换。安装前设置 `HERDR_WEB_NO_OPEN=1` 可跳过自动打开浏览器。选择一个窗格，或点击 **New workspace（新建工作区）** 启动智能体。在手机上使用时，扫描安装程序的二维码（也可从 herdr 的 **Phone setup** 查看），并将应用添加到主屏幕。[快速入门 →](docs/guide.md#quick-start)
+在 herdr 运行时，使用安装程序打印或打开的地址，通常是 **[127.0.0.1:7317](http://127.0.0.1:7317)**；默认端口被占用时，插件会选择并记住其他端口。如果只安装了插件，请在 herdr 中运行 **Start Ovis**。首次安装到有桌面环境的电脑时，安装程序会自动打开浏览器；点击地址栏中的 **Install（安装）** 即可添加应用。安装后的应用属于这个确切地址，请继续使用同一地址，不要在 `127.0.0.1` 和 `localhost` 之间切换。安装前设置 `HERDR_WEB_NO_OPEN=1` 可跳过自动打开浏览器。选择一个窗格，或点击 **New workspace（新建工作区）** 启动智能体。在手机上使用时，扫描安装程序的二维码（也可从 herdr 的 **Phone setup** 查看），并将应用添加到主屏幕。[快速入门 →](docs/guide.md#quick-start)
 
 服务器默认监听 `127.0.0.1`。如需从其他设备访问，请参阅[手机设置](docs/guide.md#on-your-phone)和[访问与安全](docs/guide.md#access-and-safety)。
 

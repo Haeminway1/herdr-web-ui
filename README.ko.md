@@ -1,7 +1,7 @@
-# herdr web ui
+# Ovis
 
 <p align="center">
-  <img src="public/icons/icon-192.png" alt="herdr web ui" width="100">
+  <img src="public/icons/icon-192.png" alt="Ovis" width="100">
 </p>
 
 <p align="center">
@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="https://herdrweb.dev/">웹사이트</a> ·
+  <a href="https://ovis.sh/">웹사이트</a> ·
   <a href="#install">설치</a> ·
-  <a href="https://herdrweb.dev/demo/">데모 체험</a> ·
+  <a href="https://ovis.sh/demo/">데모 체험</a> ·
   <a href="docs/guide.md#quick-start">빠른 시작</a> ·
   <a href="#faq">자주 묻는 질문</a> ·
   <a href="#docs">문서</a>
@@ -91,7 +91,7 @@ https://github.com/user-attachments/assets/d854dbb6-64bd-4eba-81c7-fbd3f525726b
 ## 설치
 
 ```bash
-curl -fsSL https://herdrweb.dev/install.sh | sh
+curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
 glibc 기반 Linux(x64, arm64)와 macOS(Intel, Apple Silicon)를 지원하며, Alpine(musl)과 32비트 ARM은 지원하지 않습니다. `curl`, Git, `tar`가 필요하며 Bun이 없다면 Bash와 `unzip`도 필요합니다. herdr 0.9.0 이상, Bun 1.4 이상, Node 18 이상이 필요합니다. 없는 도구는 현재 사용자 계정에 설치하고, 오래된 Bun은 업데이트하며, Node가 없거나 18보다 오래됐다면 Node 22를 설치한 뒤 앱을 herdr 플러그인으로 설치합니다. 이미 설치된 herdr가 0.9.0보다 오래됐다면 herdr를 직접 업데이트하고 다시 시작한 다음 설치 스크립트를 다시 실행하세요.
@@ -101,7 +101,7 @@ glibc 기반 Linux(x64, arm64)와 macOS(Intel, Apple Silicon)를 지원하며, A
 PowerShell에서 Windows x64용으로 설치하려면:
 
 ```powershell
-irm https://herdrweb.dev/install.ps1 | iex
+irm https://ovis.sh/install.ps1 | iex
 ```
 
 [Git for Windows](https://git-scm.com/download/win)가 필요합니다. 없는 herdr와 Bun을 현재 사용자 계정에 설치한 뒤 같은 플러그인을 설치합니다. Node나 WSL은 필요 없습니다. 폰에서 쓰려면 herdr에서 **Phone setup**을 여세요. herdr가 Windows에서 터미널 attach를 지원하기 전까지 Windows 터미널은 입력은 되고 격자 크기는 고정된 [화면 미러](docs/remote-pcs.md#windows-pcs)로 보입니다.
@@ -118,7 +118,7 @@ herdr plugin install devswha/herdr-web-ui
 
 오래된 herdr는 먼저 업데이트하고 다시 시작해야 합니다. 단계별 설치와 문제 해결은 [INSTALL.md](INSTALL.md)를 보세요.
 
-herdr가 실행 중이면 설치 스크립트가 출력하거나 열어 준 주소로 접속하세요. 기본 주소는 **[127.0.0.1:7317](http://127.0.0.1:7317)**이며, 기본 포트가 사용 중이면 플러그인이 다른 포트를 골라 기억합니다. 플러그인만 설치했다면 herdr의 **Start herdr web ui**를 실행하세요. 데스크톱이 있는 PC의 새 설치에서는 브라우저가 자동으로 열립니다. 주소 표시줄의 **설치(Install)**로 앱을 추가하고 같은 주소를 계속 쓰세요. `127.0.0.1`과 `localhost`는 브라우저에서 서로 다른 앱 주소입니다. 자동 열기를 건너뛰려면 설치 전에 `HERDR_WEB_NO_OPEN=1`을 설정하세요. pane을 고르거나 **New workspace**로 에이전트를 시작합니다. 폰에서는 설치 스크립트의 QR 코드(herdr의 **Phone setup**에서도 확인 가능)를 찍고 앱을 홈 화면에 추가하세요. [빠른 시작 →](docs/guide.md#quick-start)
+herdr가 실행 중이면 설치 스크립트가 출력하거나 열어 준 주소로 접속하세요. 기본 주소는 **[127.0.0.1:7317](http://127.0.0.1:7317)**이며, 기본 포트가 사용 중이면 플러그인이 다른 포트를 골라 기억합니다. 플러그인만 설치했다면 herdr의 **Start Ovis**를 실행하세요. 데스크톱이 있는 PC의 새 설치에서는 브라우저가 자동으로 열립니다. 주소 표시줄의 **설치(Install)**로 앱을 추가하고 같은 주소를 계속 쓰세요. `127.0.0.1`과 `localhost`는 브라우저에서 서로 다른 앱 주소입니다. 자동 열기를 건너뛰려면 설치 전에 `HERDR_WEB_NO_OPEN=1`을 설정하세요. pane을 고르거나 **New workspace**로 에이전트를 시작합니다. 폰에서는 설치 스크립트의 QR 코드(herdr의 **Phone setup**에서도 확인 가능)를 찍고 앱을 홈 화면에 추가하세요. [빠른 시작 →](docs/guide.md#quick-start)
 
 서버는 기본적으로 `127.0.0.1`에서만 받습니다. 다른 기기에서 접속하려면 [폰 설정](docs/guide.md#on-your-phone)과 [접근과 보안](docs/guide.md#access-and-safety)을 보세요.
 

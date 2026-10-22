@@ -1,7 +1,9 @@
-# herdr web ui
+# Ovis
+
+Ovis, the browser and phone client for herdr.
 
 <p align="center">
-  <img src="public/icons/icon-192.png" alt="herdr web ui" width="100">
+  <img src="public/icons/icon-192.png" alt="Ovis" width="100">
 </p>
 
 <p align="center">
@@ -9,9 +11,9 @@
 </p>
 
 <p align="center">
-  <a href="https://herdrweb.dev/">website</a> ·
+  <a href="https://ovis.sh/">website</a> ·
   <a href="#install">install</a> ·
-  <a href="https://herdrweb.dev/demo/">try the demo</a> ·
+  <a href="https://ovis.sh/demo/">try the demo</a> ·
   <a href="docs/guide.md#quick-start">quick start</a> ·
   <a href="#faq">faq</a> ·
   <a href="#docs">docs</a>
@@ -89,7 +91,7 @@ A browser and phone client for [herdr](https://github.com/herdrdev/herdr). Read 
 ## install
 
 ```bash
-curl -fsSL https://herdrweb.dev/install.sh | sh
+curl -fsSL https://ovis.sh/install.sh | sh
 ```
 
 Linux with glibc (x64, arm64) or macOS (Intel, Apple Silicon); not Alpine/musl or 32-bit ARM. Have `curl`, Git and `tar` installed; installing a missing Bun also needs Bash and `unzip`. Requires herdr 0.9.0+, Bun 1.4+ and Node 18+. The installer adds missing prerequisites for your user, upgrades an older Bun and installs Node 22 if Node is missing or older than 18, then installs the app as a herdr plugin. If an existing herdr installation is older than 0.9.0, update and restart herdr yourself before rerunning the installer.
@@ -99,7 +101,7 @@ With the default listen address and Tailscale running, successful HTTPS setup pr
 Windows x64, in PowerShell:
 
 ```powershell
-irm https://herdrweb.dev/install.ps1 | iex
+irm https://ovis.sh/install.ps1 | iex
 ```
 
 Requires [Git for Windows](https://git-scm.com/download/win). Installs missing herdr and Bun for your user, then installs the same plugin. No Node or WSL is needed. Open **Phone setup** in herdr for phone access. Windows terminals use the [screen mirror](docs/remote-pcs.md#windows-pcs), with typing and a fixed grid, until herdr supports terminal attach there.
@@ -116,7 +118,7 @@ herdr plugin install devswha/herdr-web-ui
 
 An older herdr has to be updated and restarted first. [INSTALL.md](INSTALL.md) walks through each step and what to do when one fails.
 
-With herdr running, use the address the installer prints or opens, normally **[127.0.0.1:7317](http://127.0.0.1:7317)**; the plugin can choose and remember another port if that one is busy. On a plugin-only install, run herdr's **Start herdr web ui** action. On a new install on a PC with a desktop, the installer opens the address in your browser for you; click **Install** in the address bar to add the app. The installed app belongs to that exact address, so keep using it rather than switching between `127.0.0.1` and `localhost`. Set `HERDR_WEB_NO_OPEN=1` before running the installer to skip opening the browser. Pick a pane or start an agent with **New workspace**. To use your phone, scan the installer's QR code (also available from herdr's **Phone setup**) and add the app to your home screen. [Quick start →](docs/guide.md#quick-start)
+With herdr running, use the address the installer prints or opens, normally **[127.0.0.1:7317](http://127.0.0.1:7317)**; the plugin can choose and remember another port if that one is busy. On a plugin-only install, run herdr's **Start Ovis** action. On a new install on a PC with a desktop, the installer opens the address in your browser for you; click **Install** in the address bar to add the app. The installed app belongs to that exact address, so keep using it rather than switching between `127.0.0.1` and `localhost`. Set `HERDR_WEB_NO_OPEN=1` before running the installer to skip opening the browser. Pick a pane or start an agent with **New workspace**. To use your phone, scan the installer's QR code (also available from herdr's **Phone setup**) and add the app to your home screen. [Quick start →](docs/guide.md#quick-start)
 
 The server listens on `127.0.0.1` by default. For access from another device, see [phone setup](docs/guide.md#on-your-phone) and [access and safety](docs/guide.md#access-and-safety).
 

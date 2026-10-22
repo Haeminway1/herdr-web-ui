@@ -70,10 +70,10 @@ bun run test:unit
 (`CHROME_PATH`, default `/opt/google/chrome/chrome`):
 
 ```bash
-bun run test:integration   # runs the files 4 at a time on `herdr-web-ui-test-1` to `-4`, which it
+bun run test:integration   # runs the files 4 at a time on `ovis-test-1` to `-4`, which it
                            # stops itself; HERDR_TEST_SHARDS=1 runs them one by one on `-1`
-bun run test:ui            # builds, then browser regression on `herdr-web-ui-test`; stop it with
-                           # herdr --session herdr-web-ui-test server stop
+bun run test:ui            # builds, then browser regression on `ovis-test`; stop it with
+                           # herdr --session ovis-test server stop
 ```
 
 `bun test` runs the unit and integration suites together. Remote-PC changes also have
@@ -104,7 +104,7 @@ running terminals: see [development](docs/development.md#checks).
   and a reason, including repairs the proposal tool already applied. Every
   entry has to pass the AA contrast test on the committed hex. Then run `bun run generate:themes`;
   never edit `src/lib/themes.generated.ts` or the other generated copies.
-- **The browser demo:** the [demo](https://herdrweb.dev/demo/) redeploys on every
+- **The browser demo:** the [demo](https://ovis.sh/demo/) redeploys on every
   merge to `main`. A feature meant to show there needs an answer in `site/demo/transport.ts`; anything
   else gets its 404.
 - **Changelog:** a change users notice gets a small file in [changelog.d/](changelog.d/README.md)
