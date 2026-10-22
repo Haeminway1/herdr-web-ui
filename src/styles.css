@@ -1,5 +1,5 @@
 /*
- * Shell layout + shared primitives for herdr web ui.
+ * Shell layout + shared primitives for Ovis.
  *
  * Every color, size and space is a :root token; DESIGN.md is the human-readable
  * mirror of this block and the two must not drift. Dark is the default theme and
@@ -1773,11 +1773,6 @@ button {
   height: var(--mark-size);
 }
 
-.brand-sub {
-  color: var(--text-dim);
-  font-weight: var(--fw-medium);
-}
-
 /* The selected pane on one line: mark and title, then PC › workspace › folder. The title may
    shorten; the crumb may not: when it does not fit whole beside a whole title it wraps to a second
    line that the height clips, so it is all there or gone, and the title has the row. The full
@@ -2736,6 +2731,7 @@ button {
 
   .pill-version,
   .pill-offline,
+  .pill-stale,
   .brand-name,
   .palette-button,
   .header-desktop-only {
@@ -2759,14 +2755,18 @@ button {
 
   .app-header .view-switch > button {
     position: relative;
+    /* the drawn height: the density's segmented option (--control-h less the track's inset), so
+       the track keeps clear of the bar in the compact density's 46px header as in the 52px one;
+       the expander below grows it to the tap height */
+    --lens-h: calc(var(--control-h) - var(--segmented-inset));
     min-width: var(--touch-target-header);
-    height: 34px;
+    height: var(--lens-h);
   }
 
   .app-header .view-switch > button::before {
     content: "";
     position: absolute;
-    inset: calc((34px - var(--touch-target-header)) / 2) 0;
+    inset: calc((var(--lens-h) - var(--touch-target-header)) / 2) 0;
   }
 }
 
