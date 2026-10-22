@@ -4,10 +4,12 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, st
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
-import { ConversationUnavailable, conversationForPane as readConversation, HistoryChanged, resolveTranscript as readTranscript } from "./conversation.ts";
+import { ConversationUnavailable, conversationForPane as readConversation, HistoryChanged, readCommandTranscript, resolveTranscript as readTranscript } from "./conversation.ts";
+import * as client from "./herdr/client.ts";
 import { labelManagedPanes as projectPanes, resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
-import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
+import { gjcSdkCurrentSessionWithRunner, type GjcSdkCommandRunner, type GjcSdkSessionIdentity } from "./gjc-sdk.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
+import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 import { createGjcStatus, gjcPanes as discoverGjc } from "./gjc-status.ts";
 import { omoPanes, omoSessionForPane } from "./omo.ts";
 
@@ -80,7 +82,155 @@ it("projects both panes and agents without converting identity ready into engine
   expect(JSON.stringify(result.panes[0]?.managed_session)).not.toContain("session_file");
 });
 
-it.each([new Error("private GJC SDK exception"), "private GJC SDK rejection"] as const)("isolates a managed SDK rejection to its pane", async rejection => {
+it.each(["ENOENT", "EACCES", "EPERM", "BROKER", "EPIPE", "ECONNREFUSED", "ETIMEDOUT"].flatMap(code => [
+  { code, savedSession: null },
+  { code, savedSession: { id: sessionId } },
+  { code, savedSession: { id: sessionId, path: "" } },
+  { code, savedSession: { id: sessionId, path: "relative.jsonl" } },
+  { code, savedSession: { id: "wrong-session", path: "/untrusted/saved.jsonl" } },
+]))("keeps live managed identity independent of saved metadata during cached generation %j failures", async ({ code, savedSession }) => {
+  let starts = 0, unavailable = false, current = true, observations = 0;
+  const runner: GjcSdkCommandRunner = async () => {
+    starts += 1;
+    return JSON.stringify({ type: "broker_response", ok: true, result: {
+      indexSeq: 1, savedSession, sessions: [{
+        sessionId, pid: 42, hostIncarnation: "linux:123", endpointGeneration: 1,
+        locator: { cwd: root, worktreeRoot: root, stateRoot: join(root, ".gjc", "state") },
+        identityProvenance: "composite", terminalUncertain: false, ambiguous: false, terminal: false, live: true,
+      }],
+    } });
+  };
+  const sdkDeps: ManagedSessionDeps = { ...deps, gjcSession: (pids, cwd, agentDir) =>
+    gjcSdkCurrentSessionWithRunner(pids, cwd, agentDir, runner, async () => root, () => 0,
+      (directory, id, generation) => gjcSdkGenerationCurrent(directory, id, generation, {
+        generationStatus: async (session, endpoint) => {
+          observations += 1;
+          expect([session, endpoint]).toEqual([sessionId, 1]);
+          if (unavailable) throw Object.assign(new Error(`private SDK evidence ${sessionFile}`), { code });
+          return { status: current ? "current" : "retired" };
+        },
+      })),
+  };
+  const resolve = () => resolveManagedSession(pane, namespace, sdkDeps);
+  expect(await resolve()).toMatchObject({ identity: { state: "ready", session_id: sessionId }, sessionFile });
+  unavailable = true;
+  const reason = code === "ETIMEDOUT" ? "timeout" : "unavailable";
+  expect(await resolve()).toMatchObject({ identity: { state: "identity_pending" }, lookupError: { reason } });
+  const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  const roster = await projectPanes(snapshot, namespace, sdkDeps);
+  expect(roster.panes[0]).toMatchObject({ agent: "gjc", agent_session: null, managed_session: { state: "identity_pending" } });
+  expect(roster.agents[0]).toMatchObject({ agent: "gjc", agent_session: null });
+  const failure = await readConversation(pane, undefined, undefined, sdkDeps).catch(error => error);
+  expect(failure).toBeInstanceOf(GjcSdkLookupError);
+  expect(failure).toMatchObject({ reason, message: "GJC SDK lookup failed" });
+  expect(JSON.stringify(failure)).not.toContain(root);
+  unavailable = false; current = false;
+  expect(await resolve()).toMatchObject({ identity: { state: "identity_pending" }, sessionFile: null });
+  current = true;
+  expect(await resolve()).toMatchObject({ identity: { state: "ready", session_id: sessionId }, sessionFile });
+  expect(observations).toBe(6);
+  expect(starts).toBe(2);
+});
+
+describe("managed command evidence", () => {
+  let snapshot: ReturnType<typeof spyOn<typeof client, "sessionSnapshot">>;
+  beforeEach(() => {
+    snapshot = spyOn(client, "sessionSnapshot").mockImplementation(async () => ({
+      panes: [pane], agents: [], workspaces: [], tabs: [], layouts: [], protocol: 22, version: "fixture",
+    }));
+  });
+  afterEach(() => snapshot.mockRestore());
+  const read = () => readCommandTranscript(pane.pane_id, undefined, deps);
+
+  it("scopes cached native command records to the managed generation", async () => {
+    fs.appendFileSync(sessionFile, JSON.stringify({ type: "model_change", modelId: "fixture-model" }) + "\n");
+    const first = await read();
+    expect(first?.records.some(({ entry }) => entry.modelId === "fixture-model")).toBe(true);
+    expect(await read()).toBe(first);
+    record.generation = 2; pane.tokens!.hm_managed_generation = "2"; save();
+    const second = await read();
+    expect(second?.identity).not.toBe(first?.identity);
+    expect(second?.identity).toStartWith(`gjc-transcript\0${sessionFile}\0managed-${nonce}-2:`);
+  });
+
+  it("never reads an inode swapped in just for the command-content open", async () => {
+    const replacement = join(String(record.session_dir), "replacement.jsonl");
+    const held = join(String(record.session_dir), "held.jsonl");
+    writeFileSync(replacement, JSON.stringify({ type: "model_change", modelId: "unauthorized" }) + "\n", { mode: 0o600 });
+    const originalOpen = fs.openSync;
+    let opens = 0;
+    let swapped = false;
+    const intercepted = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (String(path) === sessionFile && ++opens === 3) {
+        renameSync(sessionFile, held); renameSync(replacement, sessionFile);
+        try { return Reflect.apply(originalOpen, fs, [path, ...args]); }
+        finally { renameSync(sessionFile, replacement); renameSync(held, sessionFile); swapped = true; }
+      }
+      return Reflect.apply(originalOpen, fs, [path, ...args]);
+    }) as typeof fs.openSync);
+    try {
+      await expect(read()).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      expect(swapped).toBe(true);
+    } finally { intercepted.mockRestore(); }
+    expect((await read())?.records.some(({ entry }) => entry.modelId === "unauthorized")).toBe(false);
+  });
+
+  it.each([false, true])("rechecks managed authority after command evidence, including a cache hit: %s", async cached => {
+    if (cached) await read();
+    let validations = 0;
+    const changedDeps: ManagedSessionDeps = { ...deps, gjcSession: async () => {
+      if (++validations === 2) { record.generation = 2; save(); }
+      return live;
+    } };
+    await expect(readCommandTranscript(pane.pane_id, undefined, changedDeps)).rejects.toMatchObject({
+      name: "ConversationUnavailable", message: "blocked_managed_identity_changed",
+    });
+    expect(validations).toBe(2);
+  });
+
+  it.each([false, true])("withholds command evidence after pane reassignment during the final SDK proof, cached: %s", async cached => {
+    if (cached) await read();
+    const currentPane = structuredClone(pane);
+    let lookups = 0;
+    const changedDeps: ManagedSessionDeps = {
+      ...deps,
+      paneById: async () => structuredClone(currentPane),
+      gjcSession: async () => {
+        if (++lookups === 2) currentPane.tokens!.hm_managed_generation = "2";
+        return live;
+      },
+    };
+    await expect(readCommandTranscript(pane.pane_id, undefined, changedDeps)).rejects.toMatchObject({
+      name: "ConversationUnavailable", message: "blocked_managed_identity_changed",
+    });
+    expect(lookups).toBe(2);
+    expect(record.generation).toBe(1);
+  });
+
+  it.each(["ENOENT", "EACCES", "EIO"])("propagates a command-content %s failure without clearing chat", async code => {
+    const originalOpen = fs.openSync;
+    let opens = 0;
+    const denied = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (String(path) === sessionFile && ++opens === 3) throw Object.assign(new Error(`private ${sessionFile}`), { code });
+      return Reflect.apply(originalOpen, fs, [path, ...args]);
+    }) as typeof fs.openSync);
+    try {
+      const failure = await read().catch(error => error);
+      expect(failure).toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(JSON.stringify(failure)).not.toContain(root);
+    } finally { denied.mockRestore(); }
+    expect((await conversationForPane(pane)).turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+  });
+});
+
+it.each([
+  new Error("private GJC SDK exception"), "private GJC SDK rejection",
+  Object.assign(new Error("private GJC SDK missing"), { code: "ENOENT" }),
+  Object.assign(new Error("private GJC SDK denied"), { code: "EACCES" }),
+  Object.assign(new Error("private GJC SDK broker failed"), { code: "BROKER" }),
+  Object.assign(new Error("private GJC SDK timed out"), { code: "ETIMEDOUT" }),
+  new GjcSdkLookupError("timeout"), new GjcSdkLookupError("unavailable"),
+] as const)("isolates a managed SDK rejection to its pane", async rejection => {
   const failedNonce = "f".repeat(32);
   const failedPane: HerdrPane = {
     ...pane,
@@ -144,8 +294,13 @@ it.each([new Error("private GJC SDK exception"), "private GJC SDK rejection"] as
   expect(projected.agents[1]?.agent_session).toBeNull();
   expect(projected.agents[2]?.agent_session).toEqual(unmanagedPane.agent_session);
   expect(JSON.stringify(projected)).not.toContain("private GJC SDK");
+  const reason = rejection instanceof GjcSdkLookupError ? rejection.reason
+    : rejection instanceof Error && "code" in rejection && rejection.code === "ETIMEDOUT" ? "timeout" : "unavailable";
   expect(await resolveManagedSession(failedPane, namespace, failedDeps)).toMatchObject({
-    identity: { state: "identity_pending" }, lookupError: { reason: "unavailable", message: "GJC SDK lookup failed" },
+    identity: { state: "identity_pending" }, lookupError: { reason, message: "GJC SDK lookup failed" },
+  });
+  await expect(readConversation(failedPane, undefined, undefined, failedDeps)).rejects.toMatchObject({
+    name: "GjcSdkLookupError", reason, message: "GJC SDK lookup failed",
   });
 });
 
@@ -181,7 +336,16 @@ for (const code of ["ENOENT", "EACCES"]) it.skipIf(process.platform !== "linux")
   expect((await resolve()).identity.state).toBe("ready");
 });
 
-it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and isolates the whole roster", async reason => {
+it.each([
+  { code: "timeout", reason: "timeout", typed: true },
+  { code: "unavailable", reason: "unavailable", typed: true },
+  { code: "ENOENT", reason: "unavailable", typed: false },
+  { code: "EACCES", reason: "unavailable", typed: false },
+  { code: "BROKER", reason: "unavailable", typed: false },
+  { code: "EPIPE", reason: "unavailable", typed: false },
+  { code: "ECONNREFUSED", reason: "unavailable", typed: false },
+  { code: "ETIMEDOUT", reason: "timeout", typed: false },
+] as const)("keeps a $code SDK failure pending and isolates the whole roster", async ({ code, reason, typed }) => {
   const failedNonce = "f".repeat(32);
   const failedPane: HerdrPane = {
     ...pane,
@@ -206,7 +370,7 @@ it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and
     ...deps,
     processIdentity: pid => pid === 42 ? observed : pid === 43 ? child : null,
     gjcSession: async pids => {
-      if (pids.includes(43)) throw new GjcSdkLookupError(reason);
+      if (pids.includes(43)) throw typed ? new GjcSdkLookupError(reason) : Object.assign(new Error(`private broker ${failedFile}`), { code });
       return live;
     },
   };
@@ -219,10 +383,12 @@ it.each(["timeout", "unavailable"] as const)("keeps a %s SDK failure pending and
   await expect(readConversation(failedPane, undefined, undefined, failedDeps)).rejects.toMatchObject({
     name: "GjcSdkLookupError", reason, message: "GJC SDK lookup failed",
   });
+  expect(JSON.stringify(result)).not.toContain("private broker");
+  expect(JSON.stringify(result)).not.toContain(failedFile);
   expect(JSON.stringify(result)).not.toContain("stale-child");
 });
 
-it.each(["EACCES", "EIO"])("keeps trusted record and transcript %s reads pending without provider authority", async (code) => {
+it.each(["ENOENT", "EACCES", "EIO"])("keeps trusted record and transcript %s reads pending without provider authority", async (code) => {
   for (const target of [recordFile, sessionFile]) {
     const open = fs.openSync;
     const denied = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
@@ -360,6 +526,31 @@ it("leaves unmanaged snapshots untouched without reading unrelated agent project
   expect(await labelManagedPanes(direct)).toBe(direct);
 });
 
+it.each(["invalid", 42, false, [], Object.assign([], { hm_managed_session: nonce, hm_managed_generation: "1" })])("blocks malformed runtime tokens without trusting their contents: %j", async tokens => {
+  const malformed = { ...pane, tokens } as unknown as HerdrPane;
+  expect(await resolveManagedSession(malformed, namespace, deps)).toEqual({
+    identity: { id: null, harness: null, generation: null, state: "blocked", reason: "blocked_managed_token", session_id: null },
+    sessionFile: null,
+  });
+});
+
+it("isolates malformed tokens in a mixed roster and denies provider child conversation fallback", async () => {
+  const malformed = { ...pane, pane_id: "wFixture:malformed", agent_session: { agent: "codex", kind: "id", source: "provider", value: "provider-child" }, tokens: Object.assign([], { hm_managed_session: nonce, hm_managed_generation: "1" }) } as unknown as HerdrPane;
+  const unrelated = { ...pane, pane_id: "wFixture:unrelated", tokens: {}, agent_session: { agent: "codex", kind: "id", source: "provider", value: "unrelated" } } as unknown as HerdrPane;
+  const snapshot = { panes: [malformed, pane, unrelated], agents: [{ ...malformed }, { ...pane }, { ...unrelated }], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  const projected = await labelManagedPanes(snapshot);
+  expect(projected.panes[0]).toMatchObject({ agent: null, agent_session: null, managed_session: { id: null, harness: null, generation: null, state: "blocked", reason: "blocked_managed_token", session_id: null } });
+  expect(projected.agents[0]).toMatchObject({ agent: null, agent_session: null });
+  expect(projected.panes[1]).toMatchObject({ agent: "gjc", agent_session: { value: sessionId }, managed_session: { state: "ready" } });
+  expect(projected.agents[1]).toMatchObject({ agent: "gjc", agent_session: { value: sessionId } });
+  expect(projected.panes[2]).toEqual(unrelated);
+  expect(projected.agents[2]).toEqual(snapshot.agents[2]);
+  expect(JSON.stringify(projected.panes[0]!.managed_session)).not.toContain("provider-child");
+  await expect(conversationForPane(projected.panes[0]!)).rejects.toMatchObject({
+    name: "ConversationUnavailable", message: "blocked_managed_token", managedSession: { state: "blocked", reason: "blocked_managed_token" },
+  });
+});
+
 it("keeps production GJC status discovery on the managed file and out of OMO heuristics", async () => {
   const managedPane = { ...pane, agent: "gjc" };
   const unexpected = async (): Promise<never> => { throw new Error("managed identity must precede process discovery"); };
@@ -489,6 +680,45 @@ it("rejects a symlink substitution during native identity lookup", async () => {
 it("rejects a native session switch across a transcript read", async () => {
   let calls = 0;
   await expect(readConversation(pane, undefined, {}, { ...deps, gjcSession: async () => ++calls === 1 ? live : { ...live!, sessionId: "switched" } })).rejects.toThrow("blocked_managed_identity_changed");
+});
+
+it.each(["nonce", "generation", "terminal", "workspace", "cwd", "removed"])("rejects pane %s reassignment during the final SDK proof", async change => {
+  let currentPane: HerdrPane | null = structuredClone(pane);
+  let lookups = 0;
+  const racingDeps: ManagedSessionDeps = {
+    ...deps,
+    paneById: async () => structuredClone(currentPane),
+    gjcSession: async () => {
+      if (++lookups === 2) {
+        if (change === "removed") currentPane = null;
+        else if (change === "nonce") currentPane!.tokens!.hm_managed_session = "f".repeat(32);
+        else if (change === "generation") currentPane!.tokens!.hm_managed_generation = "2";
+        else if (change === "terminal") currentPane!.terminal_id = "replacement-terminal";
+        else if (change === "workspace") currentPane!.workspace_id = "replacement-workspace";
+        else currentPane!.cwd = "/";
+      }
+      return live;
+    },
+  };
+  await expect(readConversation(pane, undefined, {}, racingDeps)).rejects.toMatchObject({
+    name: "ConversationUnavailable", message: "blocked_managed_identity_changed",
+  });
+  expect(lookups).toBe(2);
+});
+
+it.each(["ENOENT", "EACCES", "BROKER"])("keeps a final pane read %s failure after the SDK proof typed and sanitized", async code => {
+  let reads = 0;
+  const failingDeps: ManagedSessionDeps = {
+    ...deps,
+    paneById: async () => {
+      if (++reads === 2) throw Object.assign(new Error(`private final pane evidence ${sessionFile}`), { code });
+      return structuredClone(pane);
+    },
+  };
+  const failure = await readConversation(pane, undefined, {}, failingDeps).catch(error => error);
+  expect(failure).toBeInstanceOf(GjcSdkLookupError);
+  expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+  expect(JSON.stringify(failure)).not.toContain(root);
 });
 
 it.each([
