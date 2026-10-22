@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
 import { ChatRowMemoryContext, type ChatRowMemory } from "../lib/chatRowState.tsx";
 import { chatSelectionClipboardPayload } from "../lib/markdownClipboard.ts";
+import { FocusReturnContext } from "../lib/useFocusTrap.ts";
 // ChatTimeline.css is imported by ChatView: the frame and the loading state need it before this chunk
 
 export interface ChatTimelineRow {
@@ -38,7 +39,12 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
   const manualLayout = useRef(false);
   const rowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
   const positions = useMemo(() => new Map(rowKeys.map((key, index) => [key, index])), [rowKeys]);
-  const pinned = useMemo(() => [...new Set(focusKey === null ? selectionKeys : [...selectionKeys, focusKey])], [selectionKeys, focusKey]);
+  const returnTarget = useContext(FocusReturnContext);
+  const returnRow = returnTarget?.closest<HTMLElement>("[data-chat-row]");
+  const returnKey = returnRow?.dataset.chatRow && positions.has(returnRow.dataset.chatRow) ? returnRow.dataset.chatRow : null;
+  const pinned = useMemo(() => [...new Set([
+    ...selectionKeys, ...(focusKey === null ? [] : [focusKey]), ...(returnKey === null ? [] : [returnKey]),
+  ])], [selectionKeys, focusKey, returnKey]);
   const extraData = useMemo(() => ({ renderRow }), [renderRow]);
   const attachList = useCallback((instance: LegendListRef | null) => {
     listRef.current = instance;
