@@ -139,20 +139,20 @@ try {
           await page.screenshot({ path: shot("btw-returned"), animations: "disabled" });
           // the answer is still open in the terminal, where the next message would be typed and do
           // nothing: the composer says so (src/lib/inputRow.ts), and dismissing it there clears that
-          const stillOpen = chatStack(page, panes.flaky).locator(".composer-notice", { hasText: "/btw is still open in the terminal" });
+          const stillOpen = chatStack(page, panes.api).locator(".composer-notice", { hasText: "/btw is still open in the terminal" });
           await stillOpen.waitFor();
           await stillOpen.getByRole("button", { name: "Show terminal", exact: true }).click();
-          await peekStack(page, panes.flaky).waitFor();
+          await peekStack(page, panes.api).waitFor();
           if (width <= 480) {
-            const escape = page.locator(`.terminal-stack[data-pane-owner="${panes.flaky}"] .key-bar .key[data-key="Escape"]`);
-            await page.waitForFunction((pane) => document.querySelector<HTMLButtonElement>(`.terminal-stack[data-pane-owner="${pane}"] .key-bar .key[data-key="Escape"]`)?.disabled === false, panes.flaky);
+            const escape = page.locator(`.terminal-stack[data-pane-owner="${panes.api}"] .key-bar .key[data-key="Escape"]`);
+            await page.waitForFunction((pane) => document.querySelector<HTMLButtonElement>(`.terminal-stack[data-pane-owner="${pane}"] .key-bar .key[data-key="Escape"]`)?.disabled === false, panes.api);
             await escape.click();
           } else {
             await page.waitForFunction(() => document.activeElement?.classList.contains("xterm-helper-textarea") === true);
             await page.keyboard.press("Escape");
           }
           await page.getByRole("button", { name: "Back to Chat", exact: true }).click();
-          await chatStack(page, panes.flaky).waitFor();
+          await chatStack(page, panes.api).waitFor();
           await page.locator(".composer-notice", { hasText: "is still open in the terminal" }).waitFor({ state: "detached" });
           await send(page, "and one more question for the transcript");
           await back.locator(".chat-bubble-body", { hasText: "and one more question for the transcript" }).waitFor();
