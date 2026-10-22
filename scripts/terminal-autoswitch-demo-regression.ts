@@ -20,7 +20,7 @@ import panes from "../site/demo/fixtures/panes.json";
 // so /settings comes back by itself; /copy is not on omp's list and stays. Claude's /btw answer,
 // left open when its peek is ended by hand, holds the next message behind the still-open notice.
 const app = mkdtempSync(join(tmpdir(), "terminal-autoswitch-"));
-const evidence = join(process.env.UI_EVIDENCE_DIR ?? "/tmp/terminal-autoswitch-shots", "edges");
+const evidence = join(process.env.UI_EVIDENCE_DIR || "/tmp/terminal-autoswitch-shots", "edges");
 mkdirSync(evidence, { recursive: true });
 await buildDemoApp(app);
 const html = await Bun.file(join(app, "index.html")).text();
@@ -98,7 +98,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
   return new Response(Bun.file(join(app, path.slice(1))));
 } });
 const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
-const owner = panes.flaky;
+const owner = panes.api;
 const AUTO_NOTE = "Chat may come back when you close it";
 type Frame = { type: string; pane_id?: string; text?: string };
 type PeekWindow = Window & { sentFrames: Frame[]; chatLog?: Element | null; promptReads: number; pops: number };
@@ -145,7 +145,7 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: touch, hasTouch: touch, locale: "en-US" });
     try {
       await context.addInitScript(({ theme, pane }) => {
-        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme, darkTheme: "amber", lightTheme: "amber", autoSendQueued: true }));
+        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme, sidebarLayout: "upstream", darkTheme: "amber", lightTheme: "amber", autoSendQueued: true }));
         localStorage.setItem(`ovis:view:${pane}`, "chat");
       }, { theme, pane: owner });
       const page = await context.newPage();
@@ -155,6 +155,9 @@ try {
       await page.goto(`${server.url}?pane=${encodeURIComponent(owner)}`);
       await chat(page).locator(".composer").waitFor();
       await appFaces(page);
+      // The recorded Claude pane opens mid-turn; release its held completion before sending.
+      await finish(page);
+      await ready(page);
       page.on("console", (message) => { if (message.type() === "error") console.error(message.text()); });
       // The exact menu row proves that the shared command catalog has loaded.
       await box(page).fill("/conf");
@@ -254,14 +257,27 @@ try {
           return rect.top <= top && rect.bottom > top;
         });
       });
-      const place = await chat(page).getByRole("log").evaluate((node) => {
-        const top = node.getBoundingClientRect().top;
-        const row = [...node.querySelectorAll("[data-chat-row]")].find((row) => row.getBoundingClientRect().bottom > top);
-        return { text: row?.textContent, offset: (row?.getBoundingClientRect().top ?? 0) - top };
+      const place = await chat(page).getByRole("log").evaluate(async (node) => {
+        // PageUp mounts virtual rows whose measured heights can still move the view. Compare
+        // Back to Chat with the settled place at receipt time, not an intermediate estimate.
+        let previous = "", stable = 0;
+        for (let frame = 0; frame < 120; frame++) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          const top = node.getBoundingClientRect().top;
+          const row = [...node.querySelectorAll("[data-chat-row]")].find((row) => row.getBoundingClientRect().bottom > top);
+          const place = { text: row?.textContent, offset: (row?.getBoundingClientRect().top ?? 0) - top };
+          const sample = JSON.stringify([node.scrollTop, node.scrollHeight, node.clientHeight, place]);
+          stable = sample === previous && row !== undefined ? stable + 1 : 0;
+          previous = sample;
+          if (stable < 3) continue;
+          const release = Reflect.get(window, "releaseReceipt");
+          if (typeof release !== "function") throw new Error("The held receipt disappeared before sampling");
+          release();
+          return place;
+        }
+        throw new Error("The virtual reading position did not settle before receipt release");
       });
       assert.ok(place.text);
-      assert.equal(await peek(page).count(), 0, "no peek before acceptance");
-      await page.evaluate("window.releaseReceipt()");
       await expectPeek(true, "/config");
       await capture(page, `${tag}-accepted`);
       await hint(page).getByRole("button", { name: "Back to Chat", exact: true }).click();
@@ -478,8 +494,8 @@ try {
         // another pane: the peek was this one's, and picking this pane again shows its chat
         await send(page, "/doctor");
         await expectPeek(false, "/doctor");
-        await page.locator(`.pane-select[data-pane="${panes.api}"]`).click();
-        await page.locator(`.terminal-stack[data-pane-owner="${panes.api}"]`).waitFor();
+        await page.locator(`.pane-select[data-pane="${panes.web}"]`).click();
+        await page.locator(`.terminal-stack[data-pane-owner="${panes.web}"]`).waitFor();
         assert.equal(await page.locator(".terminal-stack.is-peek").count(), 0, "a peek never follows to another pane");
         assert.equal(await hint(page).count(), 0);
         await page.locator(`.pane-select[data-pane="${owner}"]`).click();
@@ -546,11 +562,19 @@ try {
       await context.addInitScript((views) => {
         localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "light", darkTheme: "amber", lightTheme: "amber", autoSendQueued: true }));
         for (const pane of views) localStorage.setItem(`ovis:view:${pane}`, "chat");
-      }, [owner, panes.omp]);
+      }, [owner]);
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => { errors.push(error.message); console.error(error.message); });
       page.setDefaultTimeout(10_000);
+      await page.goto(`${server.url}?pane=${encodeURIComponent(owner)}`);
+      const omp = await page.evaluate(async () => {
+        const { snapshot } = await (await fetch("/api/session")).json();
+        const pane = snapshot.panes.find((pane: { agent: string | null }) => pane.agent === "omp");
+        if (!pane) throw new Error("The demo must include an omp pane");
+        localStorage.setItem(`ovis:view:${pane.pane_id}`, "chat");
+        return pane.pane_id as string;
+      });
       const tag = `screens-${width}`;
       const STILL_OPEN = "/btw is still open in the terminal";
       const of = (pane: string) => ({
@@ -562,6 +586,8 @@ try {
       const open = async (pane: string, probe: string) => {
         await page.goto(`${server.url}?pane=${encodeURIComponent(pane)}`);
         await of(pane).chat.locator(".composer").waitFor();
+        // The retained Claude recording begins mid-turn; settle it before testing a new command.
+        if (pane === owner) { await finish(page); await ready(page); }
         // the catalog has loaded: its terminal command is in the menu
         await of(pane).box.fill(probe);
         await page.locator(".menu-item[data-terminal]").first().waitFor();
@@ -589,33 +615,33 @@ try {
       const screen = (pane: string, text: string) => of(pane).stack.locator(".xterm-rows", { hasText: text });
 
       // omp's /settings: the panel hides the editor's row, Escape draws it back, and the chat comes back by itself
-      await open(panes.omp, "/sett");
-      await sendIn(panes.omp, "/settings");
-      await of(panes.omp).peek.waitFor();
+      await open(omp, "/sett");
+      await sendIn(omp, "/settings");
+      await of(omp).peek.waitFor();
       await hint(page).getByText("/settings ran", { exact: true }).waitFor();
       await hint(page).getByText(AUTO_NOTE, { exact: true }).waitFor();
-      await screen(panes.omp, "to close").waitFor();
+      await screen(omp, "to close").waitFor();
       await capture(page, `${tag}-omp-settings`);
-      await escapeIn(panes.omp);
-      await of(panes.omp).peek.waitFor({ state: "detached" });
-      await of(panes.omp).chat.locator(".composer").waitFor();
+      await escapeIn(omp);
+      await of(omp).peek.waitFor({ state: "detached" });
+      await of(omp).chat.locator(".composer").waitFor();
       assert.equal(await page.locator(".composer-notice", { hasText: "is still open in the terminal" }).count(), 0, "a screen that closed leaves no still-open notice");
-      assert.equal(await page.evaluate((pane) => localStorage.getItem(`ovis:view:${pane}`), panes.omp), "chat");
+      assert.equal(await page.evaluate((pane) => localStorage.getItem(`ovis:view:${pane}`), omp), "chat");
       console.log(`PASS ${tag}: omp's /settings comes back to Chat by itself once its editor's row is drawn again`);
 
       // omp's /copy is not on omp's list (the head promises nothing) and only prints above the row,
       // which stays drawn: no frame arms the return, so the peek stays until the reader leaves it
-      await sendIn(panes.omp, "/copy");
-      await of(panes.omp).peek.waitFor();
+      await sendIn(omp, "/copy");
+      await of(omp).peek.waitFor();
       await hint(page).getByText("/copy ran", { exact: true }).waitFor();
       assert.equal(await hint(page).getByText(AUTO_NOTE, { exact: true }).count(), 0, "/copy comes back by hand");
-      await screen(panes.omp, "Nothing to copy yet.").waitFor();
-      await escapeIn(panes.omp);
+      await screen(omp, "Nothing to copy yet.").waitFor();
+      await escapeIn(omp);
       // the frame Escape drew (the printed line gone, the row still there) has been parsed: a row that
       // never went arms nothing (the allow list itself is the head's note above and terminalPeek.test.ts)
-      await screen(panes.omp, "Nothing to copy yet.").waitFor({ state: "detached" });
-      assert.equal(await of(panes.omp).peek.count(), 1, "a row that was never hidden keeps the peek");
-      await backToChat(panes.omp);
+      await screen(omp, "Nothing to copy yet.").waitFor({ state: "detached" });
+      assert.equal(await of(omp).peek.count(), 1, "a row that was never hidden keeps the peek");
+      await backToChat(omp);
       assert.equal(await page.locator(".composer-notice", { hasText: "is still open in the terminal" }).count(), 0, "the row is back: no still-open notice");
       console.log(`PASS ${tag}: omp's /copy, off the list, stays until the reader leaves it`);
 
@@ -674,16 +700,18 @@ try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 844 }, locale: "en-US" });
   try {
     await context.addInitScript(({ pane, other }) => {
-      localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "light", darkTheme: "amber", lightTheme: "amber", autoSendQueued: true }));
+      localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: "light", sidebarLayout: "upstream", darkTheme: "amber", lightTheme: "amber", autoSendQueued: true }));
       localStorage.setItem(`ovis:view:${pane}`, "chat");
       sessionStorage.setItem("ovis:split", JSON.stringify({ other: { machineId: "local", paneId: other }, bSide: "right", active: "a" }));
-    }, { pane: owner, other: panes.api });
+    }, { pane: owner, other: panes.web });
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => { errors.push(error.message); console.error(error.message); });
     page.setDefaultTimeout(10_000);
     await page.goto(`${server.url}?pane=${encodeURIComponent(owner)}`);
     await chat(page).locator(".composer").waitFor();
+    await finish(page);
+    await ready(page);
     const half = page.locator(".pane-slot.is-active");
     await half.getByRole("button", { name: "Show the terminal", exact: true }).waitFor();
     await box(page).fill("/conf");

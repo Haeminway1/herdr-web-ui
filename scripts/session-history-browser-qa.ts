@@ -110,7 +110,12 @@ try {
   await contextMenuKey(page);
   const keyMenu = page.getByRole("menu");
   await keyMenu.waitFor();
-  await keyMenu.getByRole("menuitem", { name: "Earlier sessions…", exact: true }).focus();
+  // RowMenu focuses its first item on the next frame. Wait for that handoff before navigating:
+  // forcing focus onto History earlier lets the pending frame steal Enter back to Pin workspace.
+  await page.waitForFunction(() => document.activeElement?.textContent === "Pin workspace");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Earlier sessions…");
   await page.keyboard.press("Enter");
   await dialog.waitFor();
   await dialog.locator(".session-row").first().waitFor();

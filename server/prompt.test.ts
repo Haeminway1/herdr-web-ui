@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InteractivePrompt } from "../shared/protocol.ts";
+import * as conversation from "./conversation.ts";
 
 import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, modelListWaits, openOmoAsks, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
 
@@ -3814,6 +3815,7 @@ describe("an answer and the menu it was made for", () => {
     managed?: { id: string | null; harness: "gjc" | "omo" | "codex" | "claude" | null; generation: number | null; state: "ready" | "identity_pending" | "blocked"; reason: string | null; session_id: string | null };
     /** the pane's folder and its Codex rollout, for a prompt named by the agent's own call */
     cwd?: string; rollout?: string;
+    workspace?: string; terminal?: string;
     /** how long herdr takes over each screen read from now on */
     readDelay?: number;
     onRead?: () => void;
@@ -3850,7 +3852,7 @@ describe("an answer and the menu it was made for", () => {
         const answer = (result: unknown) => socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
         const snapshotDelay = request.method === "session.snapshot" ? pane.nextSnapshotDelay : undefined;
         if (snapshotDelay !== undefined) pane.nextSnapshotDelay = undefined;
-        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.managed ? { managed_session: pane.managed } : {}), ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}) })), layouts: [] } }), snapshotDelay ?? 0);
+        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, workspace_id: pane.workspace, terminal_id: pane.terminal, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.managed ? { managed_session: pane.managed } : {}), ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}) })), layouts: [] } }), snapshotDelay ?? 0);
         if (request.method === "pane.read") {
           pane.onRead?.();
           const once = pane.nextRead;
@@ -3930,6 +3932,42 @@ describe("an answer and the menu it was made for", () => {
     });
   });
 
+  test.each(["generation", "nonce", "session", "workspace", "terminal", "cwd"] as const)("withholds a managed GET card when %s changes during its screen read", async change => {
+    await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
+      pane.managed = readyManaged();
+      pane.onRead = () => {
+        if (change === "generation") pane.managed = { ...pane.managed!, generation: 2 };
+        if (change === "nonce") pane.managed = { ...pane.managed!, id: "b".repeat(32) };
+        if (change === "session") pane.managed = { ...pane.managed!, session_id: "another-session" };
+        if (change === "workspace") pane.workspace = "another-workspace";
+        if (change === "terminal") pane.terminal = "another-terminal";
+        if (change === "cwd") pane.cwd = "/another-directory";
+      };
+      const url = new URL("http://127.0.0.1/api/pane/prompt?pane_id=p_1");
+      const response = (await handlePromptRequest(new Request(url), url))!;
+      expect(response.status).toBe(409);
+      const body = await response.json() as { error?: { code: string }; prompt?: InteractivePrompt };
+      expect(body.error?.code).toBe("prompt_changed");
+      expect(body.prompt).toBeUndefined();
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test("a managed Codex collapsed queue uses the protected question reader, never agent.get discovery", async () => {
+    const screen = "• WAITING\n• Queued follow-up inputs\n  ? 1 question\n    alt+↑ to answer\n› Ask Codex to do anything\n";
+    const reader = spyOn(conversation, "managedQuestionsForPane").mockResolvedValue({ identity: "managed-generation-one", codex: [{ key: "manager-call:0", title: "Verified manager question?", options: ["First", "Second"] }], omo: [] });
+    try {
+      await withPane("codex", "working", screen, async pane => {
+        pane.managed = { ...readyManaged(), harness: "codex" };
+        pane.cwd = pane.root;
+        pane.agentUnanswered = true;
+        expect(await card()).toMatchObject({ question: "Verified manager question?", queued: "collapsed", options: [{ label: "First" }, { label: "Second" }] });
+        expect(reader).toHaveBeenCalledTimes(1);
+        expect(pane.sent).toEqual([]);
+      });
+    } finally { reader.mockRestore(); }
+  });
+
   test("stops later managed answer keys when the generation changes after menu reads", async () => {
     await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
       pane.managed = readyManaged();
@@ -3969,6 +4007,19 @@ ${omoRule}
 (😺 OmO Native)
 `;
   const omoCall = (id: string, options: { label: string }[] | undefined = [{ label: "First" }, { label: "Second" }]) => JSON.stringify({ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id, name: "ask_user_question", arguments: { waitForAnswer: false, questions: [{ header: "QA", question: "Which one?", ...(options ? { options } : {}) }] } }] } }) + "\n";
+
+  test("a managed OMO form enriches questions only through the protected manager reader", async () => {
+    const reader = spyOn(conversation, "managedQuestionsForPane").mockResolvedValue({ identity: "managed-omo-one", codex: [], omo: [{ id: "manager-call", wait: false, args: { questions: [{ header: "QA", question: "Which one?", options: [{ label: "First" }, { label: "Second" }] }] } }] });
+    try {
+      await withPane("omo", "blocked", omoWidget(), async pane => {
+        pane.managed = { ...readyManaged(), harness: "omo" };
+        pane.cwd = pane.root;
+        expect(await card()).toMatchObject({ question: "Which one?", options: [{ label: "First" }, { label: "Second" }] });
+        expect(reader).toHaveBeenCalledTimes(1);
+        expect(pane.sent).toEqual([]);
+      });
+    } finally { reader.mockRestore(); }
+  });
 
   // These route fixtures use /proc to read an inert child's isolated agent directory.
   async function withOmo(run: (pane: Pane) => Promise<void>, options?: { label: string }[]): Promise<void> {

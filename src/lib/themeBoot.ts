@@ -26,15 +26,15 @@ export const DEFAULT_APPEARANCE: Appearance = { theme: "dark", darkTheme: DEFAUL
 export function sanitizeAppearance(raw: unknown): Appearance {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   const theme = record["theme"] === "dark" || record["theme"] === "light" || record["theme"] === "system" ? record["theme"] : DEFAULT_APPEARANCE.theme;
-  const palette = isThemeId(record["palette"]) ? record["palette"] : "amber";
-  // Absence migrates (a record from before themes wore amber, so it keeps amber); an explicitly
-  // unknown id falls back to the default, not a stale pair.
+  const palette = isThemeId(record["palette"]) ? record["palette"] : DEFAULT_THEME;
+  // Absence migrates to the fork's Report default; an explicitly unknown id uses the
+  // same default, not a stale pair. Boot and React must agree for both records.
   const darkTheme = "darkTheme" in record
     ? (isThemeId(record["darkTheme"]) ? record["darkTheme"] : DEFAULT_THEME)
-    : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? "amber" : palette;
+    : theme === "dark" ? palette : isThemeId(record["paletteDark"]) ? record["paletteDark"] : theme === "system" && record["paletteDark"] !== undefined ? DEFAULT_THEME : palette;
   const lightTheme = "lightTheme" in record
     ? (isThemeId(record["lightTheme"]) ? record["lightTheme"] : DEFAULT_THEME)
-    : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? "amber" : palette;
+    : theme === "light" ? palette : isThemeId(record["paletteLight"]) ? record["paletteLight"] : theme === "system" && record["paletteLight"] !== undefined ? DEFAULT_THEME : palette;
   return { theme, darkTheme, lightTheme };
 }
 

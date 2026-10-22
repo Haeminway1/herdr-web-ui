@@ -42,6 +42,23 @@ describe("browser storage from before the rename", () => {
     expect(storage.getItem("herdr-web-ui:settings")).toBeNull();
   });
 
+  it.each([
+    ["resident-tab", "work"],
+    ["directory-collapsed:local:/fixture/project", "1"],
+    ["workspace-collapsed:local:w1", "1"],
+    ["attention-working-open", "1"],
+    ["composer-height", "240"],
+  ])("preserves %s across the rename and a later reload", (key, value) => {
+    const storage = new MemoryStorage();
+    storage.setItem(`herdr-web-ui:${key}`, value);
+    adoptLegacyStorage(storage);
+    expect(storage.getItem(`ovis:${key}`)).toBe(value);
+    expect(storage.getItem(`herdr-web-ui:${key}`)).toBeNull();
+    storage.setItem(`ovis:${key}`, "changed");
+    adoptLegacyStorage(storage);
+    expect(storage.getItem(`ovis:${key}`)).toBe("changed");
+  });
+
   it("moves what storage there is where a WebView has local storage turned off", () => {
     const session = new MemoryStorage();
     session.setItem("herdr-web-ui:selection", "w1:p1");

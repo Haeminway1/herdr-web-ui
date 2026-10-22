@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { parseThemeBlocks, parseThemeValue, resolveEntry, ThemeValueError } from "./themeCss.ts";
 import { LIGHT_ANSI_ROLES } from "./themeRoles.ts";
 import baseline from "./themes.legacy-baseline.json";
-import { ROLES, SHADOW_GEOMETRY, SUPPORTED_ENTRIES, THEME_IDS, themeColor as tableThemeColor } from "./themes.ts";
+import { ROLES, SHADOW_GEOMETRY, SUPPORTED_ENTRIES, themeColor as tableThemeColor } from "./themes.ts";
 import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
 import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
 import { SHARED_SETTING_KEYS } from "../../shared/preferences.ts";
-import { NOTICE_VERSION, TELEMETRY_SETTINGS_KEYS, TELEMETRY_THEME_SIDE_KEYS, telemetrySettings } from "../../shared/telemetry.ts";
+import { NOTICE_VERSION, TELEMETRY_SETTINGS_KEYS, TELEMETRY_THEME_IDS, TELEMETRY_THEME_SIDE_KEYS, telemetrySettings } from "../../shared/telemetry.ts";
 import { SETTING_SCOPE, telemetrySettingsSnapshot as projectTelemetrySettings, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, DICTATION_LANGUAGES, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
 import { applyToDocument, loadSettings, saveSettings } from "./settings.ts";
 import { sanitizeSettings as oldSanitizeSettings, saveSettings as oldSaveSettings } from "./settings.legacy-fixture.ts";
@@ -27,6 +27,7 @@ it("omits settings the deployed upstream telemetry schema cannot represent", () 
   expect(projectTelemetrySettings(upstream)).not.toBeNull();
   for (const key of ["palette", "paletteLight", "paletteDark", "darkTheme", "lightTheme"] as const) {
     expect(projectTelemetrySettings({ ...upstream, [key]: "report" })).toBeNull();
+    expect(projectTelemetrySettings({ ...upstream, [key]: "codex" })).toBeNull();
   }
 });
 
@@ -360,8 +361,7 @@ describe("telemetry settings snapshot", () => {
   });
 
   it("reports all supported ids on either side and rejects ids outside the schema", () => {
-    for (const id of THEME_IDS) {
-      if (id === "report") continue; // fork-only settings deliberately have no upstream telemetry snapshot
+    for (const id of TELEMETRY_THEME_IDS) {
       for (const side of ["darkTheme", "lightTheme"] as const) {
         const snapshot = telemetrySettingsSnapshot(sanitizeSettings({ [side]: id }));
         expect(snapshot[side]).toBe(id);

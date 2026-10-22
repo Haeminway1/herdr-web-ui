@@ -5,6 +5,19 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const SETTINGS_JA: Record<string, string> = {
+  "A dim resident row starts this agent in its folder": "薄い常駐の行を押すと、このエージェントをそのフォルダーで起動します",
+  "Empty for the agent's own default": "空欄でエージェントのデフォルト",
+  "Folder": "フォルダー",
+  "Group sessions by": "セッションのグループ化",
+  "Name of {folder}": "{folder}の名前",
+  "On top": "一番上",
+  "Pin a session in the sidebar to add its folder. Rename one here; On top stays above the Resident / Work toggle.": "サイドバーでセッションを固定するとそのフォルダーが追加されます。ここで名前を変えられます。「一番上」は常駐/作業の切り替えに関係なく常に上に表示されます。",
+  "Reasoning": "推論",
+  "Report": "レポート",
+  "Repository": "リポジトリ",
+  "Resident agents": "常駐エージェント",
+  "Sidebar layout": "サイドバーのレイアウト",
+  "Start resident agents with": "常駐エージェントの起動",
   "Direct typing": "直接入力",
   "Terminal input mode": "端末入力モード",
   "Reset shortcuts": "ショートカットをリセット",

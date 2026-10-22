@@ -17,10 +17,18 @@ const fragment = (name: string, text: string) => ({ name, sections: parseFragmen
 
 describe("changelog fold", () => {
   test("keeps new comparison links in the changelog's own fork", () => {
-    const text = changelog.replaceAll("github.com/devswha/herdr-web-ui/compare/", "github.com/Haeminway1/herdr-web-ui/compare/");
+    const text = changelog.replaceAll("github.com/devswha/ovis/compare/", "github.com/Haeminway1/herdr-web-ui/compare/");
     const folded = foldChangelog(text, [], "1.2.3", "2026-02-03");
     expect(folded).toContain("[Unreleased]: https://github.com/Haeminway1/herdr-web-ui/compare/v1.2.3...HEAD");
     expect(folded).toContain("[1.2.3]: https://github.com/Haeminway1/herdr-web-ui/compare/v1.2.2...v1.2.3");
+  });
+
+  test("moves canonical comparison links to Ovis without rewriting old release links", () => {
+    const text = changelog.replaceAll("github.com/devswha/ovis/", "github.com/devswha/herdr-web-ui/");
+    const folded = foldChangelog(text, [], "1.2.3", "2026-02-03");
+    expect(folded).toContain("[Unreleased]: https://github.com/devswha/ovis/compare/v1.2.3...HEAD");
+    expect(folded).toContain("[1.2.3]: https://github.com/devswha/ovis/compare/v1.2.2...v1.2.3");
+    expect(folded).toContain("[1.2.2]: https://github.com/devswha/herdr-web-ui/compare/v1.2.1...v1.2.2");
   });
 
   test("old Unreleased entries come first, then fragments in the order given, sections in release order", () => {

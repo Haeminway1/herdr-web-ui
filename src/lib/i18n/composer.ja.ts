@@ -6,6 +6,7 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const COMPOSER_JA: Record<string, string> = {
+  "Resize message box": "入力欄のサイズを変更",
   "Password or PIN": "パスワードまたは PIN",
   "Enter a single-line password or PIN.": "改行を含まないパスワードまたは PIN を入力してください。",
   "Update this PC to use masked input.": "伏せ字の入力欄を使うには、この PC のアプリを更新してください。",

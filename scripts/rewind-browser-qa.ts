@@ -19,7 +19,7 @@ try {
     const fix = (value) => {
       if (!value || typeof value !== "object") return value;
       if (Array.isArray(value)) { value.forEach(fix); return value; }
-      if (value.pane_id === ${JSON.stringify(panes.hermes)} && "agent_status" in value && "agent" in value) value.agent = window.rewindFixture.agent;
+      if (value.pane_id === ${JSON.stringify(panes.infra)} && "agent_status" in value && "agent" in value) value.agent = window.rewindFixture.agent;
       for (const key of Object.keys(value)) fix(value[key]);
       return value;
     };
@@ -79,8 +79,8 @@ try {
           page.setDefaultTimeout(10000);
           const errors: string[] = [];
           page.on("pageerror", error => errors.push(error.message));
-          await page.goto(`http://127.0.0.1:${server.port}${prefix}?pane=${encodeURIComponent(panes.hermes)}&view=chat`);
-          const frame = page.locator(`.pane-frame[data-layout-pane="${panes.hermes}"]`);
+          await page.goto(`http://127.0.0.1:${server.port}${prefix}?pane=${encodeURIComponent(panes.infra)}&view=chat`);
+          const frame = page.locator(`.pane-frame[data-layout-pane="${panes.infra}"]`);
           await frame.locator(".chat-turn-user").first().waitFor();
           await appFaces(page);
           const box = frame.locator(".composer textarea").first();

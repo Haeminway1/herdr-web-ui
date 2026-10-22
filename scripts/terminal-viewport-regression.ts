@@ -147,6 +147,8 @@ try {
   // The jump button: absent at the bottom, shown above it, and a click returns to the bottom without
   // taking the terminal's focus or sending input to the program.
   const jump = page.getByRole("button", { name: "Jump to bottom", exact: true });
+  // Native RPC reaches zero before the browser consumes its scroll response and React commits it.
+  await jump.waitFor({ state: "detached" });
   assert.equal(await jump.count(), 0, "no jump button at the native bottom");
   await pageToEdge(1);
   await jump.waitFor();

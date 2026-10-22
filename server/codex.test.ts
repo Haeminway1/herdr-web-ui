@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, fstatSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import { Database } from "bun:sqlite";
-import { codexCallFailed, codexHistoryTail, codexHomeInPsLine, codexRolloutPath, interactiveCodexRollout, processCodexHome, forgetHistoryChains, matchCodexFirstExchange, matchCodexTranscript, matchShortCodexAnswers, parseCodexTranscript, codexPeersIn, resumedThread, rolloutInsideStore, sameDirectory, storedCwdCondition, storedCwds, unansweredCodexQuestions, withoutVerbatimPrefix } from "./codex.ts";
+import { CodexReadScope, codexCallFailed, codexHistorySegments, codexHistoryTail, codexHomeInPsLine, codexRolloutPath, interactiveCodexRollout, processCodexHome, forgetHistoryChains, matchCodexFirstExchange, matchCodexTranscript, matchShortCodexAnswers, parseCodexTranscript, codexPeersIn, resumedThread, rolloutInsideStore, sameDirectory, storedCwdCondition, storedCwds, unansweredCodexQuestions, withoutVerbatimPrefix } from "./codex.ts";
 import type { HerdrPane } from "../shared/protocol.ts";
 import { splitTurn } from "../src/lib/workBlocks.ts";
 import rolloutHeaders from "./fixtures/codex-rollout-headers.json";
@@ -485,6 +485,24 @@ describe("Codex rollout resolution", () => {
     expect(exact(`${line.padEnd(256 * 1024, " ")}{"parent_thread_id":"${thread}"}\n`)).toBeNull();
     // a file that is only its header, without a newline, ends within the read
     expect(exact(line.padEnd(256 * 1024 - 1, " "))).toBe(path);
+  });
+
+  it.each([300 * 1024, 1024 * 1024 - 1, 1024 * 1024])("bounds a managed %i-byte header without closing its verified descriptor", (bytes) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-codex-managed-header-"))); roots.push(root);
+    const home = join(root, "codex"), store = join(home, "sessions");
+    mkdirSync(store, { recursive: true });
+    const path = join(store, "exact.jsonl");
+    const line = JSON.stringify({ type: "session_meta", payload: { id: thread, source: "cli" } });
+    writeFileSync(path, `${line.padEnd(bytes, " ")}\n`, { mode: 0o600 });
+    const stat = statSync(path);
+    const io = new CodexReadScope(path, store, { dev: stat.dev, ino: stat.ino });
+    try {
+      const fd = io.fd(path);
+      if (bytes < 1024 * 1024) expect(codexHistorySegments(path, home, io)).toEqual([{ path, end: stat.size }]);
+      else expect(() => codexHistorySegments(path, home, io)).toThrow("rollout header longer than the read");
+      expect(io.fd(path)).toBe(fd);
+      expect(fstatSync(fd).ino).toBe(stat.ino);
+    } finally { io.close(); }
   });
 
   it("reads the Windows paths Codex stores with the \\\\?\\ prefix as the plain ones herdr reports (#518)", () => {

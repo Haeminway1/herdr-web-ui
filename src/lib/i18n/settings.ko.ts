@@ -5,6 +5,19 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const SETTINGS_KO: Record<string, string> = {
+  "A dim resident row starts this agent in its folder": "흐린 상시 행을 누르면 이 에이전트를 그 폴더에서 시작합니다",
+  "Empty for the agent's own default": "비워 두면 에이전트 기본값",
+  "Folder": "폴더",
+  "Group sessions by": "세션 묶기",
+  "Name of {folder}": "{folder} 이름",
+  "On top": "맨 위",
+  "Pin a session in the sidebar to add its folder. Rename one here; On top stays above the Resident / Work toggle.": "사이드바에서 세션을 고정하면 그 폴더가 추가됩니다. 여기서 이름을 바꿀 수 있고, '맨 위'는 상시/작업 전환과 상관없이 항상 위에 보입니다.",
+  "Reasoning": "추론",
+  "Report": "리포트",
+  "Repository": "저장소",
+  "Resident agents": "상시 에이전트",
+  "Sidebar layout": "사이드바 배치",
+  "Start resident agents with": "상시 에이전트 시작 방식",
   "Direct typing": "직접 입력",
   "Terminal input mode": "터미널 입력 방식",
   "Reset shortcuts": "단축키 초기화",
