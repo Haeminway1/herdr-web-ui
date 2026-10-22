@@ -226,7 +226,7 @@ const app = mkdtempSync(join(tmpdir(), "herdr-sidebar-activity-demo-"));
 const API = "Idempotent payments";        // claude, working, finishes by itself
 const WEB = "Guard the export button";    // codex, blocked
 const INFRA = "Why did the backup fail?"; // idle: the agent a message is sent from
-const AGENTS_HERDR_ORDER = [API, WEB, INFRA, "Proofread the guide", "Ship the retry flag", "Draft the changelog"];
+const AGENTS_HERDR_ORDER = [API, WEB, INFRA, "Proofread the guide", "Plan the config file", "Ship the retry flag", "Draft the changelog"];
 
 const agents = (page: Page) => page.locator(".agents-sidebar .agent-item");
 const agentTitles = (page: Page) => agents(page).locator(".agent-title").allTextContents();
