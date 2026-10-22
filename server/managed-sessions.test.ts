@@ -568,6 +568,53 @@ it("uses the exact private file for production managed OMO status discovery", as
   expect(await omoSessionForPane(pane.pane_id, root, [pane])).toEqual({ path: sessionFile, pending: null });
 });
 
+describe("managed OMO title-prefixed headers", () => {
+  const title = JSON.stringify({ type: "title", title: "Fixture session" }) + "\n";
+
+  it.each([0o600, 0o664])("reads the exact pinned session after one title row with mode %o", async mode => {
+    useOmo();
+    writeFileSync(sessionFile, title + readFileSync(sessionFile, "utf8"));
+    chmodSync(sessionFile, mode);
+    expect(await resolve()).toMatchObject({ identity: { state: "ready", harness: "omo", session_id: sessionId }, sessionFile });
+    expect((await omoPanes([pane])).get(pane.pane_id)?.path).toBe(sessionFile);
+    const answer = await conversationForPane(pane);
+    expect(answer.turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+    expect(answer.history_id).toStartWith(`managed-${nonce}-1:`);
+  });
+
+  it.each(["id", "cwd"] as const)("rejects a mismatched %s in the session after the title", async field => {
+    useOmo();
+    writeFileSync(sessionFile, title + JSON.stringify({ type: "session", id: sessionId, cwd: root, [field]: field === "id" ? "wrong-session" : "/" }) + "\n");
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+    await expect(conversationForPane(pane)).rejects.toThrow("blocked_session_header");
+  });
+
+  it.each(["title", "message"])("never skips a second %s row to find a later session", async type => {
+    useOmo();
+    writeFileSync(sessionFile, title + JSON.stringify({ type }) + "\n" + readFileSync(sessionFile, "utf8"));
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+  });
+
+  it("keeps the title and session rows individually bounded and newline-terminated", async () => {
+    useOmo();
+    const session = readFileSync(sessionFile, "utf8");
+    const prefix = (bytes: number) => JSON.stringify({ type: "title", title: "x".repeat(bytes - Buffer.byteLength(JSON.stringify({ type: "title", title: "" }) + "\n")) }) + "\n";
+    writeFileSync(sessionFile, prefix(16384) + session);
+    expect((await resolve()).identity.state).toBe("ready");
+    writeFileSync(sessionFile, prefix(16385) + session);
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+    writeFileSync(sessionFile, title);
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+    writeFileSync(sessionFile, title + JSON.stringify({ type: "session", id: sessionId, cwd: root }));
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+  });
+
+  it("does not permit a title prefix for managed GJC", async () => {
+    writeFileSync(sessionFile, title + readFileSync(sessionFile, "utf8"));
+    expect((await resolve()).identity.reason).toBe("blocked_session_header");
+  });
+});
+
 it("invalidates native status discovery immediately when managed state or generation changes", async () => {
   const raw = { panes: [pane], agents: [], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
   let snapshot = await labelManagedPanes(raw);

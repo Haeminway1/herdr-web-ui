@@ -144,7 +144,7 @@ function header(path: string, harness: Harness, expected: FileIdentityPin): { id
     const limit = harness === "codex" ? 1024 * 1024 : 16384;
     let buffer = Buffer.alloc(16385);
     let offset = 0;
-    for (let row = 0; row < (harness === "claude" ? 32 : 1); row++) {
+    for (let row = 0; row < (harness === "claude" ? 32 : harness === "omo" ? 2 : 1); row++) {
       let count = 0;
       let newline = -1;
       while (newline < 0) {
@@ -165,6 +165,7 @@ function header(path: string, harness: Harness, expected: FileIdentityPin): { id
       const entry = object(JSON.parse(buffer.subarray(0, newline).toString("utf8")));
       if (!entry) return null;
       offset += newline + 1;
+      if (harness === "omo" && row === 0 && entry.type === "title") continue;
       if (harness === "codex") {
         const payload = entry.type === "session_meta" ? object(entry.payload) : null;
         return payload ? { id: payload.id, cwd: payload.cwd } : null;
