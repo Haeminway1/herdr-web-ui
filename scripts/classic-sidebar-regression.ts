@@ -50,7 +50,8 @@ async function openSurface(browser: Browser, demoUrl: string, surface: Surface):
   await page.locator(".machine-workspaces > .cl-sidebar-list").waitFor();
   await page.locator('.cl-sidebar-list .cl-pane-select[title*="Classic preview workspace 36"]').waitFor();
   await page.waitForFunction(theme => document.documentElement.dataset["theme"] === theme && document.documentElement.dataset["palette"] === "report", surface.theme);
-  await page.waitForTimeout(1500);
+  await page.waitForFunction(() => Number(document.documentElement.dataset["classicPreviewStreamSnapshots"]) > 0);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   assert.equal(await page.locator('.cl-sidebar-list .cl-pane-select[title*="Classic preview workspace 36"]').count(), 1, "live fixture streams must not erase the overflowing roster");
   return context;
 }
