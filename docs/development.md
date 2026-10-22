@@ -27,7 +27,33 @@ reset the throttle. Only a visible failure episode emits a recovery. Abnormal br
 coalesced separately for local and relayed connections; normal closes and server shutdown are quiet.
 The close reason, input, credentials, peer names, socket paths and raw exception messages are never
 included. A remote machine's opaque UUID may appear, not its name or SSH address. These records are
-not a per-request HTTP access log and do not add timestamps to older console messages.
+separate from the request-completion log and do not add timestamps to older console messages.
+
+Every request reaching the server's fetch boundary gets a new server UUID in `X-Request-Id`.
+Same-origin API calls also send a fresh client UUID unless the caller supplies one. Client IDs
+are accepted only as 1-64 ASCII letters, digits, dots, underscores or hyphens; repeated client
+IDs never replace server uniqueness. Unexpected-error handles use the same server ID.
+
+The server keeps `http-requests.jsonl` in its resolved state directory, rotating before a write
+would exceed 1 MiB and retaining only `http-requests.jsonl.1`: at most two 1 MiB files. The
+directory is created with mode 0700 when missing; an existing directory keeps the operator's
+permissions. Regular log files use mode 0600 on platforms with POSIX permissions; the writer
+refuses symlinked log paths where no-follow opens are supported.
+Each line is at most 1024 bytes and contains only `request_id`, optional `client_request_id`,
+normalized `method`, fixed `route` template, `status` and monotonic `latency_ms`. Unknown
+methods become `OTHER`; static and unmatched routes are fixed categories, and dynamic
+identifiers become placeholders. Matched dispatch branches assign the templates; the writer
+never reconstructs them from URLs. Startup and access refusals use fixed categories too.
+No URL queries, bodies, credentials, labels, file or socket
+paths, or exception text enter this file. Storage failures never change HTTP responses.
+The per-server writer has no pending queue and closes at shutdown.
+
+A completion means response creation, not completion of body delivery: an SSE or file stream
+is recorded without reading or waiting for it. A successful local or relayed WebSocket upgrade
+is one 101 completion; its handshake carries the same response headers, and the fetch handler
+still returns `undefined`. Ordinary responses carry the server ID too. The default
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` fill absent headers only,
+preserving each route's CSP, framing, MIME, caching and compression headers.
 
 ## Checks
 
@@ -50,7 +76,7 @@ bun run check run --build bun scripts/ui-regression.ts                     # bui
 
 `fast` needs no herdr. The other modes run on a herdr of their own: its config, its plugin state
 and the web UI's state live in a directory made for the run (`XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
-`HERDR_WEB_STATE_DIR`), under a session name made for the run. Nothing reads your herdr config,
+`OVIS_STATE_DIR`), under a session name made for the run. Nothing reads your herdr config,
 so no plugin installed there starts with the test servers, and two runs on one PC share no
 socket and no file. The run stops its herdr servers and removes the directory when it ends, also
 when it is interrupted; `CHECK_DIR=<path>` keeps it there instead. A few lane or `check run`
@@ -124,8 +150,10 @@ bun scripts/sticky-modifiers-regression.ts # mobile held keys through real legac
 bun scripts/key-bar-customization-demo-regression.ts # mobile key layout, saved combinations and migration on demo fixtures
 bun scripts/key-bar-hold-repeat-regression.ts # phone touch key-bar taps, holds (arrows and editing keys), swipes and sticky Ctrl on demo fixtures
 bun scripts/settings-pages-demo-regression.ts # every Settings page on a 390px and a 320px phone, and Back stepping out of the dialog
+bun scripts/theme-first-paint-demo-regression.ts # the saved theme in every painted frame before and after the app starts, root and demo builds under the app's CSP
 bun scripts/chat-browser-qa.ts  # chat lens end to end
 bun scripts/pane-input-focus-demo-regression.ts # the input focus shortcut against fictional panes
+bun scripts/mirror-scroll-demo-regression.ts # fixed mirror wheel/touch, native history, no guessed program input, observe guards
 bun scripts/shortcut-exact-modifiers-demo-regression.ts # recording exact-modifier chords: confirm, refusals, dispatch
 bun scripts/output-browser-qa.ts # terminal output flow control end to end
 bun scripts/math-browser-qa.ts  # chat math: KaTeX loads with the first expression
@@ -141,7 +169,7 @@ installers, a headless herdr, then `herdr plugin install` of a pushed ref (defau
 branch), the start action, `/api/health`, the PTY smoke test on the box's Node, and the startup hook
 after a herdr restart. It prints the time each step took. `KEEP=1` leaves the container for a look.
 
-Tests run against a herdr session of their own, `herdr-web-ui-test`. The first run starts a headless `herdr --session herdr-web-ui-test server` and later runs reuse it, so test workspaces never show in the herdr you work in (`scripts/test-herdr.ts`). Stop it with `herdr --session herdr-web-ui-test server stop`. `HERDR_TEST_SESSION` picks another name, and `HERDR_TEST_LIVE=1` runs against `HERDR_SOCKET` or your default session instead.
+Tests run against a herdr session of their own, `ovis-test`. The first run starts a headless `herdr --session ovis-test server` and later runs reuse it, so test workspaces never show in the herdr you work in (`scripts/test-herdr.ts`). Stop it with `herdr --session ovis-test server stop`. `HERDR_TEST_SESSION` picks another name, and `HERDR_TEST_LIVE=1` runs against `HERDR_SOCKET` or your default session instead.
 
 Browser checks launch `CHROME_PATH` when it is set, else Google Chrome at `/opt/google/chrome/chrome` where that exists, else the lockfile's Playwright Chromium (`scripts/chrome-path.ts`; install it with `bun node_modules/playwright-core/cli.js install chromium`). After a herdr upgrade, refresh the generated wire types with `bun run generate:types --refresh` (and `--check` to verify).
 
@@ -371,7 +399,7 @@ in the historical table above.
 
 ## README media
 
-`bun run build && bun scripts/readme-media/capture.ts` regenerates the stills and demos in `docs/screenshots/` from a staged, fictional session in its own herdr session (`herdr-web-ui-demo`). Pass `shots` or `video` to redo only one of them. It needs ffmpeg.
+`bun run build && bun scripts/readme-media/capture.ts` regenerates the stills and demos in `docs/screenshots/` from a staged, fictional session in its own herdr session (`ovis-demo`). Pass `shots` or `video` to redo only one of them. It needs ffmpeg.
 
 - `stage.ts` builds the session: five workspaces under `/tmp/herdr-demo`, curated chats served in place of transcripts, and the hostname rewritten.
 - `record.ts` records a walkthrough at 2x (Chrome's screencast, with `--force-device-scale-factor=2`), logging pointer moves, clicks, taps and camera cues as it drives the page.
@@ -455,7 +483,7 @@ transport answers the app's `fetch("/api/…")`, the machines event stream and t
 socket from `site/demo/fixtures/`: the chats and the Codex approval are the README's
 (`site/demo/fixtures.ts`, shared with `scripts/readme-media/stage.ts`), and `machines.json`,
 `agents.json`, `commands.json` and the shell pane's `terminal.json` are captured from that staged
-session by `bun scripts/demo-fixtures.ts` (needs herdr; it uses the `herdr-web-ui-demo` session and
+session by `bun scripts/demo-fixtures.ts` (needs herdr; it uses the `ovis-demo` session and
 scrubs the hostname and login). Recapture them after a herdr upgrade changes the snapshot shapes, or
 after changing the staged session. Files, images, push and remote PCs are not part of the demo.
 

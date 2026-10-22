@@ -30,7 +30,7 @@ const openFiles = async (page: import("playwright-core").Page) => {
   else await runMoreItem(page, "Browse files");
 };
 
-const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-file-back-"));
+const root = mkdtempSync(join(tmpdir(), "ovis-file-back-"));
 const codexHome = join(root, "codex-home");
 const thread = "01a0c7a1-56d9-7e20-9f08-f7a2d973bc11";
 mkdirSync(join(codexHome, "sessions"), { recursive: true });
@@ -122,7 +122,7 @@ try {
   const init = Bun.spawn(["git", "init", "-q", "-b", "main", root], { stdout: "pipe", stderr: "pipe" });
   assert.equal(await init.exited, 0, await new Response(init.stderr).text());
   writeFileSync(join(root, ".gitignore"), "*\n!notes.txt\n!preview.webm\n");
-  const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-file-back" });
+  const created = await workspaceCreate({ cwd: root, label: "ovis-test-file-back" });
   workspace = created.workspace.workspace_id;
   const pane = created.root_pane.pane_id;
   await herdrRpc("pane.send_text", { pane_id: pane, text: `${standIn} resume ${thread}\n` });
@@ -144,7 +144,7 @@ try {
   await page.addInitScript(() => {
     // the app's own document only: a sandboxed HTML page the viewer frames has no storage to seed
     if (window.top !== window) return;
-    if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", chatFontSize: 17, chatFontFamily: "Georgia", sidebarLayout: "upstream", fileOpen: "panel" }));
+    if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", chatFontSize: 17, chatFontFamily: "Georgia", sidebarLayout: "upstream", fileOpen: "panel" }));
     const record = window as unknown as { longTasks: number[] };
     record.longTasks = [];
     new PerformanceObserver((list) => { for (const entry of list.getEntries()) record.longTasks.push(entry.duration); }).observe({ type: "longtask" });
@@ -171,6 +171,13 @@ try {
   const checkCodeFidelity = async (mode: string) => {
     for (const [index, source] of fidelitySources.entries()) {
       const block = codeBlocks.nth(3 + index);
+      // The real focus pins this row while native selection is compared across browser calls.
+      await block.getByRole("button", { name: "Copy code", exact: true }).focus();
+      await page.waitForFunction(() => {
+        const chat = document.activeElement?.closest(".chat-view-virtual");
+        return Number(chat?.getAttribute("data-chat-pinned")) > 0;
+      });
+      await block.scrollIntoViewIfNeeded();
       assert.equal(await block.locator("code").textContent(), source, `${mode}: source whitespace`);
       assert.equal(await block.locator("pre").evaluate((pre) => getComputedStyle(pre).visibility), "visible", `${mode}: selection comes from the current pane, not a hidden cached pane`);
       const selections = await block.locator("pre").evaluate((pre, source) => {
@@ -295,11 +302,11 @@ try {
     await page.setViewportSize({ width, height: 844 });
     await videoLink.click();
     await preview.waitFor();
-    const previewEntry = await page.evaluate(() => history.state["herdr-web-ui:file-preview"]);
+    const previewEntry = await page.evaluate(() => history.state["ovis:file-preview"]);
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
     const settings = page.getByRole("dialog", { name: "Settings", exact: true });
     await settings.waitFor();
-    await page.waitForFunction(() => history.state?.["herdr-web-ui:settings"] !== undefined);
+    await page.waitForFunction(() => history.state?.["ovis:settings"] !== undefined);
     // a phone's Settings rises over the preview (styles.css): look where it comes to rest
     await sheetsSettled(page);
     const settingsClose = settings.getByRole("button", { name: "Close settings", exact: true });
@@ -324,12 +331,12 @@ try {
     assert.ok(new Set(focused).size >= 2 && focused[0] !== focused[1], `Tab moves through Settings at ${width}px: ${focused.join(" | ")}`);
     await page.keyboard.press("Escape");
     await settings.waitFor({ state: "hidden" });
-    await page.waitForFunction(() => history.state?.["herdr-web-ui:settings"] === undefined);
+    await page.waitForFunction(() => history.state?.["ovis:settings"] === undefined);
     await preview.waitFor();
-    assert.deepEqual(await page.evaluate(() => history.state["herdr-web-ui:file-preview"]), previewEntry, "Escape closes only Settings and preserves the preview entry");
+    assert.deepEqual(await page.evaluate(() => history.state["ovis:file-preview"]), previewEntry, "Escape closes only Settings and preserves the preview entry");
     await preview.getByRole("button", { name: "Close file", exact: true }).click();
     await preview.waitFor({ state: "hidden" });
-    assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, "one click on Close file consumes the preview entry");
+    assert.equal(await page.evaluate(() => history.state?.["ovis:file-preview"]), undefined, "one click on Close file consumes the preview entry");
     assert.equal(await composer.inputValue(), "Keep my mobile draft");
 
     // System Back follows the same order, preserving the document instead of closing the file.
@@ -337,7 +344,7 @@ try {
     await preview.waitFor();
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
     await settings.waitFor();
-    await page.waitForFunction(() => history.state?.["herdr-web-ui:settings"] !== undefined);
+    await page.waitForFunction(() => history.state?.["ovis:settings"] !== undefined);
     await page.goBack();
     await settings.waitFor({ state: "hidden" });
     await preview.waitFor();
@@ -374,11 +381,11 @@ try {
   assert.ok(addPcFocus.every((entry) => !entry.startsWith("outside")), `Tab stays inside Add PC over a preview: ${addPcFocus.join(" | ")}`);
   assert.ok(new Set(addPcFocus).size >= 2, `Tab moves through Add PC over a preview: ${addPcFocus.join(" | ")}`);
   // Escape is Add PC's too: it closes Add PC alone, and the preview and its entry stay
-  const previewUnderAddPc = await page.evaluate(() => history.state["herdr-web-ui:file-preview"]);
+  const previewUnderAddPc = await page.evaluate(() => history.state["ovis:file-preview"]);
   await page.keyboard.press("Escape");
   await addPc.waitFor({ state: "hidden" });
   assert.equal(await page.locator(".file-viewer").count(), 1, "Escape over Add PC leaves the preview beneath it");
-  assert.deepEqual(await page.evaluate(() => history.state["herdr-web-ui:file-preview"]), previewUnderAddPc, "Escape over Add PC preserves the preview entry");
+  assert.deepEqual(await page.evaluate(() => history.state["ovis:file-preview"]), previewUnderAddPc, "Escape over Add PC preserves the preview entry");
   await preview.getByRole("button", { name: "Close file", exact: true }).click();
   await preview.waitFor({ state: "hidden" });
   console.log("PASS Add PC opened from Settings over a preview keeps Tab inside Add PC, and its Escape closes Add PC alone");
@@ -389,7 +396,7 @@ try {
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   const settingsAlone = page.getByRole("dialog", { name: "Settings", exact: true });
   await settingsAlone.waitFor();
-  await page.waitForFunction(() => history.state?.["herdr-web-ui:settings"] !== undefined);
+  await page.waitForFunction(() => history.state?.["ovis:settings"] !== undefined);
   await page.keyboard.press("ControlOrMeta+Shift+K");
   const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
   const paletteSearch = palette.getByRole("searchbox", { name: "Search panes and actions", exact: true });
@@ -404,7 +411,7 @@ try {
   await settingsAlone.waitFor();
   await page.keyboard.press("Escape");
   await settingsAlone.waitFor({ state: "hidden" });
-  await page.waitForFunction(() => history.state?.["herdr-web-ui:settings"] === undefined);
+  await page.waitForFunction(() => history.state?.["ovis:settings"] === undefined);
   console.log("PASS the command palette opens above Settings; Escape closes the palette, then Settings");
 
   // Over Settings raised above a preview, too, the palette it opens is the top layer: it takes
@@ -413,7 +420,7 @@ try {
   await preview.waitFor();
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   await settingsAlone.waitFor();
-  await page.waitForFunction(() => history.state?.["herdr-web-ui:settings"] !== undefined);
+  await page.waitForFunction(() => history.state?.["ovis:settings"] !== undefined);
   await page.keyboard.press("ControlOrMeta+Shift+K");
   await paletteSearch.waitFor();
   const topmost = (input: Element) => {
@@ -444,10 +451,10 @@ try {
   const panel = page.locator("aside.file-panel");
   const setFileOpen = async (fileOpen: string | null) => {
     await page.evaluate((fileOpen) => {
-      const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as Record<string, unknown>;
+      const settings = JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as Record<string, unknown>;
       const next = Object.fromEntries(Object.entries(settings).filter(([key]) => key !== "fileOpen"));
       if (fileOpen !== null) next["fileOpen"] = fileOpen;
-      localStorage.setItem("herdr-web-ui:settings", JSON.stringify(next));
+      localStorage.setItem("ovis:settings", JSON.stringify(next));
     }, fileOpen);
     await page.reload();
   };
@@ -497,6 +504,13 @@ try {
   // keeps its clicks, the panel's left edge drags its width (kept on this device across a reload),
   // Escape closes it only from inside it, and Close file takes the panel and its entry away.
   const panelWidth = () => panel.evaluate((element) => element.getBoundingClientRect().width);
+  // Keep the exact opening node, not a locator that can silently find its virtualized replacement.
+  await notesLink.focus();
+  await activeChat.and(page.locator('[data-chat-pinned="1"]')).waitFor();
+  const panelOpener = await notesLink.evaluateHandle(button => {
+    if (!(button instanceof HTMLButtonElement)) throw new Error("The file opener must be a button");
+    return button;
+  });
   await notesLink.click();
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
   assert.equal(await page.locator(".modal-scrim, .file-viewer-scrim, .modal.file-viewer, [aria-modal='true']").count(), 0, "a docked file has no scrim and no dialog");
@@ -509,13 +523,31 @@ try {
   assert.equal(await composer.evaluate((input) => document.activeElement === input), true, "the pane beside the panel takes a click");
   assert.equal(await panel.count(), 1, "a click in the pane leaves the panel open");
   assert.equal(await composer.inputValue(), "Keep my mobile draft");
+  await activeChat.and(page.locator('[data-chat-pinned="1"]')).waitFor();
+  await activeChat.evaluate(async element => {
+    element.scrollTop = element.scrollHeight;
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+  });
+  assert.equal(await panelOpener.evaluate(button => button.isConnected), true, "the docked file keeps its original chat opener mounted after focus leaves the row");
   // Escape from inside the panel closes it and takes its entry off, and the focus it held goes
   // back to the link that opened the file, as it does from the popup
   await panel.locator(".file-panel-resizer").focus();
   await page.keyboard.press("Escape");
   await panel.waitFor({ state: "detached" });
-  assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, "Escape in the panel consumes the preview entry");
-  assert.equal(await notesLink.evaluate((link) => document.activeElement === link), true, "Escape in the panel returns the focus to the link that opened the file");
+  assert.equal(await page.evaluate(() => history.state?.["ovis:file-preview"]), undefined, "Escape in the panel consumes the preview entry");
+  const focusAfterEscape = await notesLink.evaluate((link) => ({
+    restored: document.activeElement === link,
+    active: document.activeElement?.outerHTML.slice(0, 300),
+  }));
+  assert.equal(focusAfterEscape.restored, true, `Escape in the panel returns the focus to the link that opened the file: ${JSON.stringify(focusAfterEscape)}`);
+  await notesLink.click();
+  await panel.getByText("File preview history regression", { exact: true }).waitFor();
+  await composer.click();
+  await page.goBack();
+  await panel.waitFor({ state: "detached" });
+  assert.equal(await composer.evaluate(input => document.activeElement === input), true, "Back leaves focus in the composer when it was already outside the panel");
+  await activeChat.and(page.locator('[data-chat-pinned="0"]')).waitFor();
   // the left edge dragged 100px to the left widens the panel by as much, and the width is stored
   await notesLink.click();
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
@@ -526,7 +558,7 @@ try {
   await page.mouse.down();
   await page.mouse.move(grip.x + grip.width / 2 - 100, grip.y + grip.height / 2, { steps: 5 });
   await page.mouse.up();
-  const stored = Number(await (await page.waitForFunction(() => localStorage.getItem("herdr-web-ui:file-panel-width"))).jsonValue());
+  const stored = Number(await (await page.waitForFunction(() => localStorage.getItem("ovis:file-panel-width"))).jsonValue());
   assert.ok(Math.abs(stored - (before + 100)) <= 2, `dragging the edge 100px widens the panel 100px: ${before} -> ${stored}`);
   await page.waitForFunction((want) => Math.abs((document.querySelector("aside.file-panel")?.getBoundingClientRect().width ?? 0) - want) <= 1, stored);
   // a reload restores the file from its entry, at the stored width
@@ -536,24 +568,25 @@ try {
   // a double-click on the edge puts the default width back and forgets the stored one, so the
   // steps after this one see the panel as a fresh device does
   await panel.locator(".file-panel-resizer").dblclick();
-  await page.waitForFunction(() => localStorage.getItem("herdr-web-ui:file-panel-width") === null);
+  await page.waitForFunction(() => localStorage.getItem("ovis:file-panel-width") === null);
   await page.waitForFunction((want) => Math.abs((document.querySelector("aside.file-panel")?.getBoundingClientRect().width ?? 0) - want) <= 1, before);
   await panel.getByRole("button", { name: "Close file", exact: true }).click();
   await panel.waitFor({ state: "detached" });
-  assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, "Close file consumes the preview entry");
+  assert.equal(await page.evaluate(() => history.state?.["ovis:file-preview"]), undefined, "Close file consumes the preview entry");
   console.log("PASS from 980px a file is a panel beside the pane: no scrim, the pane takes clicks, its edge drags and keeps its width, Escape inside and Close file close it");
   const contentsLink = page.getByRole("button", { name: "contents page", exact: true });
   for (const close of ["Close file", "Escape"]) {
     await contentsLink.click();
     const framed = page.frameLocator(".file-viewer-page");
     await framed.getByText("contents ran", { exact: true }).waitFor();
-    const opened = await page.evaluate(() => history.length);
+    // Forward entries can be replaced without increasing history.length.
+    const navigated = page.waitForEvent("framenavigated", frame => frame.url().endsWith("#details"));
     await framed.locator("#toc").click();
-    await page.waitForFunction((length) => history.length === length + 1, opened);
+    await navigated;
     if (close === "Escape") { await panel.locator(".file-panel-resizer").focus(); await page.keyboard.press("Escape"); }
     else await panel.getByRole("button", { name: "Close file", exact: true }).click();
     await panel.waitFor({ state: "detached" });
-    assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, `${close} consumes the preview entry under a page the reader navigated inside its frame`);
+    assert.equal(await page.evaluate(() => history.state?.["ovis:file-preview"]), undefined, `${close} consumes the preview entry under a page the reader navigated inside its frame`);
   }
   console.log("PASS from 980px a page the reader navigated inside its frame still closes on Close file and Escape, consuming the preview's entry");
   // a file chosen in the Files dialog opens in the panel, and the dialog, which would cover it, closes
@@ -570,7 +603,7 @@ try {
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
   await panel.getByRole("button", { name: "Close file", exact: true }).click();
   await panel.waitFor({ state: "detached" });
-  assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, "Close file consumes the entry of a file opened from Files");
+  assert.equal(await page.evaluate(() => history.state?.["ovis:file-preview"]), undefined, "Close file consumes the entry of a file opened from Files");
   console.log("PASS from 980px a file opened from the Files dialog shows in the panel and the dialog closes");
 
   for (const [label, content] of [["extensionless", "Extensionless text"], ["unknown text", "Unknown extension text"]] as const) {
@@ -601,8 +634,8 @@ try {
   await notesLink.click();
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
   await page.evaluate(() => {
-    localStorage.setItem("herdr-web-ui:sidebar-width", "520");
-    localStorage.setItem("herdr-web-ui:file-panel-width", "900");
+    localStorage.setItem("ovis:sidebar-width", "520");
+    localStorage.setItem("ovis:file-panel-width", "900");
   });
   await page.reload();
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
@@ -638,8 +671,8 @@ try {
   await panel.getByRole("button", { name: "Close file", exact: true }).click();
   await panel.waitFor({ state: "detached" });
   await page.evaluate(() => {
-    localStorage.removeItem("herdr-web-ui:sidebar-width");
-    localStorage.removeItem("herdr-web-ui:file-panel-width");
+    localStorage.removeItem("ovis:sidebar-width");
+    localStorage.removeItem("ovis:file-panel-width");
   });
   await page.reload();
   await videoLink.waitFor();
@@ -647,7 +680,7 @@ try {
 
   // The file beside the pane is the pane's: selecting another pane closes it, and the move takes
   // the file's entry over, so Back returns to the first pane without the file (DESIGN.md)
-  const other = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-file-back-other" });
+  const other = await workspaceCreate({ cwd: root, label: "ovis-test-file-back-other" });
   otherWorkspace = other.workspace.workspace_id;
   const otherPane = other.root_pane.pane_id;
   const selectedPane = () => page.evaluate(() => new URLSearchParams(location.search).get("pane"));
@@ -663,12 +696,12 @@ try {
   await panel.waitFor({ state: "detached", timeout: 5_000 }).catch(() => {});
   assert.equal(await panel.count(), 0, "selecting another pane closes the file open beside the first");
   assert.equal(await page.evaluate(() => history.length), openLength, "the move takes the file's entry over: no entry is pushed");
-  assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, "the other pane's entry holds no file");
+  assert.equal(await page.evaluate(() => history.state?.["ovis:file-preview"]), undefined, "the other pane's entry holds no file");
   assert.equal(new URL(page.url()).searchParams.has("file"), false, "the other pane's address names no file");
   await page.goBack();
   await page.waitForFunction((paneId) => new URLSearchParams(location.search).get("pane") === paneId, pane);
   assert.equal(await panel.count(), 0, "Back returns to the first pane without the file");
-  assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, "Back lands on no file entry");
+  assert.equal(await page.evaluate(() => history.state?.["ovis:file-preview"]), undefined, "Back lands on no file entry");
   assert.equal(new URL(page.url()).searchParams.has("file"), false, "the first pane's address names no file either");
   console.log("PASS selecting another pane closes the panel and takes its entry over; Back returns to the pane without the file");
   // two moves (there and back) leave entries behind the pane: the handoff below then has room for a stray second step to show
@@ -764,7 +797,7 @@ try {
     await diff.waitFor({ state: "detached" });
     await filesDialog.waitFor({ state: "detached" });
     assert.equal(await page.evaluate(() => history.length), diffLength, "the file replaces rather than pushes over the diff");
-    assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:repo-diff"]), undefined, "no stale diff target remains in the file entry");
+    assert.equal(await page.evaluate(() => history.state?.["ovis:repo-diff"]), undefined, "no stale diff target remains in the file entry");
     const close = panel.getByRole("button", { name: "Close file", exact: true });
     assert.equal(await close.evaluate((button) => {
       const rect = button.getBoundingClientRect();
@@ -959,8 +992,8 @@ try {
 
   // code past the colors bound: whole, as a window of plain rows, and the header says why it is plain
   await page.evaluate(() => {
-    const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as Record<string, unknown>;
-    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, wrapCode: true }));
+    const settings = JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as Record<string, unknown>;
+    localStorage.setItem("ovis:settings", JSON.stringify({ ...settings, wrapCode: true }));
   });
   await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
   await page.locator(".conn-live").waitFor();
@@ -1079,7 +1112,7 @@ try {
   for (const width of [390, 1440]) {
     for (const theme of ["dark", "light"]) {
       const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: width === 390, hasTouch: width === 390 });
-      await context.addInitScript((theme) => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme, sidebarLayout: "upstream" })), theme);
+      await context.addInitScript((theme) => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme, sidebarLayout: "upstream" })), theme);
       const page = await context.newPage();
       page.setDefaultTimeout(10_000);
       await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}&file=${encodeURIComponent(markdownPath)}`);
@@ -1162,6 +1195,40 @@ try {
       console.log(`PASS Markdown inline/new tab/reload/raw/download: ${width}px ${theme}`);
     }
   }
+  // The copied read link is a document-only page, not a modal. Its frame must constrain the
+  // body on both sides of the mobile header breakpoint; the page is not a second scroll owner.
+  // Since the body is then the one scroll box, it opens with the focus, so the keys scroll it
+  // before any click; and the bound is the screen's only, so printing it prints every page.
+  for (const width of [1280, 601, 600, 390]) {
+    const readerContext = await browser.newContext({ viewport: { width, height: 800 } });
+    try {
+      const readerPage = await readerContext.newPage();
+      await readerPage.goto(`${origin}/?read=${encodeURIComponent(join(root, "long.md"))}`);
+      const readerBody = readerPage.locator(".file-reader-body");
+      await readerBody.locator(".file-viewer-markdown p").first().waitFor();
+      const geometry = await readerBody.evaluate((element) => ({ height: element.clientHeight, scrollHeight: element.scrollHeight, viewport: innerHeight }));
+      assert.ok(geometry.height < geometry.viewport, `${width}px: standalone reader body is bounded by the viewport`);
+      assert.ok(geometry.scrollHeight > geometry.height, `${width}px: long document has an internal scroll range`);
+      assert.equal(await readerBody.evaluate((element) => element === document.activeElement), true, `${width}px: the opened document holds the focus`);
+      await readerPage.keyboard.press("PageDown");
+      await readerPage.waitForFunction(() => (document.querySelector(".file-reader-body")?.scrollTop ?? 0) > 0);
+      assert.equal(await readerPage.evaluate(() => window.scrollY), 0, `${width}px: Page Down scrolls the document body, not the page`);
+      await readerBody.evaluate((element) => { element.scrollTop = 0; });
+      if (width === 1280) {
+        // the print layout is the paper's, not the window's: one width is enough
+        const pdf = (await readerPage.pdf({ format: "A4" })).toString("latin1");
+        const printed = pdf.match(/\/Type\s*\/Page(?!s)\b/g)?.length ?? 0;
+        assert.ok(printed > 10, `the printed document runs over its pages, not one screen cut off (${printed} pages)`);
+      }
+      await readerPage.mouse.move(width / 2, 400);
+      await readerPage.mouse.wheel(0, 600);
+      await readerPage.waitForFunction(() => (document.querySelector(".file-reader-body")?.scrollTop ?? 0) > 0);
+      assert.equal(await readerPage.evaluate(() => window.scrollY), 0, `${width}px: wheel scroll belongs to the document body, not the page`);
+      console.log(`PASS standalone Markdown reader scroll ownership and keys${width === 1280 ? ", print" : ""}: ${width}px`);
+    } finally {
+      await readerContext.close();
+    }
+  }
   // A file-only link owns its PC even if this browser last selected another one.
   // The remote fixture has no panes; only the bridge hop is supplied here, and its
   // file requests still go through the real server's stat/Range implementation.
@@ -1173,8 +1240,8 @@ try {
     const ownerContext = await browser.newContext();
     const fileRequests: string[] = [];
     await ownerContext.addInitScript(({ stored, pane }) => {
-      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
-      sessionStorage.setItem("herdr-web-ui:selection", JSON.stringify({ machine_id: stored, pane_id: pane }));
+      localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
+      sessionStorage.setItem("ovis:selection", JSON.stringify({ machine_id: stored, pane_id: pane }));
     }, { stored: target === "local" ? "remote-fixture" : "local", pane });
     await ownerContext.route("**/api/**", async (route) => {
       const request = new URL(route.request().url());
@@ -1351,13 +1418,13 @@ try {
     await contentsLink.tap();
     await frame.getByText("contents ran", { exact: true }).waitFor();
     await sheetsSettled(page);
-    const opened = await page.evaluate(() => history.length);
+    const navigated = page.waitForEvent("framenavigated", frame => frame.url().endsWith("#details"));
     await frame.locator("#toc").click();
-    await page.waitForFunction((length) => history.length === length + 1, opened);
+    await navigated;
     if (close === "scrim") await page.locator(".file-viewer-scrim").evaluate((scrim) => scrim.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
     else await contents.getByRole("button", { name: "Close file", exact: true }).click();
     await contents.waitFor({ state: "hidden" });
-    assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, `${close} consumes the preview entry under a page the reader navigated inside its frame`);
+    assert.equal(await page.evaluate(() => history.state?.["ovis:file-preview"]), undefined, `${close} consumes the preview entry under a page the reader navigated inside its frame`);
   }
   console.log("PASS A page the reader navigated inside its frame still closes on Close file and the scrim, consuming the preview's entry");
   // a log in a plain code block: its paths open as well
