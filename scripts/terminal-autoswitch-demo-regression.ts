@@ -149,13 +149,27 @@ try {
           return rect.top <= top && rect.bottom > top;
         });
       });
-      const place = await chat(page).getByRole("log").evaluate((node) => {
-        const top = node.getBoundingClientRect().top;
-        const row = [...node.querySelectorAll("[data-chat-row]")].find((row) => row.getBoundingClientRect().bottom > top);
-        return { text: row?.textContent, offset: (row?.getBoundingClientRect().top ?? 0) - top };
+      const place = await chat(page).getByRole("log").evaluate(async (node) => {
+        // PageUp mounts virtual rows whose measured heights can still move the view. Compare
+        // Back to Chat with the settled place at receipt time, not an intermediate estimate.
+        let previous = "", stable = 0;
+        for (let frame = 0; frame < 120; frame++) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          const top = node.getBoundingClientRect().top;
+          const row = [...node.querySelectorAll("[data-chat-row]")].find((row) => row.getBoundingClientRect().bottom > top);
+          const place = { text: row?.textContent, offset: (row?.getBoundingClientRect().top ?? 0) - top };
+          const sample = JSON.stringify([node.scrollTop, node.scrollHeight, node.clientHeight, place]);
+          stable = sample === previous && row !== undefined ? stable + 1 : 0;
+          previous = sample;
+          if (stable < 3) continue;
+          const release = Reflect.get(window, "releaseReceipt");
+          if (typeof release !== "function") throw new Error("The held receipt disappeared before sampling");
+          release();
+          return place;
+        }
+        throw new Error("The virtual reading position did not settle before receipt release");
       });
       assert.ok(place.text);
-      await page.evaluate("window.releaseReceipt()");
       await hint(page).waitFor();
       await capture(page, `${tag}-accepted`);
       await hint(page).getByRole("button", { name: "Back to Chat", exact: true }).click();
