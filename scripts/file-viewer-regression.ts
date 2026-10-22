@@ -45,7 +45,7 @@ writeFileSync(transcript, [
   { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Dashes:\n\n\`\`\`yaml\n${"-".repeat(90_000)}\n\`\`\`` }] } },
   // more lines than are drawn one element each (LINE_ELEMENT_LIMIT): 30 000 elements held the page
   { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Lines:\n\n\`\`\`\n${"x\n".repeat(30_000)}\`\`\`` }] } },
-  ...fidelitySources.map((source, index) => ({ type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `\`\`\`${index === 0 ? "ts" : "text"}\n${source}\n\`\`\`` }] } })),
+  ...fidelitySources.map((source, index) => ({ type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Code fidelity ${index}\n\n\`\`\`${index === 0 ? "ts" : "text"}\n${source}\n\`\`\`` }] } })),
   // a tool's output and a log in a plain code block name the files they wrote
   { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Take the screenshots." }] } },
   { type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "shoot", arguments: JSON.stringify({ cmd: "python3 shoot.py --out shots/report.html" }) } },
@@ -168,16 +168,21 @@ try {
   const codeText = await codeBlocks.locator(".hl-code").first().innerText();
   if (codeText !== "const answer = 42;\n\nexport { answer };") throw new Error(`Chat code block text lost its blank line: ${JSON.stringify(codeText)}`);
   console.log("PASS Chat code block keeps its blank line in the text");
+  // Address the fixture, not its position in the virtual list's currently mounted blocks.
+  const fidelityBlock = (index: number) => activeChat.locator(`p:has-text("Code fidelity ${index}") + .markdown-code`);
   const checkCodeFidelity = async (mode: string) => {
     for (const [index, source] of fidelitySources.entries()) {
-      const block = codeBlocks.nth(3 + index);
+      const block = fidelityBlock(index);
+      const copy = block.getByRole("button", { name: "Copy code", exact: true });
+      // Let actionability settle virtualized scrolling before pinning; no clipboard click.
+      await copy.click({ trial: true });
       // The real focus pins this row while native selection is compared across browser calls.
-      await block.getByRole("button", { name: "Copy code", exact: true }).focus();
+      await copy.focus();
       await page.waitForFunction(() => {
         const chat = document.activeElement?.closest(".chat-view-virtual");
         return Number(chat?.getAttribute("data-chat-pinned")) > 0;
       });
-      await block.scrollIntoViewIfNeeded();
+      assert.equal(await copy.evaluate(button => button === document.activeElement), true, `${mode} block ${index}: selection starts in the focused pinned row`);
       assert.equal(await block.locator("code").textContent(), source, `${mode}: source whitespace`);
       assert.equal(await block.locator("pre").evaluate((pre) => getComputedStyle(pre).visibility), "visible", `${mode}: selection comes from the current pane, not a hidden cached pane`);
       const selections = await block.locator("pre").evaluate((pre, source) => {
@@ -199,7 +204,7 @@ try {
     }
     if (process.env.UI_EVIDENCE_DIR) {
       mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
-      await codeBlocks.nth(3).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `code-fidelity-${mode}.png`) });
+      await fidelityBlock(0).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `code-fidelity-${mode}.png`) });
     }
     console.log(`PASS ${mode}: trailing and interior blank lines match source and native selection`);
   };
