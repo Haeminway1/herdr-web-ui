@@ -81,6 +81,8 @@ interface AttachmentState {
   stalled: Map<Client, number>;
   /** another web bridge holds herdr's one attach slot for this terminal: waiting for it to let go */
   held?: boolean;
+  /** the stream ended after it was ready: until an attach takes again, the replay is the screen from before */
+  recovering?: boolean;
   /** the next held or read-race retry; takeover and close both cancel it */
   retry?: ReturnType<typeof setTimeout>;
   /** the next look for the terminal a pane lives on after herdr ended its attach; a closed attachment cancels it */
@@ -113,6 +115,8 @@ export interface PtyAttachment extends AttachmentState {
 export interface MirrorAttachment extends AttachmentState {
   readonly kind: "mirror";
   process: MirrorSession;
+  /** clients that attached before any screen went out: the first screen they get is their replay */
+  unscreened: Set<Client>;
 }
 
 export type PaneAttachment = PtyAttachment | MirrorAttachment;
@@ -121,7 +125,7 @@ export type PaneAttachment = PtyAttachment | MirrorAttachment;
  * The attach the server's clients share for each pane. `attachments` stays the server's: a callback
  * of an attachment that is no longer the pane's record does nothing.
  */
-export function createSpawnAttachment({ attachments, retiringAttachments, terminalAttach, isStopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, holdFor, heldRetry, retryFor, relookupFor }: {
+export function createSpawnAttachment({ attachments, retiringAttachments, terminalAttach, isStopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, inputReady, holdFor, heldRetry, retryFor, relookupFor }: {
   attachments: Map<string, PaneAttachment>;
   retiringAttachments: Map<string, Promise<void>>;
   terminalAttach: () => Promise<boolean>;
@@ -129,9 +133,11 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
   isStopped: () => boolean;
   closeAttachment: (paneId: string) => void;
   broadcast: (paneId: string, message: ServerMessage) => void;
-  sendOutput: (client: Client, paneId: string, data: string) => void;
+  sendOutput: (client: Client, paneId: string, data: string, replay?: boolean) => void;
   reconcileOutput: (paneId: string) => void;
   holdPendingPane: (paneId: string, fault: { code: string; message: string }) => void;
+  /** the attach took and input flows: a pending message waiting for a typist may go now */
+  inputReady: (paneId: string) => void;
   holdFor: number;
   heldRetry: number;
   retryFor: number;
@@ -172,7 +178,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
     };
 
     if (mirrored) {
-      const attachment: MirrorAttachment = { kind: "mirror", ready: true, process: undefined as unknown as MirrorSession, ...state };
+      const attachment: MirrorAttachment = { kind: "mirror", ready: true, process: undefined as unknown as MirrorSession, unscreened: new Set(), ...state };
       attachments.set(paneId, attachment);
       const mirror = new MirrorSession({
         cols: spawnCols,
@@ -192,7 +198,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         write: (data) => paneSendText(paneId, data),
         onData: (frame) => {
           if (attachments.get(paneId) !== attachment) return;
-          for (const client of attachment.clients) sendOutput(client, paneId, frame);
+          for (const client of attachment.clients) sendOutput(client, paneId, frame, attachment.unscreened.delete(client));
           reconcileOutput(paneId);
         },
         onExit: (code) => {
@@ -316,7 +322,9 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
           broadcast(paneId, { type: "attach-resumed", pane_id: paneId });
         }
         attachment.ready = true;
+        attachment.recovering = false;
         broadcast(paneId, { type: "input-ready", pane_id: paneId });
+        inputReady(paneId);
         release();
       };
       const ended = (code: number | null): void => {
@@ -325,6 +333,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         clearTimeout(tailTimer);
         if (attachments.get(paneId) !== attachment) return;
         if (attachment.ready) {
+          attachment.recovering = true;
           broadcast(paneId, { type: "input-ready", pane_id: paneId, ready: false });
           holdPendingPane(paneId, { code: "input_not_ready", message: "The pane's attachment is restarting; review pending messages before sending them" });
         }

@@ -171,6 +171,13 @@ try {
   const checkCodeFidelity = async (mode: string) => {
     for (const [index, source] of fidelitySources.entries()) {
       const block = codeBlocks.nth(3 + index);
+      // The real focus pins this row while native selection is compared across browser calls.
+      await block.getByRole("button", { name: "Copy code", exact: true }).focus();
+      await page.waitForFunction(() => {
+        const chat = document.activeElement?.closest(".chat-view-virtual");
+        return Number(chat?.getAttribute("data-chat-pinned")) > 0;
+      });
+      await block.scrollIntoViewIfNeeded();
       assert.equal(await block.locator("code").textContent(), source, `${mode}: source whitespace`);
       assert.equal(await block.locator("pre").evaluate((pre) => getComputedStyle(pre).visibility), "visible", `${mode}: selection comes from the current pane, not a hidden cached pane`);
       const selections = await block.locator("pre").evaluate((pre, source) => {
@@ -497,6 +504,13 @@ try {
   // keeps its clicks, the panel's left edge drags its width (kept on this device across a reload),
   // Escape closes it only from inside it, and Close file takes the panel and its entry away.
   const panelWidth = () => panel.evaluate((element) => element.getBoundingClientRect().width);
+  // Keep the exact opening node, not a locator that can silently find its virtualized replacement.
+  await notesLink.focus();
+  await activeChat.and(page.locator('[data-chat-pinned="1"]')).waitFor();
+  const panelOpener = await notesLink.evaluateHandle(button => {
+    if (!(button instanceof HTMLButtonElement)) throw new Error("The file opener must be a button");
+    return button;
+  });
   await notesLink.click();
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
   assert.equal(await page.locator(".modal-scrim, .file-viewer-scrim, .modal.file-viewer, [aria-modal='true']").count(), 0, "a docked file has no scrim and no dialog");
@@ -509,13 +523,31 @@ try {
   assert.equal(await composer.evaluate((input) => document.activeElement === input), true, "the pane beside the panel takes a click");
   assert.equal(await panel.count(), 1, "a click in the pane leaves the panel open");
   assert.equal(await composer.inputValue(), "Keep my mobile draft");
+  await activeChat.and(page.locator('[data-chat-pinned="1"]')).waitFor();
+  await activeChat.evaluate(async element => {
+    element.scrollTop = element.scrollHeight;
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+  });
+  assert.equal(await panelOpener.evaluate(button => button.isConnected), true, "the docked file keeps its original chat opener mounted after focus leaves the row");
   // Escape from inside the panel closes it and takes its entry off, and the focus it held goes
   // back to the link that opened the file, as it does from the popup
   await panel.locator(".file-panel-resizer").focus();
   await page.keyboard.press("Escape");
   await panel.waitFor({ state: "detached" });
   assert.equal(await page.evaluate(() => history.state?.["herdr-web-ui:file-preview"]), undefined, "Escape in the panel consumes the preview entry");
-  assert.equal(await notesLink.evaluate((link) => document.activeElement === link), true, "Escape in the panel returns the focus to the link that opened the file");
+  const focusAfterEscape = await notesLink.evaluate((link) => ({
+    restored: document.activeElement === link,
+    active: document.activeElement?.outerHTML.slice(0, 300),
+  }));
+  assert.equal(focusAfterEscape.restored, true, `Escape in the panel returns the focus to the link that opened the file: ${JSON.stringify(focusAfterEscape)}`);
+  await notesLink.click();
+  await panel.getByText("File preview history regression", { exact: true }).waitFor();
+  await composer.click();
+  await page.goBack();
+  await panel.waitFor({ state: "detached" });
+  assert.equal(await composer.evaluate(input => document.activeElement === input), true, "Back leaves focus in the composer when it was already outside the panel");
+  await activeChat.and(page.locator('[data-chat-pinned="0"]')).waitFor();
   // the left edge dragged 100px to the left widens the panel by as much, and the width is stored
   await notesLink.click();
   await panel.getByText("File preview history regression", { exact: true }).waitFor();
@@ -547,9 +579,10 @@ try {
     await contentsLink.click();
     const framed = page.frameLocator(".file-viewer-page");
     await framed.getByText("contents ran", { exact: true }).waitFor();
-    const opened = await page.evaluate(() => history.length);
+    // Forward entries can be replaced without increasing history.length.
+    const navigated = page.waitForEvent("framenavigated", frame => frame.url().endsWith("#details"));
     await framed.locator("#toc").click();
-    await page.waitForFunction((length) => history.length === length + 1, opened);
+    await navigated;
     if (close === "Escape") { await panel.locator(".file-panel-resizer").focus(); await page.keyboard.press("Escape"); }
     else await panel.getByRole("button", { name: "Close file", exact: true }).click();
     await panel.waitFor({ state: "detached" });
@@ -1162,6 +1195,40 @@ try {
       console.log(`PASS Markdown inline/new tab/reload/raw/download: ${width}px ${theme}`);
     }
   }
+  // The copied read link is a document-only page, not a modal. Its frame must constrain the
+  // body on both sides of the mobile header breakpoint; the page is not a second scroll owner.
+  // Since the body is then the one scroll box, it opens with the focus, so the keys scroll it
+  // before any click; and the bound is the screen's only, so printing it prints every page.
+  for (const width of [1280, 601, 600, 390]) {
+    const readerContext = await browser.newContext({ viewport: { width, height: 800 } });
+    try {
+      const readerPage = await readerContext.newPage();
+      await readerPage.goto(`${origin}/?read=${encodeURIComponent(join(root, "long.md"))}`);
+      const readerBody = readerPage.locator(".file-reader-body");
+      await readerBody.locator(".file-viewer-markdown p").first().waitFor();
+      const geometry = await readerBody.evaluate((element) => ({ height: element.clientHeight, scrollHeight: element.scrollHeight, viewport: innerHeight }));
+      assert.ok(geometry.height < geometry.viewport, `${width}px: standalone reader body is bounded by the viewport`);
+      assert.ok(geometry.scrollHeight > geometry.height, `${width}px: long document has an internal scroll range`);
+      assert.equal(await readerBody.evaluate((element) => element === document.activeElement), true, `${width}px: the opened document holds the focus`);
+      await readerPage.keyboard.press("PageDown");
+      await readerPage.waitForFunction(() => (document.querySelector(".file-reader-body")?.scrollTop ?? 0) > 0);
+      assert.equal(await readerPage.evaluate(() => window.scrollY), 0, `${width}px: Page Down scrolls the document body, not the page`);
+      await readerBody.evaluate((element) => { element.scrollTop = 0; });
+      if (width === 1280) {
+        // the print layout is the paper's, not the window's: one width is enough
+        const pdf = (await readerPage.pdf({ format: "A4" })).toString("latin1");
+        const printed = pdf.match(/\/Type\s*\/Page(?!s)\b/g)?.length ?? 0;
+        assert.ok(printed > 10, `the printed document runs over its pages, not one screen cut off (${printed} pages)`);
+      }
+      await readerPage.mouse.move(width / 2, 400);
+      await readerPage.mouse.wheel(0, 600);
+      await readerPage.waitForFunction(() => (document.querySelector(".file-reader-body")?.scrollTop ?? 0) > 0);
+      assert.equal(await readerPage.evaluate(() => window.scrollY), 0, `${width}px: wheel scroll belongs to the document body, not the page`);
+      console.log(`PASS standalone Markdown reader scroll ownership and keys${width === 1280 ? ", print" : ""}: ${width}px`);
+    } finally {
+      await readerContext.close();
+    }
+  }
   // A file-only link owns its PC even if this browser last selected another one.
   // The remote fixture has no panes; only the bridge hop is supplied here, and its
   // file requests still go through the real server's stat/Range implementation.
@@ -1351,9 +1418,9 @@ try {
     await contentsLink.tap();
     await frame.getByText("contents ran", { exact: true }).waitFor();
     await sheetsSettled(page);
-    const opened = await page.evaluate(() => history.length);
+    const navigated = page.waitForEvent("framenavigated", frame => frame.url().endsWith("#details"));
     await frame.locator("#toc").click();
-    await page.waitForFunction((length) => history.length === length + 1, opened);
+    await navigated;
     if (close === "scrim") await page.locator(".file-viewer-scrim").evaluate((scrim) => scrim.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
     else await contents.getByRole("button", { name: "Close file", exact: true }).click();
     await contents.waitFor({ state: "hidden" });
