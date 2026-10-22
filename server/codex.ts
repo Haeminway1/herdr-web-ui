@@ -11,8 +11,10 @@ import { processStartedAt, processStartUpperBound } from "./process-start.ts";
 import { codexImageParts } from "./codex-images.ts";
 import { codexReadCall, codexReadSkills, selectedSkill } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
+import type { TranscriptParser } from "./transcript-records.ts";
 import { agentGet, paneProcessInfo, paneRead, sessionSnapshot } from "./herdr/client.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
+import { resolveAgent } from "./pane-context.ts";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -196,7 +198,7 @@ interface CodexParseState {
 }
 
 /** Complete records are folded once; snapshots detach mutable tools from prior HTTP answers. */
-export function createCodexTranscriptParser(state: CodexParseState = { turns: [], tools: new Map(), messages: [] }) {
+export function createCodexTranscriptParser(state: CodexParseState = { turns: [], tools: new Map(), messages: [] }): TranscriptParser {
   const { turns, tools, messages } = state;
   const assistant = (ts: string): ConversationTurn => {
     let turn = turns.at(-1);
@@ -430,15 +432,62 @@ export async function paneCodexHome(paneId: string, configured?: string): Promis
   return defaultCodexHome();
 }
 
-/** The session_meta payload on a rollout's first line, or null when the file is not a rollout. */
-function rolloutHeader(path: string, io?: CodexReadScope): RecordValue | null {
+/**
+ * A rollout's first line, parsed, when it is a session_meta; null when the file is not a rollout.
+ * Throws when that line is not JSON, or when it does not end within the read (no newline in a
+ * full read): what it holds past the read cannot be checked, even when the part read parses.
+ */
+function rolloutMetaLine(path: string, io?: CodexReadScope): RecordValue | null {
   const fd = io ? io.fd(path) : openSync(path, "r");
   try {
     const buffer = Buffer.alloc(io ? 1024 * 1024 : 256 * 1024);
     const length = readSync(fd, buffer, 0, buffer.length, 0);
-    const header = record(JSON.parse(buffer.subarray(0, length).toString("utf8").split("\n")[0]!));
-    return header.type === "session_meta" ? record(header.payload) : null;
+    const end = buffer.subarray(0, length).indexOf(0x0a);
+    if (end === -1 && length === buffer.length) throw new Error("rollout header longer than the read");
+    const header = record(JSON.parse(buffer.subarray(0, end === -1 ? length : end).toString("utf8")));
+    return header.type === "session_meta" ? header : null;
   } finally { if (!io) closeSync(fd); }
+}
+
+/** The session_meta payload on a rollout's first line, or null when the file is not a rollout. */
+function rolloutHeader(path: string, io?: CodexReadScope): RecordValue | null {
+  const header = rolloutMetaLine(path, io);
+  return header === null ? null : record(header.payload);
+}
+
+/**
+ * The thread UUID a canonical rollout name carries: `rollout-<time>-<thread>.jsonl`, or a
+ * paginated rollout's `rollout-<time>-<thread>_<segment>.jsonl` (Codex 0.156).
+ */
+const ROLLOUT_NAME = /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\.jsonl$/i;
+
+/**
+ * Whether a rollout's session_meta payload makes it an interactive conversation of its own: the
+ * one rule the live chat (codexRolloutPath) and the session history apply. Interactive is a TUI's
+ * (`cli`) or an editor's (`vscode`) thread; an older Codex wrote no source, thread_source or
+ * session_id, and such a header still counts. A child names its parent (`parent_thread_id`, a
+ * subagent source object, `thread_source` other than `user`, `agent_role`) and is never one, even
+ * when its own id matches its file.
+ *
+ * `id` and `session_id` (the root session, which is the thread itself unless it is a child,
+ * openai/codex#29327), when present (null included), must be strings that name the same thread, and with a
+ * canonical file name that file's UUID, in any letter case. This proves the file is the thread it
+ * says, not that a self-consistent child is a parent. A name without a UUID, or a header without
+ * ids, has nothing to contradict.
+ */
+export function interactiveCodexRollout(payload: unknown, fileName: string): boolean {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const meta = payload as RecordValue;
+  const present = (value: unknown) => value !== undefined && value !== null;
+  if (present(meta.source) && meta.source !== "cli" && meta.source !== "vscode") return false;
+  if (present(meta.thread_source) && meta.thread_source !== "user") return false;
+  if (present(meta.parent_thread_id) || present(meta.agent_role)) return false;
+  // a child marker may be null; an identity that is there must name a thread
+  const ids = [meta.id, meta.session_id].filter((id) => id !== undefined);
+  if (ids.some((id) => typeof id !== "string")) return false;
+  const key = (id: string) => UUID.test(id) ? id.toLowerCase() : id;
+  const named = ROLLOUT_NAME.exec(fileName)?.[1]?.toLowerCase();
+  return (ids as string[]).every((id) => key(id) === (named ?? key(ids[0] as string)));
 }
 
 /**
@@ -488,7 +537,7 @@ export function sameDirectory(left: string, right: string): boolean {
 /** The other Codex panes herdr shows in this pane's directory, in any spelling `sameDirectory` takes. */
 export function codexPeersIn(panes: readonly HerdrPane[], paneId: string, cwd: string): HerdrPane[] {
   // the agent first: sameDirectory can ask the file system, and only Codex panes need it
-  return panes.filter((pane) => pane.pane_id !== paneId && (pane.agent ?? pane.agent_session?.agent) === "codex"
+  return panes.filter((pane) => pane.pane_id !== paneId && resolveAgent(pane).agent === "codex"
     && pane.cwd != null && sameDirectory(pane.cwd, cwd));
 }
 
@@ -532,12 +581,10 @@ export function codexRolloutPath(path: string, codexHome: string): string | null
     const canonical = realpathSync(withoutVerbatimPrefix(path));
     if (!rolloutInsideStore(realpathSync(join(codexHome, "sessions")), canonical) || !canonical.endsWith(".jsonl")) return null;
     if (!statSync(canonical).isFile()) return null;
-    const metadata = rolloutHeader(canonical);
+    const header = rolloutMetaLine(canonical);
     // A child Codex can be in the foreground process group too. Its rollout
     // is not the conversation of the parent TUI.
-    if (metadata === null || (metadata.source && typeof metadata.source !== "string")
-      || metadata.source === "subagent" || (metadata.thread_source && metadata.thread_source !== "user")
-      || metadata.agent_role) return null;
+    if (header === null || !interactiveCodexRollout(header.payload, nodePath.basename(canonical))) return null;
     return canonical;
   } catch { return null; }
 }
@@ -567,7 +614,10 @@ const questionScans = new Map<string, { ino: number; size: number; cut: boolean;
  * are read (the first call reads the last 4MB, without blocking), and only lines naming
  * the tool parsed.
  */
-export function unansweredCodexQuestions(path: string): Promise<QueuedQuestion[]> {
+export function unansweredCodexQuestions(path: string, io?: CodexReadScope, identity = path): Promise<QueuedQuestion[]> {
+  // Managed reads own a verified descriptor and a generation-scoped cache key. Never join an
+  // unscoped pathname scan, even when its file has the same name.
+  if (io) return scanQuestions(path, io, identity);
   // two viewers polling, or a poll overlapping an answer: one scan per file at a time
   const running = questionScansInFlight.get(path);
   if (running) return running;
@@ -578,15 +628,20 @@ export function unansweredCodexQuestions(path: string): Promise<QueuedQuestion[]
 
 const questionScansInFlight = new Map<string, Promise<QueuedQuestion[]>>();
 
-async function scanQuestions(path: string): Promise<QueuedQuestion[]> {
-  const stat = statSync(path);
-  const known = questionScans.get(path);
+async function scanQuestions(path: string, io?: CodexReadScope, identity = path): Promise<QueuedQuestion[]> {
+  const stat = io ? io.stat(path) : statSync(path);
+  const known = questionScans.get(identity);
   // the scan is built on a copy and kept only once complete
   const scan = known && known.ino === stat.ino && stat.size >= known.size
     ? { ...known, asked: [...known.asked], answered: new Set(known.answered) }
     : { ino: stat.ino, size: Math.max(0, stat.size - QUESTION_SCAN_BYTES), cut: stat.size > QUESTION_SCAN_BYTES, asked: [] as QueuedQuestion[], answered: new Set<string>() };
   if (stat.size > scan.size) {
-    const bytes = Buffer.from(await Bun.file(path).slice(scan.size, stat.size).arrayBuffer());
+    let bytes: Buffer;
+    if (io) {
+      bytes = Buffer.alloc(stat.size - scan.size);
+      const length = readSync(io.fd(path), bytes, 0, bytes.length, scan.size);
+      bytes = bytes.subarray(0, length);
+    } else bytes = Buffer.from(await Bun.file(path).slice(scan.size, stat.size).arrayBuffer());
     // whole lines only: a line still being written is read again next time
     const end = bytes.lastIndexOf(0x0a) + 1;
     let text = bytes.subarray(0, end).toString("utf8");
@@ -622,8 +677,8 @@ async function scanQuestions(path: string): Promise<QueuedQuestion[]> {
     }
     scan.size += end;
   }
-  questionScans.delete(path);
-  questionScans.set(path, scan);
+  questionScans.delete(identity);
+  questionScans.set(identity, scan);
   if (questionScans.size > 16) questionScans.delete(questionScans.keys().next().value!);
   return scan.asked.filter((question) => !scan.answered.has(question.key));
 }
@@ -1145,6 +1200,11 @@ const VALUELESS_OPTIONS = new Set([
 ]);
 
 /** A pane's Codex executables (or interpreter scripts), and their pids as one key. */
+/** The pane's first Codex process (the one paneCodexHome decides by), or null when there is none. */
+export async function paneCodexProcess(paneId: string): Promise<{ pid: number; argv?: string[] } | null> {
+  return (await codexProcessesOf(paneId)).list[0] ?? null;
+}
+
 async function codexProcessesOf(paneId: string): Promise<{ list: { pid: number; argv?: string[] }[]; key: string }> {
   const processInfo = await paneProcessInfo(paneId);
   // herdr's schema allows `argv: null`; this reader has always read argv as absent or a list
@@ -1363,7 +1423,7 @@ async function shortThreadFromProcess(
   try {
     const peers = panes ?? (await sessionSnapshot()).panes;
     if (peers.some((pane) => pane.pane_id !== paneId
-      && (pane.agent ?? pane.agent_session?.agent) === "codex" && pane.cwd == null)) return null;
+      && resolveAgent(pane).agent === "codex" && pane.cwd == null)) return null;
     db = new Database(join(home, "state_5.sqlite"), { readonly: true, create: false });
     const columns = new Set(db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('threads')").all().map((column) => column.name));
     if (!columns.has("first_user_message") || !columns.has("source")) return null;
