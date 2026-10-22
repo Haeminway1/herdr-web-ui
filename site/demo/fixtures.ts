@@ -1,6 +1,6 @@
 /**
  * The fictional session behind the README media (scripts/readme-media/stage.ts) and the browser
- * demo (site/demo/transport.ts): five panes, their curated chats and one Codex approval. Nothing
+ * demo (site/demo/transport.ts): their panes, curated chats and one Codex approval. Nothing
  * here comes from a real machine. It imports no server code, so the browser bundle can take it.
  */
 import type { ConversationTurn, InteractivePrompt, SessionHistoryAgent, SessionHistoryRow, SlashCommand } from "../../shared/protocol.ts";
@@ -21,6 +21,7 @@ export const SPECS: DemoSpec[] = [
   { key: "infra", label: "infra", title: "Why did the backup fail?", agent: "gjc", state: "idle" },
   { key: "docs", label: "docs-site", title: "Proofread the guide", agent: "omo", state: "idle" },
   { key: "cli", label: "cli-tools", title: "Ship the retry flag", agent: "pi", state: "idle" },
+  { key: "hermes", label: "changelog", title: "Draft the changelog", agent: "hermes", state: "idle" },
   { key: "shell", label: "release", title: "Tag v1.4.0", agent: null },
 ];
 
@@ -131,6 +132,16 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
           result: "The glossary `docs/i18n/glossary.ko.json` is missing, so the terms could not be kept consistent. Nothing was written." },
       ] }] },
       { role: "assistant" as const, ts: t(4, 3), parts: [{ kind: "text" as const, text: "Fixed 6 typos and one broken link, and moved the three v0.2 pages to v0.3. The Korean FAQ needs a glossary first: shall I start `docs/i18n/glossary.ko.json` from the English one?" }] },
+    ],
+  },
+  hermes: {
+    metadata: { model: "hermes-4-405b", reasoning_effort: "medium" },
+    turns: [
+      { role: "user" as const, ts: t(14), parts: [{ kind: "text" as const, text: "Draft the changelog for 2.0 from the merged pull requests." }] },
+      { role: "assistant" as const, ts: t(14, 3), end_ts: t(15, 20), parts: [
+        tool("terminal", "gh pr list --state merged --base main", { command: "gh pr list --state merged --base main" }, "#48  feat: retry flaky uploads\n#51  feat: read cli-tools.toml\n#53  fix: exit 2 on a bad flag"),
+        { kind: "text" as const, text: "## 2.0\n\n### Added\n- `--retries` retries a failed upload, never a rejected one (#48).\n- Flags can live in `cli-tools.toml` (#51).\n\n### Fixed\n- A bad flag exits with code 2 instead of 1 (#53)." },
+      ] },
     ],
   },
   // pi reads its own session file, which is an entry tree rather than a log: a `/tree` move

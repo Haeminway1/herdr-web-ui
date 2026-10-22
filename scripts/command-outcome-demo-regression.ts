@@ -147,6 +147,7 @@ try {
             await chatStack(page, panes.api).waitFor({ state: "detached" });
             assert.equal(await page.locator(".terminal-banner-command").count(), 0);
             const again = await chatOf(page, panes.api);
+            await again.locator(".chat-terminal-command").waitFor();
             assert.equal(await again.locator(".chat-terminal-command").count(), 1);
             console.log(`PASS ${label}: the row's keyboard action opens Terminal without a new hint`);
           }
@@ -185,20 +186,27 @@ try {
 
           // Hermes' registered informational reader still renders the actual result, not a
           // terminal-only receipt. Dismiss affects this card alone and never sends input.
-          const hermes = await chatOf(page, panes.hermes);
+          // Like pi, Hermes is backfilled and has no ID in the recorded panes.json.
+          const hermesPanes = await page.evaluate(async () => {
+            const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: SessionSnapshot };
+            return snapshot.panes.filter((pane) => pane.agent === "hermes").map((pane) => pane.pane_id);
+          });
+          assert.equal(hermesPanes.length, 1, "the demo exposes exactly one Hermes pane");
+          const hermesPane = hermesPanes[0]!;
+          const hermes = await chatOf(page, hermesPane);
           await send(page, "/status");
           const result = hermes.locator(".chat-outcome-result");
           await result.waitFor();
           assert.ok((await result.locator("pre").textContent())?.includes("Session"));
           assert.equal(await hermes.locator(".chat-terminal-command").count(), 0);
-          assert.equal(await chatStack(page, panes.hermes).count(), 1);
+          assert.equal(await chatStack(page, hermesPane).count(), 1);
           await page.screenshot({ path: shot("hermes-result"), animations: "disabled" });
           await result.getByRole("button", { name: "Dismiss", exact: true }).click();
           await result.waitFor({ state: "detached" });
           console.log(`PASS ${label}: Hermes informational result cards stay in Chat and dismiss normally`);
         });
       } catch (error) {
-        failures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+        failures.push(`${label}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
       }
     }
   } finally {
