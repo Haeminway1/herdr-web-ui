@@ -179,11 +179,13 @@ function header(path: string, harness: Harness, expected: FileIdentityPin): { id
 
 /** A declared managed pane is never allowed to fall through to process/cwd/recency guesses. */
 export async function resolveManagedSession(pane: HerdrPane, namespace = managedNamespace(), deps: ManagedSessionDeps = {}): Promise<ManagedSessionResolution | null> {
-  const tokens = pane.tokens ?? {};
-  if (!("hm_managed_session" in tokens) && !("hm_managed_generation" in tokens)) return null;
   const identity: ManagedSessionIdentity = { id: null, harness: null, generation: null, state: "blocked", reason: null, session_id: null };
   const blocked = (reason: string): ManagedSessionResolution => ({ identity: { ...identity, state: "blocked", reason }, sessionFile: null });
   const pending = (reason: string): ManagedSessionResolution => ({ identity: { ...identity, state: "identity_pending", reason }, sessionFile: null });
+  const tokens = pane.tokens;
+  if (tokens == null) return null;
+  if (typeof tokens !== "object" || Array.isArray(tokens)) return blocked("blocked_managed_token");
+  if (!("hm_managed_session" in tokens) && !("hm_managed_generation" in tokens)) return null;
   const nonce = tokens.hm_managed_session;
   const generation = tokens.hm_managed_generation;
   if (typeof nonce !== "string" || !/^[0-9a-f]{32}$/.test(nonce)) return blocked("blocked_managed_token");
