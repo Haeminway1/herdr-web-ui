@@ -1,9 +1,9 @@
 /**
  * The fictional session behind the README media (scripts/readme-media/stage.ts) and the browser
- * demo (site/demo/transport.ts): five panes, their curated chats and one Codex approval. Nothing
+ * demo (site/demo/transport.ts): their panes, curated chats and one Codex approval. Nothing
  * here comes from a real machine. It imports no server code, so the browser bundle can take it.
  */
-import type { ConversationTurn, InteractivePrompt } from "../../shared/protocol.ts";
+import type { ConversationTurn, InteractivePrompt, SessionHistoryAgent, SessionHistoryRow, SlashCommand } from "../../shared/protocol.ts";
 
 export interface DemoSpec {
   key: string;
@@ -21,10 +21,52 @@ export const SPECS: DemoSpec[] = [
   { key: "infra", label: "infra", title: "Why did the backup fail?", agent: "gjc", state: "idle" },
   { key: "docs", label: "docs-site", title: "Proofread the guide", agent: "omo", state: "idle" },
   { key: "cli", label: "cli-tools", title: "Ship the retry flag", agent: "pi", state: "idle" },
+  { key: "hermes", label: "changelog", title: "Draft the changelog", agent: "hermes", state: "idle" },
   { key: "shell", label: "release", title: "Tag v1.4.0", agent: null },
 ];
 
 export const t = (min: number, sec = 0) => `2026-09-25T09:${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}.000Z`;
+
+/** The flags each agent resumes a session by, as server/session-history.ts cites them. */
+const RESUME_FLAGS: Record<SessionHistoryAgent, string[]> = {
+  claude: ["--resume"], codex: ["resume"], pi: ["--session"], omp: ["--resume"], gjc: ["--resume"], cmd: ["--session"],
+  omo: ["--session-id"], opencode: ["--session"], hermes: ["--resume"], grok: ["--resume"], agy: ["--conversation"], devin: ["--resume"],
+};
+export const SESSION_HISTORY_AGENTS = Object.keys(RESUME_FLAGS) as SessionHistoryAgent[];
+
+/** Two earlier, fictional sessions of an agent in a demo folder, newest first. */
+export function sessionHistoryRows(agent: SessionHistoryAgent): SessionHistoryRow[] {
+  const row = (id: string, title: string, firstMessage: string, started: number, updated: number): SessionHistoryRow =>
+    ({ id, title, firstMessage, startedAt: t(started), updatedAt: t(updated), resume: { argv: [agent, ...RESUME_FLAGS[agent], id] } });
+  return [
+    row(`demo-${agent}-0002`, "Retry budget for the payment client", "Cap the payment client's retries at three and log each one.", 4, 9),
+    row(`demo-${agent}-0001`, "Flaky export test", "Why does the export test fail one run in ten?", 0, 3),
+  ];
+}
+/**
+ * The skills an agent would offer in a demo folder before any pane runs it (GET /api/agent/commands):
+ * Codex types its skills as `$name`, the others as `/name`; a project skill and one of the user's own
+ * for each, so the new workspace and tab dialogs show both. Agents not listed here offer none.
+ */
+export function agentSkillRows(agent: string): SlashCommand[] {
+  const skill = (name: string, description: string, origin: "user" | "project"): SlashCommand => ({
+    name, description, source: "skill", origin, ...(agent === "codex" ? { trigger: "$" as const } : {}),
+    forms: [{ match: "bare", interaction: "unknown" }, { match: "other", interaction: "unknown" }],
+    visibility: "offered", provenance: { transport: "scan", verified: false }, id: `/home/demo/${origin === "project" ? "checkout-api/.agents" : ".agents"}/skills/${name}/SKILL.md`,
+  });
+  switch (agent) {
+    case "codex":
+      return [skill("review-pr", "Review the branch against main and list the findings", "project"), skill("release-notes", "Draft release notes from the merged pull requests", "user"), skill("flaky-tests", "Find and fix a flaky test by its history", "user")];
+    case "claude":
+      return [skill("review-pr", "Review the branch against main and list the findings", "project"), skill("changelog", "Write the changelog fragment for a change", "user")];
+    case "omp":
+    case "pi":
+      return [skill("plan-config", "Plan a config file's keys before writing it", "project")];
+    default:
+      return [];
+  }
+}
+
 const tool = (name: string, summary: string, input: unknown, output: string): ConversationTurn["parts"][number] => ({ kind: "tool", name, summary, input: typeof input === "string" ? input : JSON.stringify(input, null, 2), output });
 
 export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { model: string; reasoning_effort: string } }> = {
@@ -90,6 +132,16 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
           result: "The glossary `docs/i18n/glossary.ko.json` is missing, so the terms could not be kept consistent. Nothing was written." },
       ] }] },
       { role: "assistant" as const, ts: t(4, 3), parts: [{ kind: "text" as const, text: "Fixed 6 typos and one broken link, and moved the three v0.2 pages to v0.3. The Korean FAQ needs a glossary first: shall I start `docs/i18n/glossary.ko.json` from the English one?" }] },
+    ],
+  },
+  hermes: {
+    metadata: { model: "hermes-4-405b", reasoning_effort: "medium" },
+    turns: [
+      { role: "user" as const, ts: t(14), parts: [{ kind: "text" as const, text: "Draft the changelog for 2.0 from the merged pull requests." }] },
+      { role: "assistant" as const, ts: t(14, 3), end_ts: t(15, 20), parts: [
+        tool("terminal", "gh pr list --state merged --base main", { command: "gh pr list --state merged --base main" }, "#48  feat: retry flaky uploads\n#51  feat: read cli-tools.toml\n#53  fix: exit 2 on a bad flag"),
+        { kind: "text" as const, text: "## 2.0\n\n### Added\n- `--retries` retries a failed upload, never a rejected one (#48).\n- Flags can live in `cli-tools.toml` (#51).\n\n### Fixed\n- A bad flag exits with code 2 instead of 1 (#53)." },
+      ] },
     ],
   },
   // pi reads its own session file, which is an entry tree rather than a log: a `/tree` move

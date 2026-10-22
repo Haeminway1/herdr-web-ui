@@ -1,9 +1,12 @@
+import { apiFetch as fetch } from "./api-request-id.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
+import type { SeenFinish } from "../../shared/seen.ts";
 import { resumeConnectionTraces } from "./connectionTrace.ts";
 import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
   AgentKind,
   AgentRenameRequest,
+  CommandOutcome,
   ConversationResponse,
   CreateWorktreeRequest,
   CreateTabRequest,
@@ -26,6 +29,7 @@ import type {
   PaneInfo,
   PaneAttention,
   PanePlan,
+  PanePromptResponse,
   PaneReadResult,
   PaneResized,
   RepoDiffFileList,
@@ -44,6 +48,8 @@ import type {
   RemoteAccess,
   RemoveWorktreeRequest,
   ResizePaneRequest,
+  SessionHistoryAgent,
+  SessionHistoryResponse,
   SessionSnapshot,
   SetSplitRatioRequest,
   SlashCommand,
@@ -158,6 +164,17 @@ export async function savePreferences(body: PreferencesChange): Promise<SharedPr
   return (await response.json()) as SharedPreferences;
 }
 
+/**
+ * Tells every browser of this server that this one presented a finish (shared/seen.ts). A server
+ * that predates it (404) or a watching device (403) keeps the read to this browser.
+ */
+export async function shareSeen(finish: SeenFinish): Promise<void> {
+  const url = "/api/seen";
+  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(finish) });
+  if (response.ok || response.status === 404 || response.status === 403) return;
+  throw await errorFrom(url, response);
+}
+
 export async function fetchTelemetry(): Promise<TelemetryStatus | null> {
   try { return await getJson<TelemetryStatus>("/api/telemetry"); }
   catch (error) { if (error instanceof ApiError && error.status === 404) return null; throw error; }
@@ -197,6 +214,15 @@ export class ApiError extends Error {
  */
 export const routeMissing = (error: unknown): boolean => error instanceof ApiError && error.status === 404 && error.code === "not_found";
 
+/**
+ * The PC proxy's fixed words for another PC's answer it would not pass on (server/remote-json.ts),
+ * in the UI language: they are the detail every error surface shows beside its own sentence.
+ */
+const UNUSABLE_ANSWER: Readonly<Record<string, () => string>> = {
+  remote_response_too_large: () => t("The other PC's answer was larger than this app accepts"),
+  remote_response_invalid: () => t("The other PC's answer could not be read"),
+};
+
 async function errorFrom(url: string, response: Response): Promise<ApiError> {
   let detail = response.statusText;
   let code: string | null = null;
@@ -207,6 +233,7 @@ async function errorFrom(url: string, response: Response): Promise<ApiError> {
   } catch {
     /* non-JSON error body */
   }
+  if (code !== null && Object.hasOwn(UNUSABLE_ANSWER, code)) detail = UNUSABLE_ANSWER[code]!();
   return new ApiError(url, response.status, detail, code);
 }
 
@@ -690,6 +717,25 @@ export async function openWorktree(request: OpenWorktreeRequest, machineId = "lo
   return (await response.json()) as WorktreeOpened;
 }
 
+/** GET /api/sessions/history: the earlier sessions of `agent` in the workspace's folder, newest first; never cached. */
+export function fetchSessionHistory(workspaceId: string, agent: SessionHistoryAgent, machineId = "local"): Promise<SessionHistoryResponse> {
+  const query = new URLSearchParams({ workspace_id: workspaceId, agent });
+  return getJson<SessionHistoryResponse>(`${machinePath(machineId, "sessions/history")}?${query.toString()}`, { cache: "no-store" });
+}
+/**
+ * Whether the PC's bridge has the session history route, asked without a query so no session is
+ * listed: a bridge that has it refuses the query (400), one from before it answers not_found (404).
+ * Any other refusal (403 for a device that only watches) still says the route is there; a PC that
+ * could not be asked rejects, so the caller asks again when it comes back.
+ */
+export async function sessionHistoryOffered(machineId = "local"): Promise<boolean> {
+  try { await getJson(machinePath(machineId, "sessions/history")); return true; }
+  catch (error) {
+    if (routeMissing(error)) return false;
+    if (error instanceof ApiError && error.status < 500) return true;
+    throw error;
+  }
+}
 /** POST /api/tab/create: another tab in an existing workspace, with the same agent launch. */
 export async function createTab(request: CreateTabRequest, machineId = "local"): Promise<TabCreated> {
   const response = await sendJson(machinePath(machineId, "tab/create"), "POST", request);
@@ -738,6 +784,16 @@ export async function fetchPaneCommands(paneId: string, machineId = "local"): Pr
   return (await getJson<{ commands: SlashCommand[] }>(machinePath(machineId, `pane/commands?pane_id=${encodeURIComponent(paneId)}`))).commands;
 }
 
+/**
+ * GET /api/agent/commands?agent=&cwd=: the commands `agent` would offer in `cwd` before any pane runs it
+ * (the new workspace and tab dialogs list its skills), read from the bridge's tables and the folder; no
+ * process is started for it. A folder of null asks for the agent's own and the user's skills alone.
+ */
+export async function fetchAgentCommands(agent: string, cwd: string | null, machineId = "local"): Promise<SlashCommand[]> {
+  const query = new URLSearchParams({ agent, ...(cwd === null || cwd.trim() === "" ? {} : { cwd }) });
+  return (await getJson<{ commands: SlashCommand[] }>(`${machinePath(machineId, "agent/commands")}?${query.toString()}`)).commands;
+}
+
 /** GET /api/pane/omo-tasks: the background tasks and workflows the pane's OmO session started, and that PC's clock. */
 export async function fetchPaneOmoActivity(paneId: string, machineId = "local"): Promise<{ tasks: OmoActivity["tasks"]; runs: OmoActivity["runs"]; serverTime: string | null }> {
   const activity = await getJson<Partial<OmoActivity>>(machinePath(machineId, `pane/omo-tasks?pane_id=${encodeURIComponent(paneId)}`));
@@ -762,13 +818,14 @@ export async function fetchPanePrompt(paneId: string, machineId = "local"): Prom
   return (await fetchPanePromptState(paneId, machineId)).prompt;
 }
 
-/** The waiting prompt, and with none, the next prompt the agent suggests; restored is a send the agent put back in its input box when it was cancelled (older servers send neither). */
-export async function fetchPanePromptState(paneId: string, machineId = "local"): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null }> {
-  const body = await getJson<{ prompt: InteractivePrompt | null; suggestion?: string | null; restored?: string | null }>(machinePath(machineId, `pane/prompt?pane_id=${encodeURIComponent(paneId)}`));
+/** The waiting prompt, and with none, the next prompt the agent suggests; restored is a send the agent put back in its input box when it was cancelled; outcomes are the pane's tracked command sends (older servers send none of the three). */
+export async function fetchPanePromptState(paneId: string, machineId = "local"): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[] }> {
+  const body = await getJson<PanePromptResponse>(machinePath(machineId, `pane/prompt?pane_id=${encodeURIComponent(paneId)}`));
   return {
     prompt: body.prompt,
     suggestion: typeof body.suggestion === "string" && body.suggestion !== "" ? body.suggestion : null,
     restored: typeof body.restored === "string" && body.restored !== "" ? body.restored : null,
+    outcomes: Array.isArray(body.outcomes) ? body.outcomes : [],
   };
 }
 
