@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { describeProgress } from "../src/lib/bridgeProgress.ts";
 import type { SetupJob } from "../shared/machines.ts";
+import type { PanePromptResponse } from "../shared/protocol.ts";
 import { paneNotificationTag } from "../shared/notify-policy.ts";
 import { BRIDGE_PROTOCOL, machinePath, paneStorageId, REMOTE_BUNDLE_VERSION } from "../shared/machines.ts";
 import { canSendSecret, sameOrigin, shellQuote, validateTarget } from "./machine-security.ts";
@@ -76,6 +77,76 @@ describe("independently managed bridge updates", () => {
 });
 
 describe("machine boundaries", () => {
+  for (const older of [false, true]) it(`strips command previews for observers while preserving ${older ? "older" : "current"} bridge responses`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-outcome-proxy-"));
+    const manager = new MachineManager(dir, {} as PushService, new CompletionTracker(null), async () => { throw new Error("fixture offline"); });
+    const answer: PanePromptResponse = { prompt: null, ...(older ? {} : { outcomes: [{
+      id: "send-1", pane_id: "pane-1", text: "/context", state: "accepted" as const, evidence: [],
+      preview: "fixture-preview", result_text: "fixture-result", created_at: "2026-10-20T00:00:00Z", updated_at: "2026-10-20T00:00:00Z",
+    }] }) };
+    const bridge = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json(answer) });
+    const endpoint = spyOn(manager, "endpoint").mockReturnValue({ url: `http://127.0.0.1:${bridge.port}`, token: "fixture" });
+    try {
+      const request = new Request("http://localhost/api/machines/fixture/pane/prompt?pane_id=pane-1");
+      const watched = await (await handleMachineRequest(request, manager, undefined, undefined, true)).json() as PanePromptResponse;
+      expect(watched.prompt).toBeNull();
+      if (older) expect(watched.outcomes).toBeUndefined();
+      else {
+        expect(watched.outcomes?.[0]?.state).toBe("accepted");
+        expect(watched.outcomes?.[0]).not.toHaveProperty("preview");
+        expect(watched.outcomes?.[0]).not.toHaveProperty("result_text");
+        const owner = await (await handleMachineRequest(request, manager)).json() as PanePromptResponse;
+        expect(owner.outcomes?.[0]?.preview).toBe(answer.outcomes?.[0]?.preview);
+        expect(owner.outcomes?.[0]?.result_text).toBe(answer.outcomes?.[0]?.result_text);
+      }
+    } finally { endpoint.mockRestore(); bridge.stop(true); manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("refuses a watching connection's writes to another PC before anything reaches that PC", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-watch-proxy-"));
+    const manager = new MachineManager(dir, {} as PushService, new CompletionTracker(null), async () => { throw new Error("fixture offline"); });
+    const hits: string[] = [];
+    const bridge = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => { hits.push(`${request.method} ${new URL(request.url).pathname}`); return Response.json({ ok: true, commands: [] }); } });
+    const endpoint = spyOn(manager, "endpoint").mockReturnValue({ url: `http://127.0.0.1:${bridge.port}`, token: "fixture" });
+    const ask = (method: string, path: string, readOnly: boolean) => handleMachineRequest(new Request(`http://localhost/api/machines/fixture/${path}`, {
+      method, headers: { origin: "http://localhost", "x-herdr-machine": "1", "content-type": "application/json" }, ...(method === "GET" ? {} : { body: "{}" }),
+    }), manager, undefined, undefined, readOnly);
+    try {
+      for (const [method, path] of [["POST", "pane/input"], ["POST", "tab/create"]] as const) {
+        const refused = await ask(method, path, true);
+        expect(refused.status, path).toBe(403);
+        expect((await refused.json() as { error: { code: string } }).error.code, path).toBe("read_only");
+      }
+      expect(hits).toEqual([]);
+      // the block is the access check's own rule (index.ts `mutating`): what it lets a watcher send goes through
+      expect((await ask("GET", "pane/read?pane_id=p", true)).status).toBe(200);
+      expect((await ask("OPTIONS", "pane/input", true)).status).not.toBe(403);
+      expect(hits).toEqual(["GET /api/pane/read", "OPTIONS /api/pane/input"]);
+      // a connection that may drive goes through
+      expect((await ask("POST", "pane/input", false)).status).toBe(200);
+      expect(hits).toEqual(["GET /api/pane/read", "OPTIONS /api/pane/input", "POST /api/pane/input"]);
+    } finally { endpoint.mockRestore(); bridge.stop(true); manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("refuses a watching connection another PC's folder commands before anything reaches that PC", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-watch-proxy-"));
+    const manager = new MachineManager(dir, {} as PushService, new CompletionTracker(null), async () => { throw new Error("fixture offline"); });
+    const hits: string[] = [];
+    const bridge = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => { hits.push(`${request.method} ${new URL(request.url).pathname}`); return Response.json({ ok: true, commands: [] }); } });
+    const endpoint = spyOn(manager, "endpoint").mockReturnValue({ url: `http://127.0.0.1:${bridge.port}`, token: "fixture" });
+    const ask = (method: string, path: string, readOnly: boolean) => handleMachineRequest(new Request(`http://localhost/api/machines/fixture/${path}`, {
+      method, headers: { origin: "http://localhost", "x-herdr-machine": "1", "content-type": "application/json" }, ...(method === "GET" ? {} : { body: "{}" }),
+    }), manager, undefined, undefined, readOnly);
+    try {
+      for (const [method, path] of [["GET", "agent/commands?agent=claude"]] as const) {
+        const refused = await ask(method, path, true);
+        expect(refused.status, path).toBe(403);
+        expect((await refused.json() as { error: { code: string } }).error.code, path).toBe("read_only");
+      }
+      expect(hits).toEqual([]);
+      // a connection that may drive goes through
+      expect((await ask("GET", "agent/commands?agent=claude", false)).status).toBe(200);
+      expect(hits).toEqual(["GET /api/agent/commands"]);
+    } finally { endpoint.mockRestore(); bridge.stop(true); manager.stop(); rmSync(dir, { recursive: true, force: true }); }
+  });
   it("separates equal pane IDs while preserving historical local storage", () => {
     expect(paneStorageId("local", "p:1")).toBe("p:1");
     expect(new Set(["local", "one", "two"].map((id) => paneStorageId(id, "p:1"))).size).toBe(3);
@@ -101,9 +172,11 @@ describe("machine boundaries", () => {
   });
   it("proxies only pane/workspace data and never remote management credentials", () => {
     for (const path of ["pane/focus", "layout/ratio", "tab/move"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
-    for (const path of ["pane/focus/extra", "pane/move", "layout/apply", "layout/ratio/extra", "layout/../auth"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
-    for (const path of ["auth", "push", "updates/install", "machines/setup", "bridge", "../auth", "pane/../../auth", "pane/prompt/answer/extra", "tab/move/extra", "tab/close/extra"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
-    for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
+    for (const path of ["pane/focus/extra", "pane/move", "layout/apply", "layout/ratio/extra", "layout/../auth", "agent/commands/extra", "agent/start"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
+    // the commands an agent offers in a folder before any pane runs it (the new workspace and tab dialogs)
+    for (const path of ["agent/rename", "agent/commands"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
+    for (const path of ["auth", "push", "updates/install", "machines/setup", "bridge", "../auth", "pane/../../auth", "pane/prompt/answer/extra", "pane/rewind", "tab/move/extra", "tab/close/extra"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
+    for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "pane/input", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
     for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "pane/split", "pane/zoom", "pane/swap", "pane/resize", "pane/clear", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
   });
 });
