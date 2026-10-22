@@ -101,6 +101,9 @@ export interface Settings {
   /** a desktop tab out of use for a moment detaches its pane (PaneTerminal's release) and only watches it, so herdr's own
    *  window keeps the pane at its size; paused where the server cannot watch. Off: the tab keeps the pane and its size. */
   releasePaneAway: boolean;
+  /** this device opens the pane herdr's own focus moves to (a `pane-focused` frame from the selected PC), as
+   *  herdr's window does after `herdr tab focus` or a click there; off: only this device's own picks move it */
+  followHerdrFocus: boolean;
   /** chat text size in px (its body text; the rest scales with it); null follows the interface size */
   chatFontSize: number | null;
   /** fonts tried before the UI font in the chat's prose (code stays mono), as a CSS font-family list; "" keeps the UI font */
@@ -115,6 +118,9 @@ export interface Settings {
   enterSends: boolean;
   /** true: a message sent while the agent works goes by itself when the turn ends; false: it waits for Send now */
   autoSendQueued: boolean;
+  /** a New tab with an agent… button in the chat's composer, in a mouse-driven window; off until chosen, so the
+   *  composer's row stays minimal: the tab menu opens the same dialog either way */
+  composerNewTabButton: boolean;
   /** on a touch screen, a chip above the message box offers the prompt the agent suggests next.
    * Not `showSuggestionChip`: that key was on by default until 0.4.9 and is still stored on phones */
   suggestionChip: boolean;
@@ -173,11 +179,14 @@ export const DIFF_STYLES = ["unified", "split"] as const;
 export type DiffStyle = (typeof DIFF_STYLES)[number];
 
 /** Raw custom text, key combinations and account keys are never copied. Requiring every other
- * Settings field in the projection makes a new field require an explicit collection decision. */
+ * Settings field in the projection makes a new field require an explicit collection decision.
+ * fileOpen, webLinks, the launch modes, followHerdrFocus and composerNewTabButton are not collected: the
+ * telemetry schema (shared/telemetry.ts) does not carry them. */
 type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
-  | "quickReplies" | "usageOrder" | "usageHidden" | "sidebarLayout" | "sidebarGrouping" | "palette" | "paletteLight" | "paletteDark" | "darkTheme" | "lightTheme"
-  | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode">;
+  | "quickReplies" | "usageOrder" | "usageHidden" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
+  | "sidebarLayout" | "sidebarGrouping" | "palette" | "paletteLight" | "paletteDark" | "darkTheme" | "lightTheme"
+  | "followHerdrFocus" | "composerNewTabButton">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
@@ -259,7 +268,11 @@ export const SETTING_SCOPE = {
   terminalInputMode: "device", keyBarExtras: "device", keyBarItems: "device", shortcutOverrides: "device", density: "device",
   terminalFontSize: "device",
   terminalWheelSpeed: "device", terminalFontFamily: "device", paneClipboard: "device", releasePaneAway: "device",
+  // a desk that follows herdr's focus must not move a phone open on another pane
+  followHerdrFocus: "device",
   chatFontSize: "device", chatFontFamily: "device", uiFontSize: "device", chatWidth: "device", enterSends: "device",
+  // a desk's composer button: a phone never shows it
+  composerNewTabButton: "device",
   keepScreenOn: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertInApp: "device", alertSound: "device",
   paletteLight: "device", paletteDark: "device", statusIndicators: "device",
   voiceInput: "device", voiceLanguage: "device", voicePolishChat: "device", voicePolishTerminal: "device",
@@ -296,12 +309,14 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalFontFamily: "",
   paneClipboard: true,
   releasePaneAway: false,
+  followHerdrFocus: false,
   chatFontSize: null,
   chatFontFamily: "",
   uiFontSize: null,
   chatWidth: "default",
   enterSends: true,
   autoSendQueued: true,
+  composerNewTabButton: false,
   suggestionChip: false,
   showThinking: false,
   keepScreenOn: false,
@@ -482,10 +497,12 @@ export function sanitizeSettings(raw: unknown): Settings {
     uiFontSize: sanitizeUiFontSize(record["uiFontSize"]),
     paneClipboard: typeof record["paneClipboard"] === "boolean" ? record["paneClipboard"] : DEFAULT_SETTINGS.paneClipboard,
     releasePaneAway: typeof record["releasePaneAway"] === "boolean" ? record["releasePaneAway"] : DEFAULT_SETTINGS.releasePaneAway,
+    followHerdrFocus: typeof record["followHerdrFocus"] === "boolean" ? record["followHerdrFocus"] : DEFAULT_SETTINGS.followHerdrFocus,
     chatFontFamily: sanitizeFontFamily(record["chatFontFamily"]),
     chatWidth: CHAT_WIDTHS.includes(record["chatWidth"] as ChatWidth) ? record["chatWidth"] as ChatWidth : DEFAULT_SETTINGS.chatWidth,
     enterSends: typeof record["enterSends"] === "boolean" ? record["enterSends"] : DEFAULT_SETTINGS.enterSends,
     autoSendQueued: typeof record["autoSendQueued"] === "boolean" ? record["autoSendQueued"] : DEFAULT_SETTINGS.autoSendQueued,
+    composerNewTabButton: typeof record["composerNewTabButton"] === "boolean" ? record["composerNewTabButton"] : DEFAULT_SETTINGS.composerNewTabButton,
     suggestionChip: typeof record["suggestionChip"] === "boolean" ? record["suggestionChip"] : DEFAULT_SETTINGS.suggestionChip,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,

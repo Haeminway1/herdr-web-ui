@@ -141,6 +141,24 @@ it("keeps a tab's pane while out of use until this device turns the pause on", (
   expect(sanitizeSettings({ releasePaneAway: "true" }).releasePaneAway).toBe(false);
 });
 
+it("leaves herdr's focus alone until this device asks to follow it, and keeps that choice its own", () => {
+  expect(DEFAULT_SETTINGS.followHerdrFocus).toBe(false);
+  expect(sanitizeSettings({}).followHerdrFocus).toBe(false);
+  expect(sanitizeSettings({ followHerdrFocus: true }).followHerdrFocus).toBe(true);
+  expect(sanitizeSettings({ followHerdrFocus: "true" }).followHerdrFocus).toBe(false);
+  expect(SETTING_SCOPE.followHerdrFocus).toBe("device");
+  expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("followHerdrFocus");
+});
+
+it("keeps the composer's New tab button off until this device turns it on, and keeps that choice its own", () => {
+  expect(DEFAULT_SETTINGS.composerNewTabButton).toBe(false);
+  expect(sanitizeSettings({}).composerNewTabButton).toBe(false);
+  expect(sanitizeSettings({ composerNewTabButton: true }).composerNewTabButton).toBe(true);
+  expect(sanitizeSettings({ composerNewTabButton: "true" }).composerNewTabButton).toBe(false);
+  expect(SETTING_SCOPE.composerNewTabButton).toBe("device");
+  expect(SHARED_SETTING_KEYS as readonly string[]).not.toContain("composerNewTabButton");
+});
+
 it("keeps the screen wake lock off until this device explicitly enables it", () => {
   expect(DEFAULT_SETTINGS.keepScreenOn).toBe(false);
   expect(sanitizeSettings({}).keepScreenOn).toBe(false);
