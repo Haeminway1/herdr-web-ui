@@ -29,7 +29,7 @@ async function openSurface(browser: Browser, demoUrl: string, surface: Surface):
     locale: "en-US",
   });
   await context.addInitScript(({ theme, paneId }) => {
-    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({
+    localStorage.setItem("ovis:settings", JSON.stringify({
       language: "en",
       theme,
       sidebarLayout: "classic",
@@ -40,9 +40,9 @@ async function openSurface(browser: Browser, demoUrl: string, surface: Surface):
       darkTheme: "report",
       lightTheme: "report",
     }));
-    localStorage.setItem("herdr-web-ui:resident-tab", "work");
-    localStorage.setItem("herdr-web-ui:pc-collapsed:local", "0");
-    sessionStorage.setItem("herdr-web-ui:selection", JSON.stringify({ machine_id: "local", pane_id: paneId }));
+    localStorage.setItem("ovis:resident-tab", "work");
+    localStorage.setItem("ovis:pc-collapsed:local", "0");
+    sessionStorage.setItem("ovis:selection", JSON.stringify({ machine_id: "local", pane_id: paneId }));
   }, { theme: surface.theme, paneId: panes.infra });
   const page = await context.newPage();
   await page.goto(`${demoUrl}?pane=${encodeURIComponent(panes.infra)}&view=chat`);
@@ -50,7 +50,8 @@ async function openSurface(browser: Browser, demoUrl: string, surface: Surface):
   await page.locator(".machine-workspaces > .cl-sidebar-list").waitFor();
   await page.locator('.cl-sidebar-list .cl-pane-select[title*="Classic preview workspace 36"]').waitFor();
   await page.waitForFunction(theme => document.documentElement.dataset["theme"] === theme && document.documentElement.dataset["palette"] === "report", surface.theme);
-  await page.waitForTimeout(1500);
+  await page.waitForFunction(() => Number(document.documentElement.dataset["classicPreviewStreamSnapshots"]) > 0);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   assert.equal(await page.locator('.cl-sidebar-list .cl-pane-select[title*="Classic preview workspace 36"]').count(), 1, "live fixture streams must not erase the overflowing roster");
   return context;
 }
@@ -122,7 +123,7 @@ async function verifyClassicFeatures(page: Page): Promise<void> {
   const workRows = page.locator(".cl-resident-tab .cl-pane-select");
   assert.ok(await workRows.count() >= 36, "the work tab must preserve repo-grouped workspace rows");
   const stored = await page.evaluate(() => {
-    const settings = localStorage.getItem("herdr-web-ui:settings") ?? "{}";
+    const settings = localStorage.getItem("ovis:settings") ?? "{}";
     return settings.includes('"sidebarLayout":"classic"') && settings.includes('"sidebarGrouping":"repo"');
   });
   assert.equal(stored, true);
