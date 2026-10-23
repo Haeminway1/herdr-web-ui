@@ -31,7 +31,7 @@ const ERROR_NOTE_MS = 5000;
 /** Folder folds belong to a PC and full path, not an individual workspace. */
 const collapsedKey = (machineId: string, groupKey: string) => {
   const workspace = groupKey.startsWith("workspace:");
-  return `herdr-web-ui:${workspace ? "workspace" : "directory"}-collapsed:${machineId}:${groupKey.slice(workspace ? "workspace:".length : "folder:".length)}`;
+  return `ovis:${workspace ? "workspace" : "directory"}-collapsed:${machineId}:${groupKey.slice(workspace ? "workspace:".length : "folder:".length)}`;
 };
 function storedCollapsed(machineId: string, directoryKeys: string[]): Set<string> {
   const collapsed = new Set<string>();
@@ -69,8 +69,8 @@ export function ClassicSidebar({ snapshot, selectedPaneId, actions, version = nu
   // Resident / Work toggle over the rest
   const { residents } = useResidents();
   const residentsOn = byRepo && machineId === "local";
-  const [residentTab, setResidentTab] = useState<"resident" | "work">(() => { try { return localStorage.getItem("herdr-web-ui:resident-tab") === "work" ? "work" : "resident"; } catch { return "resident"; } });
-  const chooseResidentTab = (tab: "resident" | "work"): void => { setResidentTab(tab); try { localStorage.setItem("herdr-web-ui:resident-tab", tab); } catch { /* storage denied */ } };
+  const [residentTab, setResidentTab] = useState<"resident" | "work">(() => { try { return localStorage.getItem("ovis:resident-tab") === "work" ? "work" : "resident"; } catch { return "resident"; } });
+  const chooseResidentTab = (tab: "resident" | "work"): void => { setResidentTab(tab); try { localStorage.setItem("ovis:resident-tab", tab); } catch { /* storage denied */ } };
   const [starting, setStarting] = useState<string | null>(null);
   /** a row's name by repository: a resident's given name, else its folder's */
   const rowName = (pane: PaneInfo): string => {
