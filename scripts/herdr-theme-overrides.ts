@@ -1,4 +1,5 @@
 /** Explicit reviewed deviations from mapTheme. Add alongside the CSS edit, never generate. */
+import { createHash } from "node:crypto";
 import { normalizeThemeValue, parseThemeBlocks } from "../src/lib/themeCss.ts";
 import { ROLES, SUPPORTED_ENTRIES } from "../src/lib/themes.ts";
 import { LIGHT_ANSI_ROLES } from "../src/lib/themeRoles.ts";
@@ -322,6 +323,22 @@ export function provenanceFailures(
       for (const role of [...Object.keys(ROLES), ...(mode === "light" ? Object.values(LIGHT_ANSI_ROLES) : [])]) {
         if (blocks[key]?.declared[`--${role}`] === undefined) failures.push(`${key} ${role}: missing fork palette declaration`);
       }
+      continue;
+    }
+    // Codex is an upstream UI palette derived from codex-theme-v1, not herdr's RGB table.
+    // Pin every normalized declaration (including ANSI/shadows) from upstream/main
+    // 664a3f2111341bb0d7408186b9573e00af7606fd:src/styles.css instead of inventing herdr provenance.
+    if (id === "codex") {
+      const pinned = {
+        dark: "fe5f0fda13cc76bf556a9b2b38ecf837b0c0820f722d0558d3e17dea167790ef",
+        light: "287736a39aea7736b5de73e7b30d45d9261a4f3d8b8e14741bc2372cd114475f",
+      };
+      const declared = blocks[key]?.declared ?? {};
+      for (const role of [...Object.keys(ROLES), ...(mode === "light" ? Object.values(LIGHT_ANSI_ROLES) : [])]) {
+        if (declared[`--${role}`] === undefined) failures.push(`${key} ${role}: missing upstream palette declaration`);
+      }
+      const actual = createHash("sha256").update(JSON.stringify(Object.entries(declared).sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
+      if (actual !== pinned[mode]) failures.push(`${key}: differs from pinned upstream Codex palette`);
       continue;
     }
     // Legacy UI roles stay frozen, but Latte's newly added ANSI roles have provenance too.
