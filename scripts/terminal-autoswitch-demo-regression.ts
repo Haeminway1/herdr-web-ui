@@ -585,7 +585,17 @@ try {
       });
       const open = async (pane: string, probe: string) => {
         await page.goto(`${server.url}?pane=${encodeURIComponent(pane)}`);
-        await of(pane).chat.locator(".composer").waitFor();
+        await of(pane).chat.locator(".composer").waitFor().catch(async (error) => {
+          console.error("Screen navigation failed", await page.evaluate(() => ({
+            url: location.href,
+            history: history.state,
+            stacks: [...document.querySelectorAll(".terminal-stack")].map(node => ({
+              pane: node.getAttribute("data-pane-owner"), className: node.className,
+            })),
+          })));
+          await capture(page, `${tag}-open-failure`);
+          throw error;
+        });
         // The retained Claude recording begins mid-turn; settle it before testing a new command.
         if (pane === owner) { await finish(page); await ready(page); }
         // the catalog has loaded: its terminal command is in the menu
@@ -608,9 +618,18 @@ try {
           .filter((frame) => frame.type === "input" && frame.pane_id === pane && frame.text === "\x1b").length > before, [pane, before] as const);
       };
       const backToChat = async (pane: string) => {
+        if (touch) await page.waitForFunction(() => typeof (history.state as Record<string, unknown> | null)?.["ovis:sheet"] === "string");
+        const pops = await page.evaluate(() => (window as unknown as PeekWindow).pops);
         await hint(page).getByRole("button", { name: "Back to Chat", exact: true }).click();
         await of(pane).peek.waitFor({ state: "detached" });
         await of(pane).chat.locator(".composer").waitFor();
+        // The composer is visible before the phone's asynchronous step off the peek entry lands.
+        // Navigating to the next fixture then lets that pending Back undo the new page's load.
+        if (touch) {
+          await page.waitForFunction((pops) => (window as unknown as PeekWindow).pops > pops, pops);
+          await page.waitForFunction(() => (history.state as Record<string, unknown> | null)?.["ovis:sheet"] === undefined);
+          assert.equal(new URL(page.url()).searchParams.get("pane"), pane, "closing the peek stays on its pane");
+        }
       };
       const screen = (pane: string, text: string) => of(pane).stack.locator(".xterm-rows", { hasText: text });
 
