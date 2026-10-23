@@ -1,5 +1,6 @@
 import { closeSync, fstatSync, openSync } from "node:fs";
 import { readOmoLines } from "./omo-records.ts";
+import type { CodexReadScope } from "./codex.ts";
 
 /**
  * The questions an OmO session has open, as its session file records them: ask_user_question
@@ -81,12 +82,12 @@ export function omoAsksAfter(open: OmoAsks, entry: Entry): OmoAsks {
 export class OmoAskReader {
   private files = new Map<string, { id: string; size: number; mtime: number; offset: number; asks: OmoAsks }>();
 
-  read(path: string): OmoAsks {
-    const fd = openSync(path, "r");
+  read(path: string, io?: CodexReadScope, identity = path): OmoAsks {
+    const fd = io ? io.fd(path) : openSync(path, "r");
     try {
       const stat = fstatSync(fd);
       const id = `${stat.dev}:${stat.ino}`;
-      let state = this.files.get(path);
+      let state = this.files.get(identity);
       if (!state || state.id !== id || stat.size < state.size || (stat.size === state.size && stat.mtimeMs !== state.mtime)) {
         state = { id, size: 0, mtime: 0, offset: 0, asks: [] };
       }
@@ -97,10 +98,10 @@ export class OmoAskReader {
       });
       state.size = stat.size;
       state.mtime = stat.mtimeMs;
-      this.files.delete(path);
-      this.files.set(path, state);
+      this.files.delete(identity);
+      this.files.set(identity, state);
       if (this.files.size > 64) this.files.delete(this.files.keys().next().value!);
       return state.asks;
-    } finally { closeSync(fd); }
+    } finally { if (!io) closeSync(fd); }
   }
 }
