@@ -57,7 +57,7 @@ try {
       ] as const) {
         const context = await browser.newContext({ viewport, isMobile: phone, hasTouch: phone, locale: "en-US" });
         try {
-          await context.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" })));
+          await context.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" })));
           const page = await context.newPage();
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
