@@ -2,25 +2,25 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { appName, manifestBody, relateManifest, renameManifest, renameShell, requestOrigin } from "./static.ts";
+import { appName, CONTENT_SECURITY_POLICY, contentSecurityPolicy, manifestBody, relateManifest, renameManifest, renameShell, requestOrigin } from "./static.ts";
 
 // The sources Vite builds from: public/ is copied into dist/ as it is, and the meta survives the build.
 const root = join(import.meta.dir, "..");
 const manifest = readFileSync(join(root, "public", "manifest.webmanifest"), "utf8");
 const shell = readFileSync(join(root, "index.html"), "utf8");
 
-describe("HERDR_WEB_APP_NAME", () => {
-  const previous = process.env["HERDR_WEB_APP_NAME"];
+describe("OVIS_APP_NAME", () => {
+  const previous = process.env["OVIS_APP_NAME"];
   afterEach(() => {
-    if (previous === undefined) delete process.env["HERDR_WEB_APP_NAME"]; else process.env["HERDR_WEB_APP_NAME"] = previous;
+    if (previous === undefined) delete process.env["OVIS_APP_NAME"]; else process.env["OVIS_APP_NAME"] = previous;
   });
 
   it("is off when unset or blank", () => {
-    delete process.env["HERDR_WEB_APP_NAME"];
+    delete process.env["OVIS_APP_NAME"];
     expect(appName()).toBeNull();
-    process.env["HERDR_WEB_APP_NAME"] = "   ";
+    process.env["OVIS_APP_NAME"] = "   ";
     expect(appName()).toBeNull();
-    process.env["HERDR_WEB_APP_NAME"] = "  work laptop ";
+    process.env["OVIS_APP_NAME"] = "  work laptop ";
     expect(appName()).toBe("work laptop");
   });
 
@@ -39,11 +39,11 @@ describe("HERDR_WEB_APP_NAME", () => {
   });
 
   it("relates the manifest after the rename, and without one", () => {
-    delete process.env["HERDR_WEB_APP_NAME"];
+    delete process.env["OVIS_APP_NAME"];
     const plain = JSON.parse(manifestBody(manifest, "https://pc.example")) as Record<string, unknown>;
     expect(plain["name"]).toBe((JSON.parse(manifest) as Record<string, unknown>)["name"]);
     expect(plain["related_applications"]).toEqual([{ platform: "webapp", id: "https://pc.example/" }]);
-    process.env["HERDR_WEB_APP_NAME"] = "laptop";
+    process.env["OVIS_APP_NAME"] = "laptop";
     const named = JSON.parse(manifestBody(manifest, "https://pc.example")) as Record<string, unknown>;
     expect(named).toMatchObject({ name: "laptop", short_name: "laptop", id: "/" });
     expect(named["related_applications"]).toEqual([{ platform: "webapp", id: "https://pc.example/" }]);
@@ -61,6 +61,20 @@ describe("HERDR_WEB_APP_NAME", () => {
     expect(renamed).toContain('<meta name="apple-mobile-web-app-title" content="laptop" />');
     const originalTitle = /<meta name="apple-mobile-web-app-title" content="([^"]*)"/.exec(shell)![1]!;
     expect(renamed.replace("content=\"laptop\"", `content="${originalTitle}"`)).toBe(shell);
+  });
+
+  it("frames the other ports of the request's own host and no other host", () => {
+    expect(contentSecurityPolicy("http://100.123.228.51:7317")).toContain("frame-src 'self' http://100.123.228.51:* https://100.123.228.51:*;");
+    expect(contentSecurityPolicy("https://pc.tailnet.ts.net")).toContain("frame-src 'self' http://pc.tailnet.ts.net:* https://pc.tailnet.ts.net:*;");
+    expect(contentSecurityPolicy("http://[::1]:7317")).toContain("frame-src 'self' http://[::1]:* https://[::1]:*;");
+    expect(contentSecurityPolicy("http://100.123.228.51:7317").replace(/ http:\/\/\S+ https:\/\/\S+;/, ";")).toBe(CONTENT_SECURITY_POLICY);
+  });
+
+  it("keeps frame-src to itself without an origin or with a host that is no host name", () => {
+    expect(contentSecurityPolicy()).toBe(CONTENT_SECURITY_POLICY);
+    expect(contentSecurityPolicy("not a url")).toBe(CONTENT_SECURITY_POLICY);
+    expect(contentSecurityPolicy("http://a_b;script-src *")).toBe(CONTENT_SECURITY_POLICY);
+    expect(CONTENT_SECURITY_POLICY).toContain("frame-src 'self';");
   });
 
   it("fetches the manifest with the page's cookies, so a sign-in proxy lets it through", () => {
