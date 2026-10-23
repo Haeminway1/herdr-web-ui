@@ -176,7 +176,7 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox", "--accept-lang=en-US"] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.addInitScript((ids) => {
-    localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+    localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
     for (const id of ids) localStorage.setItem(`ovis:view:${id}`, "chat");
   }, [paneId, delayedPaneId]);
   page = await context.newPage();
