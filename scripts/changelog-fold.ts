@@ -11,7 +11,9 @@ export const FRAGMENT_NAME = /^[a-z0-9][a-z0-9.-]*\.md$/;
 /** The sections a fragment may use, in the order a release lists them. */
 export const SECTIONS = ["Added", "Changed", "Removed", "Fixed", "Maintenance"] as const;
 
-const REPO = "https://github.com/devswha/herdr-web-ui";
+const REPO = "https://github.com/devswha/ovis";
+/** the repository before its rename: the links CHANGELOG.md already has keep it, and GitHub redirects them */
+const LEGACY_REPO = "https://github.com/devswha/herdr-web-ui";
 const UNRELEASED = "## [Unreleased]";
 const HINT = `see ${FRAGMENTS_DIR}/${FRAGMENTS_README}`;
 const CHANGELOG_HINT = `fix the entry, or move it into a ${FRAGMENTS_DIR}/ fragment (${HINT})`;
@@ -106,8 +108,9 @@ export function foldChangelog(changelog: string, fragments: { name: string; sect
   const notes = order.flatMap((name) => ["", `### ${name}`, ...merged.get(name)!]);
 
   const link = lines.findIndex((line) => /^\[Unreleased\]: https:\/\/github\.com\/[^/]+\/[^/]+\/compare\//.test(line) && line.endsWith(`/compare/v${previous}...HEAD`));
-  const repository = link < 0 ? REPO : lines[link]!.slice("[Unreleased]: ".length).split("/compare/")[0]!;
-  const unreleasedLink = `[Unreleased]: ${repository}/compare/v${previous}...HEAD`;
+  const existingRepository = link < 0 ? REPO : lines[link]!.slice("[Unreleased]: ".length).split("/compare/")[0]!;
+  const repository = existingRepository === LEGACY_REPO ? REPO : existingRepository;
+  const unreleasedLink = `[Unreleased]: ${REPO}/compare/v${previous}...HEAD`;
   if (link < end) throw new Error(`CHANGELOG.md must end its links with "${unreleasedLink}"`);
   const tail = lines.slice(end);
   tail.splice(link - end, 1, `[Unreleased]: ${repository}/compare/v${version}...HEAD`, `[${version}]: ${repository}/compare/v${previous}...v${version}`);
