@@ -23,13 +23,13 @@ describe("SDK generation revocation", () => {
     await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, { generationStatus: async () => { throw new Error("secret index unavailable"); } })).rejects.toEqual(new GjcSdkLookupError("unavailable"));
   });
 
-  it.each(["ENOENT", "EACCES"])("sanitizes %s discovery and generation API failures", async (code) => {
+  it.each(["ENOENT", "EACCES", "BROKER", "EPIPE", "ECONNREFUSED", "ETIMEDOUT"])("sanitizes %s discovery and generation API failures", async (code) => {
     const secret = `private ${code} session credentials`;
     const unavailable = Promise.reject<GjcSdkGenerationObserver>(Object.assign(new Error(secret), { code }));
     for (const observer of [unavailable, { generationStatus: async () => { throw Object.assign(new Error(secret), { code }); } }]) {
       const failure = await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer).catch(error => error);
       expect(failure).toBeInstanceOf(GjcSdkLookupError);
-      expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(failure).toMatchObject({ reason: code === "ETIMEDOUT" ? "timeout" : "unavailable", message: "GJC SDK lookup failed" });
       expect(JSON.stringify(failure)).not.toContain(secret);
     }
   });
