@@ -189,8 +189,8 @@ describe("file view", () => {
     symlinkSync(join(root, "elsewhere"), join(site, "clips"));
     expect(pageMediaResponse(swapped, "10.0.0.2")).toBeNull();
     // ...unless it leads into a folder the operator named, and then not under a hidden name there
-    const before = process.env["HERDR_WEB_MEDIA_ROOTS"];
-    process.env["HERDR_WEB_MEDIA_ROOTS"] = ["/nonexistent-share", join(root, "share")].join(delimiter);
+    const before = process.env["OVIS_MEDIA_ROOTS"];
+    process.env["OVIS_MEDIA_ROOTS"] = ["/nonexistent-share", join(root, "share")].join(delimiter);
     try {
       const shared = await fileResponse(fileInfo(join(site, "report.html"))!, false, true, media).text();
       expect(shared).toMatch(new RegExp(`<audio id="linked" src="${source}[A-Za-z0-9_-]{32}">`));
@@ -201,8 +201,8 @@ describe("file view", () => {
       expect(shared).toContain(`<video id="private" src="private.mp4">`);
       expect(shared).toContain(`<video id="elsewhere" src="elsewhere.mp4">`);
     } finally {
-      if (before === undefined) delete process.env["HERDR_WEB_MEDIA_ROOTS"];
-      else process.env["HERDR_WEB_MEDIA_ROOTS"] = before;
+      if (before === undefined) delete process.env["OVIS_MEDIA_ROOTS"];
+      else process.env["OVIS_MEDIA_ROOTS"] = before;
     }
     // without a media source (a PC's bridge, a Host that is not plain) the page is drawn as before
     expect(await fileResponse(fileInfo(join(site, "report.html"))!, false, true).text()).toContain(`<video id="big" src="big.mp4"`);
@@ -585,6 +585,21 @@ describe("locateFile", () => {
     expect(Bun.spawnSync(["git", "init", "-q", root]).exitCode).toBe(0);
     clearFileCache();
     expect(locateFile("demo.mp4", root)).toMatchObject({ info: { path: join(root, "recordings/demo.mp4") } });
+  });
+
+  it("opens an explicitly named ignored paste", () => {
+    const root = temp();
+    expect(Bun.spawnSync(["git", "init", "-q", root]).exitCode).toBe(0);
+    mkdirSync(join(root, ".ovis"));
+    writeFileSync(join(root, ".ovis/.gitignore"), "*\n");
+    const path = join(root, ".ovis/notes-20261021-120000-0123abcd.json");
+    writeFileSync(path, '{"a":1}');
+    clearFileCache();
+    // ignored keeps it out of Git status, not out of reach: the absolute path the upload answered
+    // and the project-relative one both open it
+    expect(Bun.spawnSync(["git", "-C", root, "check-ignore", "-q", path]).exitCode).toBe(0);
+    expect(locateFile(path, root)).toMatchObject({ info: { path } });
+    expect(locateFile(".ovis/notes-20261021-120000-0123abcd.json", root)).toMatchObject({ info: { path } });
   });
 
   it("walks the subfolders of a folder holding thousands of files outside a repository", () => {

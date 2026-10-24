@@ -50,7 +50,7 @@ function herdr {
                 Remove-Item -LiteralPath $pluginRoot -Recurse -Force -ErrorAction SilentlyContinue
                 New-Item -ItemType Directory -Force -Path (Split-Path $launcher) | Out-Null
                 if ($state.windowsRelease) { Set-Content -LiteralPath $launcher -Value '' }
-                'Installed herdr web ui'
+                'Installed Ovis'
             } else { throw "Unexpected herdr command: $args" }
         }
     }
@@ -162,9 +162,9 @@ exit /b 1
     Write-Host 'PASS native installer release selection, rerun, Bun bootstrap, explicit ref, stopped herdr, install failure and a copy without Windows support'
 
     # Browser opening is covered through a stand-in; this harness never starts a real browser.
-    $savedCi = $env:CI; $savedNoOpen = $env:HERDR_WEB_NO_OPEN; $savedSsh = $env:SSH_CONNECTION
+    $savedCi = $env:CI; $savedNoOpen = $env:OVIS_NO_OPEN; $savedSsh = $env:SSH_CONNECTION
     try {
-        Remove-Item Env:\CI, Env:\HERDR_WEB_NO_OPEN, Env:\SSH_CONNECTION -ErrorAction SilentlyContinue
+        Remove-Item Env:\CI, Env:\OVIS_NO_OPEN, Env:\SSH_CONNECTION -ErrorAction SilentlyContinue
         $state.installed = $false; $state.running = $true; $global:herdrInstallOpened = @()
         $freshOutput = & $installer -Ref 'test' 6>&1 | Out-String
         Assert ($global:herdrInstallOpened.Count -eq 1 -and $global:herdrInstallOpened[0] -eq 'http://127.0.0.1:7320') 'A fresh install must open the loopback origin exactly once'
@@ -174,7 +174,7 @@ exit /b 1
         $rerunOutput = & $installer -Ref 'test' 6>&1 | Out-String
         Assert ($global:herdrInstallOpened.Count -eq 0 -and $rerunOutput -notmatch 'opened ') 'A rerun must not open the app'
 
-        foreach ($gate in 'HERDR_WEB_NO_OPEN', 'CI', 'SSH_CONNECTION') {
+        foreach ($gate in 'OVIS_NO_OPEN', 'CI', 'SSH_CONNECTION') {
             $state.installed = $false; $global:herdrInstallOpened = @()
             Set-Item "Env:$gate" '1'
             $output = & $installer -Ref 'test' 6>&1 | Out-String
@@ -188,9 +188,9 @@ exit /b 1
         $stoppedOutput = & $installer -Ref 'test' 6>&1 | Out-String
         Assert ($global:herdrInstallOpened.Count -eq 0 -and $stoppedOutput -notmatch 'opened ') 'A fresh install must not open the app when herdr is stopped'
         $state.running = $true
-        Write-Host 'PASS Windows app opening: fresh install, rerun, HERDR_WEB_NO_OPEN, SSH tunnel and Tailscale, and CI'
+        Write-Host 'PASS Windows app opening: fresh install, rerun, OVIS_NO_OPEN, SSH tunnel and Tailscale, and CI'
     } finally {
-        foreach ($pair in @(@('CI', $savedCi), @('HERDR_WEB_NO_OPEN', $savedNoOpen), @('SSH_CONNECTION', $savedSsh))) {
+        foreach ($pair in @(@('CI', $savedCi), @('OVIS_NO_OPEN', $savedNoOpen), @('SSH_CONNECTION', $savedSsh))) {
             if ($null -eq $pair[1]) { Remove-Item "Env:$($pair[0])" -ErrorAction SilentlyContinue }
             else { Set-Item "Env:$($pair[0])" $pair[1] }
         }
@@ -292,7 +292,7 @@ public static class ImmediateGh {
     }
 }
 '@
-    $assignment = '[HerdrWebUi.GhJob]::Assign($job, $process.Handle)'
+    $assignment = '[Ovis.GhJob]::Assign($job, $process.Handle)'
     $orderedSource = $ghApi.Extent.Text.Replace("`r`n", "`n").Replace($assignment, '(Assign-TestGhJob $job $process)')
     Assert ($orderedSource -ne $ghApi.Extent.Text) 'control: interpose at the real job assignment boundary'
     function Assign-TestGhJob($Job, $Process) {
@@ -300,13 +300,13 @@ public static class ImmediateGh {
             Assert ($ready.WaitOne(5000)) 'control: the runnable shim must reach child-ready before assignment'
         }
         Assert (-not $ready.WaitOne(0)) 'regression: shim ran before job assignment'
-        [HerdrWebUi.GhJob]::Assign($Job, $Process.Handle)
+        [Ovis.GhJob]::Assign($Job, $Process.Handle)
     }
     $suspendedLaunch = @'
         if ($job -ne [IntPtr]::Zero) {
-            $process = [HerdrWebUi.GhJob]::StartSuspended($start.FileName, $start.Arguments)
+            $process = [Ovis.GhJob]::StartSuspended($start.FileName, $start.Arguments)
             if (-not (Assign-TestGhJob $job $process)) {
-                $null = [HerdrWebUi.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
+                $null = [Ovis.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
             }
             $process.Resume()
         } else {
@@ -316,7 +316,7 @@ public static class ImmediateGh {
     $runnableLaunch = @'
         $process = [Diagnostics.Process]::Start($start)
         if ($job -ne [IntPtr]::Zero -and -not (Assign-TestGhJob $job $process)) {
-            $null = [HerdrWebUi.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
+            $null = [Ovis.GhJob]::CloseHandle($job); $job = [IntPtr]::Zero
         }
 '@
     # Scratch-source reversion of exactly the pre-fix runnable Start/Assign ordering; no repository file changes.
