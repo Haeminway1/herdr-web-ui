@@ -437,6 +437,34 @@ describe("GJC live identity independent of saved-store indexing", () => {
       await expect(failure).rejects.not.toThrow("secret");
     }
   });
+
+  it.each(["ENOENT", "EACCES", "BROKER", "ETIMEDOUT"])("retries an exact %s broker failure without caching absence or borrowing generation proof", async (code) => {
+    for (const reader of [sdkCurrentSessionWithRunner, sdkTranscriptWithRunner]) {
+      for (const savedSession of [null, { id: "session-1", path: savedPath }]) {
+        const fixture = fakeRunner((_args, call) => {
+          if (call === 1) throw Object.assign(new Error(`private exact lookup ${savedPath}`), { code });
+          return page([session()], call === 0 ? {} : { savedSession });
+        });
+        const proofs: [string, number][] = [];
+        const generation = async (_directory: string, id: string, endpoint: number) => {
+          proofs.push([id, endpoint]);
+          return true;
+        };
+        const read = (lookup: typeof reader) => lookup([321], cwd, agentDir, fixture.runner, testWorktreeRootResolver, () => 0, generation);
+        await expect(read(reader)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: code === "ETIMEDOUT" ? "timeout" : "unavailable", message: "GJC SDK lookup failed" });
+        expect(proofs).toEqual([]);
+        expect(fixture.calls).toHaveLength(2);
+        await expect(read(sdkCurrentSessionWithRunner)).resolves.toMatchObject({ sessionId: "session-1", pid: 321 });
+        const transcript = await read(sdkTranscriptWithRunner);
+        if (savedSession === null) expect(transcript).toBeNull();
+        else expect(transcript).toMatchObject({ sessionId: "session-1", path: savedPath });
+        expect(proofs).toEqual([["session-1", 4], ["session-1", 4]]);
+        // Only the failed exact lookup is retried; both readers reuse successful pages.
+        expect(fixture.calls).toHaveLength(3);
+      }
+    }
+  });
+
   it("checks generation for a current identity without a saved transcript", async () => {
     const fixture = fakeRunner([page([session()]), page([session()], { savedSession: null })]);
     const observed: string[] = [];
