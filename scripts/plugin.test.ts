@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
+import { ovisName } from "../server/legacy-env.ts";
+import { herdrStateDir } from "./plugin-state.ts";
 
 /**
  * The plugin's settings files, read by hand the way a headless PC runs `status` or `pair`:
@@ -17,10 +19,12 @@ async function status(): Promise<{ out: string; err: string; exitCode: number }>
   return run("status");
 }
 
-async function run(command: string, extra: Record<string, string> = {}): Promise<{ out: string; err: string; exitCode: number }> {
+async function run(command: string, extra: Record<string, string | undefined> = {}): Promise<{ out: string; err: string; exitCode: number }> {
   const bin = join(scratch, "bin");
   const env: Record<string, string | undefined> = { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}`, HOME: scratch, HERDR_PLUGIN_STATE_DIR: join(scratch, "state") };
-  for (const key of ["HERDR_PLUGIN_CONFIG_DIR", "PORT", "HOST", "HERDR_WEB_TOKEN", "HERDR_WEB_STATE_DIR", "XDG_CONFIG_HOME"]) delete env[key];
+  for (const key of Object.keys(env)) {
+    if (["HERDR_PLUGIN_CONFIG_DIR", "PORT", "HOST", "OVIS_TOKEN", "OVIS_STATE_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME"].includes(ovisName(key) ?? key)) delete env[key];
+  }
   Object.assign(env, extra);
   const child = Bun.spawn(["bun", "scripts/plugin.ts", command], { cwd: ROOT, env, stdout: "pipe", stderr: "pipe" });
   const [out, err, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -56,18 +60,18 @@ describe("plugin settings files", () => {
   });
 
   it("lets .env win over env and names the keys they disagree on, not their values", async () => {
-    writeFileSync(join(configDir, "env"), "PORT=2\nHERDR_WEB_TOKEN=old-secret\nHOST=127.0.0.1\n");
-    writeFileSync(join(configDir, ".env"), "PORT=1\nHERDR_WEB_TOKEN=new-secret\nHOST=127.0.0.1\n");
+    writeFileSync(join(configDir, "env"), "PORT=2\nOVIS_TOKEN=old-secret\nHOST=127.0.0.1\n");
+    writeFileSync(join(configDir, ".env"), "PORT=1\nOVIS_TOKEN=new-secret\nHOST=127.0.0.1\n");
     const run = await status();
     expect(run.out).toContain("down http://127.0.0.1:1");
     expect(run.out).toContain(`config: ${join(configDir, "env")}, ${join(configDir, ".env")}`);
-    expect(run.out).toContain("set PORT, HERDR_WEB_TOKEN; .env wins");
+    expect(run.out).toContain("set PORT, OVIS_TOKEN; .env wins");
     expect(run.out).not.toContain("secret");
   });
 
   it("says where settings go when there are none", async () => {
     const run = await status();
-    expect(run.out).toContain(`config: none (settings go in ${join(scratch, ".config", "herdr-web-ui", "env")})`);
+    expect(run.out).toContain(`config: none (settings go in ${join(scratch, ".config", "ovis", "env")})`);
   });
 });
 
@@ -99,10 +103,65 @@ describe("the herdr socket", () => {
   });
 });
 
+describe("server.log", () => {
+  /** starts a stand-in server that runs `body` and exits before it answers, so the start fails */
+  const failedStart = async (body: string) => {
+    const root = join(scratch, "root");
+    mkdirSync(join(root, "server"), { recursive: true });
+    writeFileSync(join(root, "server", "managed.ts"), `${body}\nprocess.exit(1);\n`);
+    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+    const port = probe.port;
+    await probe.stop(true);
+    return run("start", { HERDR_PLUGIN_ROOT: root, PORT: String(port) });
+  };
+  const state = (name: string) => join(scratch, "state", name);
+
+  it("keeps the run before as server.log.1 and starts a new server.log", async () => {
+    mkdirSync(join(scratch, "state"));
+    writeFileSync(state("server.log"), "older run\n");
+    writeFileSync(state("server.log.1"), "oldest run\n");
+    const started = await failedStart(`console.log("this run");`);
+    expect(started.exitCode).toBe(1);
+    expect(readFileSync(state("server.log.1"), "utf8")).toBe("older run\n");
+    const log = readFileSync(state("server.log"), "utf8");
+    expect(log).toStartWith("this run\n");
+    expect(log).toContain("start: the server stopped (exit 1)");
+  });
+
+  it("appends while the recorded server is still alive", async () => {
+    mkdirSync(join(scratch, "state"));
+    writeFileSync(state("server.log"), "live run\n");
+    // this test's own process stands in for a server that is still running
+    writeFileSync(state("server.pid"), `${process.pid}\n`);
+    await failedStart(`console.log("this run");`);
+    expect(readFileSync(state("server.log"), "utf8")).toStartWith("live run\nthis run\n");
+    expect(existsSync(state("server.log.1"))).toBe(false);
+  });
+
+  /** the lines a failed start showed from the log */
+  const shown = (err: string) => err.slice(err.indexOf("ends with:\n") + "ends with:\n".length).trimEnd().split("\n");
+
+  it("reads only the log's end, without the line the read cut", async () => {
+    const started = await failedStart(`process.stdout.write("x".repeat(100_000) + "\\nline 0\\nline 1\\n");`);
+    expect(started.exitCode).toBe(1);
+    expect(shown(started.err)).toEqual(["line 0", "line 1"]);
+  });
+
+  it("shows the end of a line too long to read whole", async () => {
+    const started = await failedStart(`process.stdout.write("x".repeat(100_000) + "end\\n");`);
+    expect(shown(started.err)).toEqual([`${"x".repeat(64 * 1024 - 4)}end`]);
+  });
+
+  it("shows the last 15 lines", async () => {
+    const started = await failedStart(`console.log(Array.from({ length: 40 }, (_, i) => "line " + i).join("\\n"));`);
+    expect(shown(started.err)).toEqual(Array.from({ length: 15 }, (_, i) => `line ${i + 25}`));
+  });
+});
+
 describe("port", () => {
   const keep = (port: number) => {
-    mkdirSync(join(scratch, ".config", "herdr-web-ui"), { recursive: true });
-    writeFileSync(join(scratch, ".config", "herdr-web-ui", "plugin-port"), `${port}\n`);
+    mkdirSync(join(scratch, ".config", "ovis"), { recursive: true });
+    writeFileSync(join(scratch, ".config", "ovis", "plugin-port"), `${port}\n`);
   };
 
   it("reports the port an earlier start fell back to", async () => {
@@ -127,7 +186,7 @@ describe("port", () => {
       expect(started.err).toContain(`Set another PORT in ${join(configDir, ".env")}`);
       expect(readFileSync(join(scratch, "state", "server.log"), "utf8")).toContain(`start: port ${holder.port} on 127.0.0.1 cannot be opened`);
       expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
-      expect(existsSync(join(scratch, ".config", "herdr-web-ui", "plugin-port"))).toBe(false);
+      expect(existsSync(join(scratch, ".config", "ovis", "plugin-port"))).toBe(false);
     } finally { await holder.stop(true); }
   });
 
@@ -154,7 +213,7 @@ describe("port", () => {
       try {
         writeFileSync(join(configDir, ".env"), `PORT=${stranger.port}\n`);
         const started = await run("start");
-        expect(started.err).not.toContain("herdr web ui is running");
+        expect(started.err).not.toContain("Ovis is running");
         expect(started.exitCode).toBe(1);
         expect(started.err).toContain(`port ${stranger.port} on 127.0.0.1 cannot be opened`);
       } finally { await stranger.stop(true); }
@@ -185,7 +244,7 @@ describe("port", () => {
       expect(started.out).toContain(`already running at http://127.0.0.1:${ours.port}`);
       expect(started.exitCode).toBe(0);
       expect(readFileSync(join(scratch, "state", "server.pid"), "utf8")).toBe(`${process.pid}\n`);
-      expect(readFileSync(join(scratch, ".config", "herdr-web-ui", "plugin-port"), "utf8")).toBe(`${ours.port}\n`);
+      expect(readFileSync(join(scratch, ".config", "ovis", "plugin-port"), "utf8")).toBe(`${ours.port}\n`);
     } finally { await Promise.all([ours.stop(true), stranger.stop(true)]); }
   });
 
@@ -206,8 +265,8 @@ describe("port", () => {
       const started = await run("start", { HERDR_PLUGIN_ROOT: scratch });
       expect(started.out).not.toContain("instead");
       expect(started.exitCode).toBe(1);
-      expect(started.err).toContain(`herdr web ui is running at http://127.0.0.1:${ours.port} (pid ${process.pid}) but cannot reach herdr: herdr socket unreachable`);
-      expect(readFileSync(join(scratch, ".config", "herdr-web-ui", "plugin-port"), "utf8")).toBe(`${ours.port}\n`);
+      expect(started.err).toContain(`Ovis is running at http://127.0.0.1:${ours.port} (pid ${process.pid}) but cannot reach herdr: herdr socket unreachable`);
+      expect(readFileSync(join(scratch, ".config", "ovis", "plugin-port"), "utf8")).toBe(`${ours.port}\n`);
       expect(readFileSync(join(scratch, "state", "server.pid"), "utf8")).toBe(`${process.pid}\n`);
     } finally { await ours.stop(true); }
   }, 40_000);
@@ -231,12 +290,69 @@ describe("port", () => {
       const started = await run("start", { HERDR_PLUGIN_ROOT: scratch });
       expect(started.err).not.toContain("cannot reach herdr");
       expect(started.exitCode).toBe(0);
-      expect(started.out).toContain(`herdr web ui already running at http://127.0.0.1:${ours.port}`);
+      expect(started.out).toContain(`Ovis already running at http://127.0.0.1:${ours.port}`);
     } finally { await ours.stop(true); }
   }, 40_000);
 });
 
+describe("the state dir when run by hand", () => {
+  const legacy = () => join(scratch, ".local", "state", "herdr-web-ui");
+  const managed = (base = join(scratch, ".local", "state")) => join(base, "herdr", "plugins", "haeminway1.herdr-web-ui");
+  const pidFile = (dir: string, pid: number) => { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, "server.pid"), `${pid}\n`); };
+  const byHand = (extra: Record<string, string | undefined> = {}) => run("status", { HERDR_PLUGIN_STATE_DIR: undefined, PORT: "1", ...extra });
+
+  it("reads herdr's fork plugin state under XDG_STATE_HOME", async () => {
+    pidFile(managed(join(scratch, "state-home")), process.pid);
+    expect((await byHand({ XDG_STATE_HOME: join(scratch, "state-home") })).out).toContain(`down http://127.0.0.1:1 (pid ${process.pid})`);
+  });
+
+  it("skips an old checkout's pid file whose server is gone", async () => {
+    pidFile(legacy(), 999_999_999);
+    pidFile(managed(), process.pid);
+    expect((await byHand()).out).toContain(`(pid ${process.pid})`);
+  });
+
+  it("keeps a running checkout server's own dir", async () => {
+    const other = Bun.spawn(["sleep", "30"]);
+    try {
+      pidFile(legacy(), other.pid);
+      pidFile(managed(), process.pid);
+      expect((await byHand()).out).toContain(`(pid ${other.pid})`);
+    } finally { other.kill(); }
+  });
+
+  it("keeps the checkout's dir when herdr never installed the fork", async () => {
+    pidFile(legacy(), process.pid);
+    expect((await byHand()).out).toContain(`(pid ${process.pid})`);
+  });
+
+  it("follows herdr's state dir on each platform", () => {
+    expect(herdrStateDir({ XDG_STATE_HOME: "/x" }, "linux", "/h")).toBe(join("/x", "herdr"));
+    expect(herdrStateDir({}, "darwin", "/h")).toBe(join("/h", ".local", "state", "herdr"));
+    expect(herdrStateDir({ LOCALAPPDATA: "C:/L" }, "win32", "/h")).toBe(join("C:/L", "herdr"));
+    expect(herdrStateDir({ USERPROFILE: "C:/U" }, "win32", "/h")).toBe(join("C:/U", "AppData", "Local", "herdr"));
+  });
+});
+
 describe("stop", () => {
+  it("does not adopt or stop a server belonging to either canonical plugin id", async () => {
+    const plugins = join(scratch, "plugins");
+    const server = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    try {
+      for (const id of ["devswha.herdr-web-ui", "devswha.ovis"]) {
+        const directory = join(plugins, id);
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(directory, "server.pid"), `${server.pid}\n`);
+      }
+      const stopped = await run("stop", { HERDR_PLUGIN_STATE_DIR: join(plugins, "haeminway1.herdr-web-ui"), PORT: "1" });
+      expect(stopped.exitCode, stopped.err).toBe(0);
+      expect(() => process.kill(server.pid!, 0)).not.toThrow();
+      for (const id of ["devswha.herdr-web-ui", "devswha.ovis"]) {
+        expect(readFileSync(join(plugins, id, "server.pid"), "utf8")).toBe(`${server.pid}\n`);
+      }
+    } finally { process.kill(-server.pid!, "SIGKILL"); }
+  });
+
   it("returns only once the server's process group is gone", async () => {
     // a server that takes a second to exit, as the supervisor does while its bridge shuts down
     const server = spawn("sh", ["-c", "trap 'sleep 1; exit 0' TERM; while :; do sleep 0.1; done"], { detached: true, stdio: "ignore" });
@@ -246,7 +362,7 @@ describe("stop", () => {
     const started = Date.now();
     const stopped = await run("stop");
     expect(stopped.exitCode, stopped.err).toBe(0);
-    expect(stopped.out).toContain(`stopped herdr web ui (pid ${pid})`);
+    expect(stopped.out).toContain(`stopped Ovis (pid ${pid})`);
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
     expect(() => process.kill(-pid, 0)).toThrow();
     expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
@@ -269,7 +385,7 @@ describe("stop", () => {
       const started = Date.now();
       const stopped = await run("stop");
       expect(stopped.exitCode, stopped.err).toBe(0);
-      expect(stopped.out).toContain(`stopped herdr web ui (pid ${pid})`);
+      expect(stopped.out).toContain(`stopped Ovis (pid ${pid})`);
       expect(Date.now() - started).toBeLessThan(5_000);
       expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
     } finally { parent.kill("SIGKILL"); }
