@@ -11,7 +11,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
   page.on("pageerror", (error) => errors.push(error.message));
   page.setDefaultTimeout(10_000);
   await context.addInitScript(() => {
-    if (!localStorage.getItem("herdr-web-ui:settings")) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "line", sidebarLayout: "upstream" }));
+    if (!localStorage.getItem("ovis:settings")) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", terminalInputMode: "line", sidebarLayout: "upstream" }));
   });
   const sent: any[] = [];
   const resizes: any[] = [];
@@ -238,7 +238,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     assert.equal(sent.length, 1, "a Send during a real composition finishes the word and sends");
     assert.equal(sent[0].text, "real 한글");
     assert.equal(await line.evaluate((element) => element === document.activeElement), true, "the line keeps focus, so the keyboard stays up");
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(50); // fixed wait: a committed word may add no note
     assert.equal(await page.evaluate(() => { (window as any).noteObserver.disconnect(); return (window as any).noteAdded; }), 0, "a word committed inside the tap mounts no note");
     await cdp.detach();
     acknowledge!();
@@ -274,7 +274,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
       setValue.call(element, "");
       element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteCompositionText" }));
     });
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(400); // fixed wait: an empty commit may send no Enter
     assert.equal(sent.length, 2, "an empty commit after a text Send sends no Enter");
     assert.equal(await line.inputValue(), "");
     // Compositions that keep chaining after the tap cannot stretch its wait past the deadline.
@@ -293,7 +293,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     // already withdrawn when the chain ends: a wait re-armed per composition would still be open
     assert.equal(await noteText(), "Finish the word, then send.", "the tap's deadline holds through a chain of compositions");
     await line.dispatchEvent("compositionend", { data: "한" });
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(100); // fixed wait: a chain of compositions past the deadline may send nothing
     assert.equal(sent.length, 2, "a chain of compositions past the deadline sends nothing");
     assert.equal(await noteText(), "Finish the word, then send.");
     // A drop and a quick reconnect while the word is still open withdraw the tap: the later
@@ -310,7 +310,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     refuseConnections = false;
     await until(async () => !(await sendButton.isDisabled()));
     await line.dispatchEvent("compositionend", { data: "한" });
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(100); // fixed wait: a commit after reconnect may not send the withdrawn tap
     assert.equal(sent.length, 2, "a commit after a drop and reconnect does not send the withdrawn tap");
     assert.equal(await noteText(), "Not sent: the terminal is disconnected.");
     // The terminal drops while the word is still being finished: the commit says so instead of
@@ -369,9 +369,9 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     await page.getByRole("combobox", { name: "Next pane", exact: true }).selectOption("p");
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
     await line.focus();
-    const selectionBefore = await page.evaluate(() => localStorage.getItem("herdr-web-ui:selection"));
+    const selectionBefore = await page.evaluate(() => localStorage.getItem("ovis:selection"));
     await page.keyboard.press("ControlOrMeta+Shift+p");
-    await until(async () => (await page.evaluate(() => localStorage.getItem("herdr-web-ui:selection"))) !== selectionBefore);
+    await until(async () => (await page.evaluate(() => localStorage.getItem("ovis:selection"))) !== selectionBefore);
     await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}`);
     await line.waitFor();
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
@@ -431,7 +431,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     assert.equal(await heldNotice.count(), 1);
     await until(() => !!ready);
     ready!();
-    await page.waitForTimeout(150);
+    await page.waitForTimeout(150); // fixed wait: ready may not replay the draft
     assert.equal(sent.length, before, "ready does not replay the draft");
     // Held input keeps later typing until Send or Discard, on a ready terminal too: a key sent beside
     // it would reach the pty without the held start, and an Enter would run that partial line. The
@@ -475,7 +475,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     }
     const beforeMultiLine = await draftText();
     await pasteIntoTerminal("x\ny");
-    await page.waitForTimeout(100);
+    await until(async () => (await banner.isVisible()) || (await draftText()) !== beforeMultiLine);
     assert.equal(sent.length, afterEscape, "a multi-line paste beside a held draft reaches nothing");
     // never a silent drop: refused with the note, or taken into the draft (a draft that folds line breaks)
     const multiLineNoted = await banner.isVisible();
@@ -510,7 +510,7 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
       box.value = "한";
       box.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "한" }));
     });
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(50); // fixed wait: nothing may be sent mid-composition
     assert.equal(sent.length, imeBefore);
     await input.dispatchEvent("compositionend", { data: "한" });
     await until(() => sent.length > imeBefore);
@@ -581,13 +581,13 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
       if (!row) throw new Error("owned destination pane missing");
       row.click();
     }, otherPane);
-    await until(async () => (await page.evaluate(() => JSON.parse(localStorage.getItem("herdr-web-ui:selection")!).pane_id)) === otherPane);
-    await page.waitForTimeout(75);
+    await until(async () => (await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:selection")!).pane_id)) === otherPane);
+    await page.waitForTimeout(75); // fixed wait: the old composition may not send across a pane reset
     assert.equal(sent.length, switchBefore, "old composition cannot cross a pane reset");
     assert.equal(await page.locator(".draft-text").count(), 0, "old commit cannot enter the new pane's held draft");
     // A late end after reset is stale, not a second attempt to send the abandoned input.
     await page.locator(".pane-frame.is-current .xterm-helper-textarea").dispatchEvent("compositionend", { data: "한" });
-    await page.waitForTimeout(75);
+    await page.waitForTimeout(75); // fixed wait: a late compositionend after the reset may send nothing
     assert.equal(sent.length, switchBefore);
     console.log("PASS xterm composition: local preedit, delayed multi-commit burst, punctuation order, Korean final-consonant movement, pane-reset cancellation");
     assert.deepEqual(errors, []);
@@ -604,8 +604,8 @@ async function checkKeyBarWhileLineComposes(browser: Browser, origin: string, pa
   page.on("pageerror", (error) => errors.push(error.message));
   page.setDefaultTimeout(10_000);
   await context.addInitScript((pane) => {
-    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "line" }));
-    localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
+    localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", terminalInputMode: "line" }));
+    localStorage.setItem(`ovis:view:${pane}`, "terminal");
   }, pane);
   const frames: any[] = [];
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
@@ -676,7 +676,7 @@ if (import.meta.main) {
   try {
     const panes: string[] = [];
     for (let i = 0; i < 2; i++) {
-      const made = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-input" });
+      const made = await workspaceCreate({ cwd: root, label: "ovis-test-input" });
       owned.push(made.workspace.workspace_id); panes.push(made.root_pane.pane_id);
     }
     await checkTerminalInput(browser, `http://127.0.0.1:${server.port}`, panes[0]!, panes[1]!);
