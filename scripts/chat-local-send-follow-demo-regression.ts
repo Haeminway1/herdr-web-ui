@@ -25,7 +25,7 @@ let step = "";
 const playwrightCore = "playwright-core";
 const { chromium } = (await import(playwrightCore)) as typeof import("playwright-core");
 
-const PANE = panes.omp;
+const PANE = panes.infra;
 const OTHER = panes.api;
 const REPLY = "This is the demo, so nothing ran.";
 const WAIT = { timeout: 10_000 } as const;
@@ -127,7 +127,7 @@ try {
   const index = join(app, "index.html");
   const html = readFileSync(index, "utf8");
   assert.match(html, /<script type="module"/);
-  // Over the demo's own transport: the omp pane's transcript reads answer forty-eight long filler
+  // Over the demo's own transport: the idle pane's transcript reads answer forty-eight long filler
   // turns ahead of its own, so the chat scrolls; each socket's submit-result can be held and
   // released (window.followLab), refused before anything is typed, or answered as uncertain; and
   // the pane's transcript reads can be held until released. A second demo socket stands for
@@ -219,7 +219,7 @@ try {
       const desktop = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
       try {
         await desktop.addInitScript((ids) => {
-          localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+          localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
           for (const id of ids) localStorage.setItem(`ovis:view:${id}`, "chat");
         }, [PANE, OTHER]);
         const page = await desktop.newPage();

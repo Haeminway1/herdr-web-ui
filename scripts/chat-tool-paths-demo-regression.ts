@@ -70,7 +70,7 @@ const TURNS = [
 const ORDER = ["/work/app/src/a.ts", "/work/app/src/b.ts", "/work/app-2/a.ts", "/work/app/src/c.ts", "/work/app/docs/notes.md", "/etc/hosts", "src/relative.ts", "C:\\work\\app\\win.ts", "\\\\server\\share\\app\\unc.ts", "/work/app/../etc/passwd", "/work/app/문서/설계 노트.md", LONG];
 
 /** The panes under test and their folders: one in ROOT, one with no folder known, one on a Windows folder. */
-const CWD: Record<string, string | null> = { [panes.omp]: ROOT, [panes.api]: null, [panes.cli]: "C:\\work\\app" };
+const CWD: Record<string, string | null> = { [panes.infra]: ROOT, [panes.api]: null, [panes.docs]: "C:\\work\\app" };
 const results: Record<string, unknown[]> = { "relative-tool-target": [], "unknown-or-outside-root": [] };
 const record = (scenario: string, check: string, detail: unknown): void => {
   results[scenario]!.push({ check, result: "PASS", detail });
@@ -237,7 +237,7 @@ createRoot(document.getElementById("root")).render(<SettingsProvider><Fixture />
 }
 
 // the demo's other agents finish turns now and then: their in-app alerts stay off over the cards
-const settingsOf = (theme: string, language: string) => JSON.stringify({ language, theme, alertInApp: false });
+const settingsOf = (theme: string, language: string) => JSON.stringify({ language, theme, alertInApp: false, sidebarLayout: "upstream" });
 let shots = 0;
 const captures: string[] = [];
 /** Once every running animation has finished: a sheet still sliding in or out is no state. */
@@ -375,7 +375,7 @@ async function demoChecks(browser: Browser, base: string): Promise<void> {
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    let pane = await openPane(page, base, panes.omp);
+    let pane = await openPane(page, base, panes.infra);
     const inRoot = expected(ROOT, true, (path) => `Open ${path}`);
     assert.deepEqual(await shownFiles(pane), inRoot);
     record("relative-tool-target", "edit, patch, multi-edit and sent-file cards under /work/app read from the folder; titles keep the whole path", { labels: inRoot });
@@ -418,13 +418,13 @@ async function demoChecks(browser: Browser, base: string): Promise<void> {
       copied[label] = await page.evaluate(() => navigator.clipboard.readText());
       assert.ok(copied[label]!.includes(REPLY), `${label} copies the reply as written: ${JSON.stringify(copied[label])}`);
     }
-    const transcript = await page.evaluate(async (paneId) => await (await fetch(`/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`)).text(), panes.omp);
+    const transcript = await page.evaluate(async (paneId) => await (await fetch(`/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`)).text(), panes.infra);
     assert.ok(transcript.includes("/work/app/src/a.ts") && !transcript.includes("\"app/src/a.ts\""), "the transcript is unchanged");
     record("relative-tool-target", "the reply's MD and TXT copies and the transcript read keep the raw paths", { copied, transcriptHasRaw: true });
 
     // another pane, no folder known: every path as written; one on a Windows folder: the same;
     // and back: the first pane's folder again, never the one shown before
-    for (const [paneId, root] of [[panes.api, null], [panes.cli, null], [panes.omp, ROOT]] as const) {
+    for (const [paneId, root] of [[panes.api, null], [panes.docs, null], [panes.infra, ROOT]] as const) {
       const workspace = paneId.split(":")[0]!;
       await page.locator(`.workspace-group[data-workspace=${JSON.stringify(workspace)}] .pane-select`).first().click();
       await page.waitForURL((url) => url.searchParams.get("pane") === paneId);
@@ -444,7 +444,7 @@ async function mobileChecks(browser: Browser, base: string): Promise<void> {
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    const pane = await openPane(page, base, panes.omp);
+    const pane = await openPane(page, base, panes.infra);
     const targets = await pane.locator(".chat-tool-file-link").evaluateAll((nodes) => nodes.map((node) => {
       const box = node.getBoundingClientRect();
       return { label: (node.textContent ?? "").slice(0, 40), width: box.width, height: box.height, top: box.top, bottom: box.bottom };
@@ -490,7 +490,7 @@ async function captureSet(browser: Browser, base: string, bareBase: string, widt
   const context = await demoContext(browser, width, theme, language);
   try {
     const page = await context.newPage();
-    const pane = await openPane(page, base, panes.omp);
+    const pane = await openPane(page, base, panes.infra);
     await noPageScroll(page, name("rest"));
     const first = pane.locator(".chat-tool-file").first();
     await first.scrollIntoViewIfNeeded();
