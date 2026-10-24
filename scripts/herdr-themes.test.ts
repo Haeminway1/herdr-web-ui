@@ -129,6 +129,26 @@ describe("executable provenance policy", () => {
     expect(provenanceFailures(changed, report, []).join("\n")).toContain("report/light accent: missing fork palette declaration");
   });
 
+  it("pins both upstream Codex palettes rather than claiming herdr provenance", () => {
+    const codex = SUPPORTED_ENTRIES.filter((entry) => entry.id === "codex");
+    expect(codex.map((entry) => entry.mode).sort()).toEqual(["dark", "light"]);
+    expect(provenanceFailures(css, codex, [])).toEqual([]);
+    for (const mode of ["dark", "light"] as const) {
+      const selector = `[data-theme="${mode}"][data-palette="codex"] {`;
+      const start = css.indexOf(selector), end = css.indexOf("\n}", start);
+      const mutate = (text: string) => css.slice(0, start) + text + css.slice(end);
+      const block = css.slice(start, end);
+      for (const role of ["bg", "accent", "shadow-card", ...(mode === "light" ? ["term-red"] : [])]) {
+        const declaration = new RegExp(`--${role}: [^;]+;`);
+        const missing = mutate(block.replace(declaration, ""));
+        expect(provenanceFailures(missing, codex, [])).toContain(`codex/${mode} ${role}: missing upstream palette declaration`);
+        const value = role === "shadow-card" ? "0 4px 16px rgba(0, 0, 0, 0.2)" : "#123456";
+        const changed = mutate(block.replace(declaration, `--${role}: ${value};`));
+        expect(provenanceFailures(changed, codex, [])).toContain(`codex/${mode}: differs from pinned upstream Codex palette`);
+      }
+    }
+  });
+
   it("accepts a matching explicit deviation with numeric distance and reason", () => {
     const changed = fixture.replace("--bg: #1a1b26;", "--bg: #123456;");
     const override: ThemeOverride = { theme: "tokyo-night", mode: "dark", role: "bg", value: "#123456", dE: 12, reason: "Reviewed surface change" };

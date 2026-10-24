@@ -123,7 +123,7 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
     await page.locator('.segmented[aria-label="Limit shown"]').getByRole("button", { name: "Session", exact: true }).click();
     await page.keyboard.press("Escape");
     assert.match(await strip.getAttribute("aria-label") ?? "", /^Subscription usage: Claude · me@example.com 58% left, Codex · me@example.com 70% left, Cursor 80% left,/);
-    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}") as { usageHidden?: string[]; usageCount?: string; usageGlance?: string });
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings") ?? "{}") as { usageHidden?: string[]; usageCount?: string; usageGlance?: string });
     assert.deepEqual([stored.usageHidden, stored.usageCount, stored.usageGlance], [["codex:work"], "left", "session"]);
 
     // turned off in Settings: gone, and no longer asked for
@@ -149,7 +149,7 @@ export async function checkUsageMeters(browser: Browser, origin: string): Promis
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" });
   try {
     await staged(phone);
-    await phone.addInitScript(() => localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ showUsage: true })));
+    await phone.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ showUsage: true })));
     const page = await phone.newPage();
     await page.goto(origin);
     await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
