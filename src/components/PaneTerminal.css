@@ -251,8 +251,67 @@
   outline-offset: var(--ring-offset);
 }
 
+/* the chat reply's quote action: a row of the composer's over the card (PaneTerminal.tsx), on the
+   card's column, so it stands in the stack's flow and never over the transcript's words. Its label
+   is read text, not a note: the body sizes, and a target a pointer and a finger can take */
+.composer-quote-row {
+  display: flex;
+  justify-content: flex-end;
+  width: min(100%, var(--chat-w));
+  margin: 0 auto var(--space-2);
+}
+
+.chat-quote {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-md);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.chat-quote svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  flex: none;
+}
+
+.chat-quote:hover {
+  border-color: var(--accent);
+}
+
+.chat-quote:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
+/* pressed reads as the hover fill, whole: the touch dim (styles.css) would read as disabled */
+.chat-quote:active {
+  opacity: 1;
+  background: var(--bg-hover);
+}
+
+@media (pointer: coarse) {
+  .chat-quote {
+    min-height: var(--touch-target);
+    font-size: var(--fs-chat);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .terminal-quote {
+  .terminal-quote,
+  .chat-quote {
     transition: none;
   }
 }
@@ -291,6 +350,67 @@
   border-radius: var(--radius-md);
   max-width: 100%;
   pointer-events: auto;
+}
+
+/* the hint a message's "Rewind in terminal" leaves (Claude Code, grok, agy): a sentence and its dismiss control,
+   so a control-bearing box like the held-input row; the sentence takes what the pane has and wraps,
+   the button stays beside it */
+.terminal-banner-rewind {
+  height: auto;
+  flex-wrap: nowrap;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  pointer-events: auto;
+}
+
+.terminal-banner-rewind > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* a terminal command's peek head (PaneTerminal.tsx): what ran, whether the chat comes back by itself,
+   and the two ways on. The words take what the pane has; the actions move under them when it is narrow */
+.terminal-banner-command {
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  pointer-events: auto;
+}
+
+.terminal-command-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.terminal-command-words {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* the command is cut with an ellipsis (its title holds it whole); the sentence under it wraps */
+.terminal-command-words > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.terminal-command-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+.terminal-command-label > svg {
+  width: var(--fs-sm);
+  height: var(--fs-sm);
+  flex: none;
 }
 
 /* the held-draft echo inside the reconnecting pill: capped like the review text, on one line and
@@ -362,4 +482,49 @@
    so the grid never refits to zero */
 .terminal-stack.is-chat .pane-terminal {
   content-visibility: hidden;
+}
+
+/* A terminal command's peek (lib/terminalPeek.ts): the grid shows over the chat it covered, which stays
+   mounted and keeps its layout and scroll position (hidden, not removed). A hairline in the accent
+   marks the terminal as a passing view; nothing moves in or out */
+.terminal-stack.is-chat.is-peek .pane-terminal {
+  content-visibility: visible;
+}
+
+.terminal-stack.is-peek > .terminal-surface {
+  background: var(--term-bg);
+}
+
+.terminal-stack.is-peek > .terminal-surface > .chat-frame,
+.terminal-stack.is-peek > .terminal-surface > .chat-view {
+  visibility: hidden;
+}
+
+.terminal-stack.is-peek > .terminal-surface::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-banner);
+  border: var(--hairline) solid var(--accent);
+  pointer-events: none;
+}
+
+/* the composer's column stays under the grid, inert (PaneTerminal.tsx): dimmed, with its draft and
+   its held messages waiting for the chat to come back */
+.terminal-stack.is-peek > .composer,
+.terminal-stack.is-peek > .composer-queue,
+.terminal-stack.is-peek > .pending-messages,
+.terminal-stack.is-peek > .prompt-dock {
+  opacity: 0.5;
+}
+
+/* where the key bar shows (KeyBar.css), it takes the column's place: the composer stays mounted,
+   its draft kept, and takes no room from the grid */
+@media (pointer: coarse), (max-width: 768px) {
+  .terminal-stack.is-peek > .composer,
+  .terminal-stack.is-peek > .composer-queue,
+  .terminal-stack.is-peek > .pending-messages,
+  .terminal-stack.is-peek > .prompt-dock {
+    display: none;
+  }
 }

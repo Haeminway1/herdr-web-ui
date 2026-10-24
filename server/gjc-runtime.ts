@@ -8,7 +8,9 @@ import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readlinkSync
 import nodePath, { join, type PlatformPath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import { gjcSdkTranscript } from "./gjc-sdk.ts";
+import type { SlashCommand } from "../shared/protocol.ts";
+import { registerCatalogSource } from "./catalog-sources.ts";
+import { gjcSdkQuery, gjcSdkTranscript } from "./gjc-sdk.ts";
 import { GjcSdkLookupError, lookupExecutionError } from "./gjc-sdk-error.ts";
 import { gjcSdkGenerationCurrent } from "./gjc-sdk-generation.ts";
 import { captureGjcIndex, gjcIndexUnchanged, type GjcIndexStamp } from "./gjc-index.ts";
@@ -86,8 +88,63 @@ export async function gjcPidUnderShell(
   return null;
 }
 
-/** Forget the process table kept between Windows polls. */
-export function forgetGjcState(): void { processTable = null; transcriptFlights.clear(); transcriptBindings.clear(); transcriptFailures.clear(); }
+/**
+ * A lookup outlives what it was asked about: its pane can end, the state can be reset, a newer lookup can
+ * finish first. Each lookup takes a token from one monotonic sequence and is listed under its pane until it
+ * settles. Forgetting cancels the listed tokens, and a lookup publishes only while its token stands and is
+ * newer than what is already kept for its key, so nothing is kept about an ended pane.
+ */
+type LookupToken = { seq: number; key: string; cancelled: boolean; /** settled from what was kept (a cache hit or a replayed failure), not from new evidence */ cached?: true; /** settled with a fresh failure (timeout, unavailable) */ failed?: true };
+let lookupSeq = 0;
+const lookupsInFlight = new Map<string, Set<LookupToken>>();
+/** Per pane, the seq of the newest lookup that settled (any outcome, any cwd key): an older lookup publishes nothing past it. Deleted with the pane. */
+const settledSeq = new Map<string, number>();
+/** Per pane and cwd key, the seq of the newest lookup that settled with a fresh failure: it only overtakes the older lookups of other keys, since a failure says nothing about its own key's proof. */
+const settledFailures = new Map<string, Map<string, number>>();
+
+/** Whether a lookup of this key and seq was overtaken by a newer lookup of its pane that settled on new evidence. */
+function overtaken(paneId: string, key: string, seq: number): boolean {
+  if (seq <= (settledSeq.get(paneId) ?? -1)) return true;
+  for (const [other, failed] of settledFailures.get(paneId) ?? []) if (other !== key && failed > seq) return true;
+  return false;
+}
+
+function cancelLookups(tokens: Iterable<LookupToken>): void { for (const token of tokens) token.cancelled = true; }
+
+/** Forget the process table kept between Windows polls, and every kept gjc state; running lookups publish nothing after it. */
+export function forgetGjcState(): void {
+  for (const tokens of lookupsInFlight.values()) cancelLookups(tokens);
+  lookupsInFlight.clear();
+  settledSeq.clear();
+  settledFailures.clear();
+  processTable = null; transcriptFlights.clear(); transcriptBindings.clear(); transcriptFailures.clear(); nativeSkills.clear();
+}
+
+/** Per pane only the most recent proof counts: a lookup that starts or ends drops every older binding of the pane, under any cwd key. */
+function supersedeBindings(paneId: string, key: string, seq: number): void {
+  for (const [other, kept] of transcriptBindings) {
+    if (other !== key && kept.seq < seq && (JSON.parse(other) as [string])[0] === paneId) transcriptBindings.delete(other);
+  }
+}
+
+/** Drop one pane's kept gjc state: its proven binding, kept failures and native rows, and cancel any lookup or refresh still running for it. */
+export function forgetGjcPane(paneId: string): void {
+  cancelLookups(lookupsInFlight.get(paneId) ?? []);
+  lookupsInFlight.delete(paneId);
+  settledSeq.delete(paneId);
+  settledFailures.delete(paneId);
+  for (const map of [transcriptBindings, transcriptFailures, transcriptFlights] as Map<string, unknown>[]) {
+    for (const key of [...map.keys()]) if ((JSON.parse(key) as [string])[0] === paneId) map.delete(key);
+  }
+  const entry = nativeSkills.get(paneId);
+  if (entry) entry.dropped = true;
+  nativeSkills.delete(paneId);
+}
+
+/** How many entries gjc state holds, for tests of what an ended pane leaves behind. */
+export function gjcRetainedEntries(): number {
+  return lookupsInFlight.size + settledSeq.size + settledFailures.size + transcriptBindings.size + transcriptFailures.size + transcriptFlights.size + nativeSkills.size;
+}
 
 /**
  * Where `file` sits inside `root`, as path segments, or null when it is not inside. The
@@ -143,6 +200,11 @@ export function parseGjcPs(output: string): GjcTerminal | null {
  * header decides, and a rejected candidate can be megabytes.
  */
 function transcriptCwd(path: string): string | null {
+  return transcriptHeader(path)?.cwd ?? null;
+}
+
+/** transcriptCwd's header, with the session version it names (undefined when it names none). */
+export function transcriptHeader(path: string): { cwd: string; version: unknown } | null {
   let fd: number;
   try {
     fd = openSync(path, "r");
@@ -153,9 +215,9 @@ function transcriptCwd(path: string): string | null {
     const buffer = Buffer.alloc(4096);
     const size = readSync(fd, buffer, 0, buffer.length, 0);
     const lines = buffer.subarray(0, size).toString("utf8").split("\n");
-    let header = JSON.parse(lines[0] ?? "") as { type?: string; cwd?: unknown };
-    if (header.type === "title") header = JSON.parse(lines[1] ?? "") as { type?: string; cwd?: unknown };
-    return header.type === "session" && typeof header.cwd === "string" ? header.cwd : null;
+    let header = JSON.parse(lines[0] ?? "") as { type?: string; cwd?: unknown; version?: unknown };
+    if (header.type === "title") header = JSON.parse(lines[1] ?? "") as { type?: string; cwd?: unknown; version?: unknown };
+    return header.type === "session" && typeof header.cwd === "string" ? { cwd: header.cwd, version: header.version } : null;
   } catch {
     return null; // not a gjc transcript, or a header longer than the read
   } finally {
@@ -165,30 +227,51 @@ function transcriptCwd(path: string): string | null {
 
 /**
  * Shared breadcrumb/descriptor lookup: GJC and omp subagents live beside their session file, so
- * this helper maps such a path to its parent. The SDK-based GJC pane resolver does not use it.
+ * this helper maps such a path to its parent, which must itself be a session inside the store once
+ * links are followed. `depth` is where sessions sit: 2 for `<cwd>/<id>.jsonl`, 1 for a session
+ * directory of omp's own holding `<id>.jsonl`. The SDK-based GJC pane resolver does not use it.
  */
-export function gjcSessionFile(root: string, path: string, paths: PlatformPath = nodePath): string | null {
+export function gjcSessionFile(root: string, path: string, paths: PlatformPath = nodePath, depth: 1 | 2 = 2): string | null {
   const parts = path.endsWith(".jsonl") ? storeRelative(root, path, paths) : null;
   if (!parts) return null;
-  if (parts.length === 2) return path;
-  if (parts.length !== 3) return null;
-  const session = paths.join(root, parts[0]!, `${parts[1]!}.jsonl`);
-  try { return statSync(session).isFile() ? session : null; } catch { return null; }
+  if (parts.length === depth) return path;
+  if (parts.length !== depth + 1) return null;
+  const session = paths.join(root, ...parts.slice(0, depth - 1), `${parts[depth - 1]!}.jsonl`);
+  try {
+    if (!statSync(session).isFile()) return null;
+    // a parent linked out of the store is no session of it
+    return storeRelative(realpathSync(root), realpathSync(session), paths)?.length === depth ? session : null;
+  } catch { return null; }
 }
 
-/** Validate the shared native breadcrumb under `agentDir/terminal-sessions` and reject stale leftovers. */
-export function terminalBreadcrumb(agentDir: string, cwd: string, terminalId: string, startedAt: number): string | null {
+/**
+ * Where a store keeps its sessions and terminal breadcrumbs: `<agentDir>/sessions/<cwd>/<id>.jsonl`
+ * and `<agentDir>/terminal-sessions` by default. omp can move either (omp.ts ompStoreLayout).
+ */
+export interface StoreRoots { sessions: string; terminalSessions: string; depth: 1 | 2 }
+
+const defaultStoreRoots = (agentDir: string): StoreRoots =>
+  ({ sessions: join(agentDir, "sessions"), terminalSessions: join(agentDir, "terminal-sessions"), depth: 2 });
+
+/**
+ * Validate the shared native breadcrumb under the store's terminal sessions (an agent directory's
+ * own, or the roots given) and reject stale leftovers.
+ */
+export function terminalBreadcrumb(store: string | StoreRoots, cwd: string, terminalId: string, startedAt: number): string | null {
   if (!/^(?:pts-\d+|tty[\w-]+|tmux-%\d+)$/.test(terminalId) || !Number.isFinite(startedAt)) return null;
+  const roots = typeof store === "string" ? defaultStoreRoots(store) : store;
   try {
-    const marker = join(agentDir, "terminal-sessions", terminalId);
+    const marker = join(roots.terminalSessions, terminalId);
     const stat = statSync(marker);
     if (!stat.isFile() || stat.size > 8192 || stat.mtimeMs < startedAt - 1000) return null;
     const [savedCwd, savedPath] = readFileSync(marker, "utf8").split("\n");
     if (!savedCwd || !savedPath || realpathSync(savedCwd) !== realpathSync(cwd)) return null;
-    const root = realpathSync(join(agentDir, "sessions"));
+    // omp writes a relative session directory as given, relative to a directory nothing proves
+    if (!nodePath.isAbsolute(savedPath)) return null;
+    const root = realpathSync(roots.sessions);
     const saved = realpathSync(savedPath);
     if (!statSync(saved).isFile()) return null;
-    const path = gjcSessionFile(root, saved);
+    const path = gjcSessionFile(root, saved, nodePath, roots.depth);
     if (!path) return null;
     const headerCwd = transcriptCwd(path);
     return headerCwd && realpathSync(headerCwd) === realpathSync(cwd) ? path : null;
@@ -196,22 +279,22 @@ export function terminalBreadcrumb(agentDir: string, cwd: string, terminalId: st
 }
 
 /**
- * The transcript an agent's processes show, from its store under `agentDir` (GJC and omp lay
- * theirs out alike): an exact open transcript first, then the terminal-scoped breadcrumb written
+ * The transcript an agent's processes show, from its store's `roots` (GJC and omp lay theirs out
+ * alike): an exact open transcript first, then the terminal-scoped breadcrumb written
  * during the process's lifetime. A directory descriptor or cwd proves only the store, not the
  * active session; never infer ownership from cwd or session recency. `path` is null unless
  * exactly one transcript qualifies; `found` says how many did.
  */
-export function heldTranscript(agentDir: string, cwd: string, pids: readonly number[], environOf?: (pid: number) => readonly string[] | null | undefined): { path: string | null; found: number } {
+export function heldTranscript(roots: StoreRoots, cwd: string, pids: readonly number[], environOf?: (pid: number) => readonly string[] | null | undefined): { path: string | null; found: number } {
   let root: string;
-  try { root = realpathSync(join(agentDir, "sessions")); }
+  try { root = realpathSync(roots.sessions); }
   catch { return { path: null, found: 0 }; }
   const open = new Set<string>();
   const breadcrumbs = new Set<string>();
   for (const pid of pids) {
     const terminal = gjcTerminal(pid, environOf?.(pid));
     if (terminal) {
-      const path = terminalBreadcrumb(agentDir, cwd, terminal.id, terminal.startedAt);
+      const path = terminalBreadcrumb(roots, cwd, terminal.id, terminal.startedAt);
       if (path) breadcrumbs.add(path);
     }
     let fds: string[] = [];
@@ -219,7 +302,7 @@ export function heldTranscript(agentDir: string, cwd: string, pids: readonly num
     for (const fd of fds) {
       try {
         const file = realpathSync(readlinkSync(`/proc/${pid}/fd/${fd}`));
-        const target = statSync(file).isFile() ? gjcSessionFile(root, file) : null;
+        const target = statSync(file).isFile() ? gjcSessionFile(root, file, nodePath, roots.depth) : null;
         if (target && transcriptCwd(target) === cwd) open.add(target);
       } catch { /* closed, deleted or unreadable descriptor */ }
     }
@@ -282,6 +365,9 @@ type GjcTranscriptOptions = {
   readProcessTable?: () => Promise<ProcessRow[]>;
 };
 
+const lookupKey = (paneId: string, cwd: string, home: string, options: GjcTranscriptOptions): string =>
+  JSON.stringify([paneId, cwd, home, options.platform ?? process.platform]);
+
 /** Each SDK lookup spawns the gjc CLI, so equivalent pane/directory/I/O contexts share one flight. */
 type TranscriptFlight = { options: GjcTranscriptOptions; flight: Promise<string | null> };
 const transcriptFlights = new Map<string, { entries: Set<TranscriptFlight>; successes: number }>();
@@ -308,6 +394,8 @@ type KeptBinding = {
   processes: GjcProcessIdentity[];
   binding: GjcSdkBinding;
   at: number;
+  /** the lookup that proved it: an older lookup never replaces it */
+  seq: number;
 };
 
 /**
@@ -321,6 +409,7 @@ const transcriptFailures = new Map<string, {
   processes: GjcProcessIdentity[];
   indexStamp: GjcIndexStamp | null;
   error: GjcSdkLookupError | null;
+  seq: number;
 }>();
 
 /**
@@ -337,7 +426,7 @@ export function gjcTranscriptForPane(
   home = process.env["HOME"] ?? "",
   options: GjcTranscriptOptions = {},
 ): Promise<string | null> {
-  const key = JSON.stringify([paneId, cwd, home, options.platform ?? process.platform]);
+  const key = lookupKey(paneId, cwd, home, options);
   const now = (options.now ?? Date.now)();
   for (const [other, failure] of transcriptFailures) {
     if (now - failure.at >= BINDING_TTL_MS) transcriptFailures.delete(other);
@@ -348,11 +437,28 @@ export function gjcTranscriptForPane(
       && (shared.options.purpose ?? "chat") === (options.purpose ?? "chat")) return shared.flight;
   }
   const successes = flights.successes;
+  const token: LookupToken = { seq: ++lookupSeq, key, cancelled: false };
+  const running = lookupsInFlight.get(paneId) ?? new Set<LookupToken>();
+  running.add(token);
+  lookupsInFlight.set(paneId, running);
   // The group lives until every overlapping flight settles, including one finishing after a success.
-  const flight: Promise<string | null> = lookupGjcTranscript(key, paneId, cwd, home, options, () => flights.successes === successes).then((path) => {
-    if (path !== null) { flights.successes += 1; transcriptFailures.delete(key); }
+  const flight: Promise<string | null> = lookupGjcTranscript(key, paneId, cwd, home, options, () => flights.successes === successes && !token.cancelled, token).then((path) => {
+    if (path !== null) { flights.successes += 1; if (!token.cancelled && token.seq > (transcriptFailures.get(key)?.seq ?? -1) && !overtaken(paneId, key, token.seq)) transcriptFailures.delete(key); }
     return path;
-  }).finally(() => {
+  }, (error) => { token.failed = true; throw error; }).finally(() => {
+    // a cancelled lookup belongs to a pane that ended or a state that was reset: it leaves no record
+    // only a lookup that settled on new evidence outranks the older ones; one answered from the cache blocks nobody
+    if (!token.cancelled && !token.cached) {
+      if (!token.failed) { if (token.seq > (settledSeq.get(paneId) ?? -1)) settledSeq.set(paneId, token.seq); }
+      else {
+        const failures = settledFailures.get(paneId) ?? new Map<string, number>();
+        if (token.seq > (failures.get(key) ?? -1)) failures.set(key, token.seq);
+        settledFailures.set(paneId, failures);
+      }
+    }
+    running.delete(token);
+    // with nothing in flight every later lookup is newer, so the record is no longer needed
+    if (running.size === 0 && lookupsInFlight.get(paneId) === running) { lookupsInFlight.delete(paneId); settledSeq.delete(paneId); settledFailures.delete(paneId); }
     flights.entries.delete(entry);
     if (transcriptFlights.get(key) === flights && flights.entries.size === 0) transcriptFlights.delete(key);
   });
@@ -369,6 +475,7 @@ async function lookupGjcTranscript(
   home: string,
   options: GjcTranscriptOptions,
   canCacheFailure: () => boolean,
+  token: LookupToken,
 ): Promise<string | null> {
   const platform = options.platform ?? process.platform;
   const agentDir = join(home, ".gjc", "agent");
@@ -386,8 +493,19 @@ async function lookupGjcTranscript(
   const sameBirth = (a: number, b: number) => platform === "darwin" ? Math.abs(a - b) <= 1000 : a === b;
   const sameProcesses = (a: GjcProcessIdentity[], b: GjcProcessIdentity[]) => a.length === b.length
     && a.every((process) => b.some((other) => other.pid === process.pid && sameBirth(other.birth, process.birth)));
+  // publishing, or removing what is kept, is for a lookup that stands and is newer than what it would replace
+  const newest = (kept: Map<string, { seq: number }>): boolean => !token.cancelled && token.seq > (kept.get(key)?.seq ?? -1)
+    // a newer lookup of the pane has already settled on new evidence: this one describes a proof that was overtaken
+    && !overtaken(paneId, key, token.seq);
+  const assertCurrent = (): void => {
+    if (token.cancelled || overtaken(paneId, key, token.seq)) throw new GjcSdkLookupError("unavailable");
+  };
   const forget = (): null => {
-    if (canCacheFailure()) { transcriptBindings.delete(key); transcriptFailures.delete(key); }
+    if (!token.cancelled) supersedeBindings(paneId, key, token.seq);
+    if (canCacheFailure()) {
+      if (newest(transcriptBindings)) transcriptBindings.delete(key);
+      if (newest(transcriptFailures)) transcriptFailures.delete(key);
+    }
     return null;
   };
 
@@ -448,7 +566,9 @@ async function lookupGjcTranscript(
           if (!final || !sameProcesses(final, kept.processes)) return forget();
           if (validateGjcSdkTranscript(kept.binding, cwd, agentDir) !== path) return forget();
           if (!await generationCurrent(agentDir, kept.binding.sessionId, kept.binding.endpointGeneration)) return forget();
+          assertCurrent();
           kept.indexStamp = indexStamp;
+          token.cached = true;
           return path;
         }
         if (path) return forget();
@@ -461,17 +581,19 @@ async function lookupGjcTranscript(
       if (sameLookupContext(failure.options, options) && failure.options.purpose === options.purpose
         && checkedAt - failure.at < BINDING_TTL_MS
         && sameProcesses(current, failure.processes) && isDeepStrictEqual(failure.indexStamp, indexStamp)) {
+        token.cached = true;
         if (failure.error) throw failure.error;
         return null;
       }
-      transcriptFailures.delete(key);
+      if (newest(transcriptFailures)) transcriptFailures.delete(key);
       initial = current;
     }
-    transcriptBindings.delete(key);
+    if (!token.cancelled) supersedeBindings(paneId, key, token.seq);
+    if (newest(transcriptBindings)) transcriptBindings.delete(key);
     const pids = initial.map((process) => process.pid);
     const cacheFailure = (error: GjcSdkLookupError | null): void => {
-      if (options.purpose === "status" && canCacheFailure()) {
-        transcriptFailures.set(key, { options, at: now(), processes: initial, indexStamp, error });
+      if (options.purpose === "status" && canCacheFailure() && newest(transcriptFailures)) {
+        transcriptFailures.set(key, { options, at: now(), processes: initial, indexStamp, error, seq: token.seq });
       }
     };
     let binding: GjcSdkBinding | null;
@@ -494,15 +616,131 @@ async function lookupGjcTranscript(
     if (!final || !sameProcesses(final, initial)) return null;
     if (validateGjcSdkTranscript(binding, cwd, agentDir) !== path) return null;
     if (!await generationCurrent(agentDir, binding.sessionId, binding.endpointGeneration)) return null;
-    if (indexStamp !== null) {
+    assertCurrent();
+    if (indexStamp !== null && newest(transcriptBindings)) {
       for (const [other, entry] of transcriptBindings) if (checkedAt - entry.at >= BINDING_TTL_MS) transcriptBindings.delete(other);
       // aged from before the lookup, when the index stamp was read
-      transcriptBindings.set(key, { options, indexStamp, processes: initial, binding, at: checkedAt });
+      transcriptBindings.set(key, { options, indexStamp, processes: initial, binding, at: checkedAt, seq: token.seq });
     }
     return path;
   } catch (error) {
     // An unavailable read cannot prove absence or authorize a cached binding after recovery.
-    transcriptBindings.delete(key);
+    const kept = transcriptBindings.get(key);
+    if (kept && kept.seq <= token.seq) transcriptBindings.delete(key);
     throw lookupExecutionError(error);
   }
 }
+
+type GjcQueryFn = (agentDir: string, sessionId: string, query: "runtime.capabilities" | "skill.list/state") => Promise<Record<string, unknown> | null>;
+
+/** Injection points for fixtures; production passes none. */
+export interface GjcNativeOptions {
+  home?: string;
+  platform?: string;
+  now?: () => number;
+  query?: GjcQueryFn;
+  generationCurrent?: typeof gjcSdkGenerationCurrent;
+}
+
+/** How long one broker answer is kept, and the least time between two attempts to get one. */
+const NATIVE_REFRESH_MS = 30_000;
+const nativeQuery: GjcQueryFn = (agentDir, sessionId, query) => gjcSdkQuery(agentDir, sessionId, query);
+const asRecord = (value: unknown): Record<string, unknown> | null => typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+const firstPage = (response: Record<string, unknown> | null): unknown[] | null => {
+  const page = asRecord(response?.page);
+  return page?.complete === true && Array.isArray(page.items) ? page.items : null;
+};
+
+type NativeSkills = { sessionId: string; endpointGeneration: number; /** the binding the rows came from: a newer binding invalidates them */ seq: number; rows: SlashCommand[] | null; attemptedAt: number; flight?: Promise<void>; /** the pane ended: a refresh still running must not store rows */ dropped?: true };
+const nativeSkills = new Map<string, NativeSkills>();
+
+/** The binding the chat reads already hold for this pane, still inside its lifetime; never resolves one. */
+function keptBindingForPane(paneId: string, home: string, platform: string, now: number): KeptBinding | null {
+  let newest: KeptBinding | null = null;
+  for (const [key, kept] of transcriptBindings) {
+    const [pane, , keptHome, keptPlatform] = JSON.parse(key) as [string, string, string, string];
+    if (pane !== paneId || keptHome !== home || keptPlatform !== platform || now - kept.at >= BINDING_TTL_MS) continue;
+    if (!newest || kept.seq > newest.seq) newest = kept;
+  }
+  return newest;
+}
+
+/**
+ * gjc's own skill list as the broker answers it (skill.list/state, offered by
+ * runtime.capabilities), attach-only and read-only: the broker itself is never started. Asking it
+ * means running the gjc CLI, once in the background per period per pane and only while the
+ * transcript adapter holds a resolved binding for the pane; a request never waits for that run,
+ * it gets what the last refresh kept. A list that is not one complete page, or any failure, keeps
+ * no rows: the scan rows stay.
+ */
+async function refreshNativeSkills(entry: NativeSkills, paneId: string, home: string, platform: string, now: () => number, query: GjcQueryFn, generationCurrent: typeof gjcSdkGenerationCurrent): Promise<void> {
+  const agentDir = join(home, ".gjc", "agent");
+  try {
+    const [capabilities, skills] = await Promise.all([
+      query(agentDir, entry.sessionId, "runtime.capabilities"),
+      query(agentDir, entry.sessionId, "skill.list/state"),
+    ]);
+    const operations = asRecord(firstPage(capabilities)?.[0])?.operations;
+    const items = firstPage(skills);
+    if (!Array.isArray(operations) || !operations.includes("skill.list/state") || !items) { if (nativeSkills.get(paneId) === entry) entry.rows = null; return; }
+    const rows = new Map<string, SlashCommand>();
+    for (const item of items) {
+      const skill = asRecord(item);
+      if (!skill || typeof skill.name !== "string" || skill.name.length > 128 || /[\s\0]/u.test(skill.name) || skill.name === "") continue;
+      const name = skill.name.startsWith("skill:") ? skill.name : `skill:${skill.name}`;
+      if (rows.has(name)) continue;
+      rows.set(name, {
+        name, description: typeof skill.description === "string" ? skill.description.slice(0, 500) : "",
+        source: "skill", id: name, provenance: { transport: "native", verified: true },
+      });
+    }
+    if (entry.dropped || nativeSkills.get(paneId) !== entry) return;
+    const seq = entry.seq;
+    const current = await generationCurrent(agentDir, entry.sessionId, entry.endpointGeneration);
+    if (entry.dropped || nativeSkills.get(paneId) !== entry || entry.seq !== seq) return;
+    if (!current) { entry.rows = null; return; }
+    if (keptBindingForPane(paneId, home, platform, now())?.seq === seq) entry.rows = [...rows.values()];
+  } catch { if (nativeSkills.get(paneId) === entry) entry.rows = null; /* a broker that is absent, slow or odd leaves the scan rows */ }
+}
+
+/** The kept native skill rows of a pane (null when none) and the refresh this call started, if any. */
+export async function gjcNativeSkills(paneId: string, options: GjcNativeOptions = {}): Promise<{ rows: SlashCommand[] | null; refreshed?: Promise<void> }> {
+  const home = options.home ?? process.env["HOME"] ?? "";
+  const now = (options.now ?? Date.now)();
+  const platform = options.platform ?? process.platform;
+  const agentDir = join(home, ".gjc", "agent");
+  const generationCurrent = options.generationCurrent ?? gjcSdkGenerationCurrent;
+  // Windows keeps scan rows: its process table is a PowerShell round trip, far past the catalog's budget
+  const kept = home && platform !== "win32" ? keptBindingForPane(paneId, home, platform, now) : null;
+  // no proven binding (a pane between two proofs of the same session, or no gjc): nothing is served and nothing is dropped
+  if (!kept) return { rows: null };
+  let current: boolean;
+  try { current = await generationCurrent(agentDir, kept.binding.sessionId, kept.binding.endpointGeneration); }
+  catch (error) { const stale = nativeSkills.get(paneId); if (stale && stale.seq === kept.seq) stale.rows = null; throw lookupExecutionError(error); }
+  if (!current || keptBindingForPane(paneId, home, platform, (options.now ?? Date.now)()) !== kept) {
+    if (!current) {
+      for (const [key, binding] of transcriptBindings) if (binding === kept) transcriptBindings.delete(key);
+    }
+    const stale = nativeSkills.get(paneId);
+    if (stale && stale.seq === kept.seq) { stale.rows = null; stale.dropped = true; nativeSkills.delete(paneId); }
+    return { rows: null };
+  }
+  let entry = nativeSkills.get(paneId);
+  if (entry && entry.sessionId === kept.binding.sessionId && entry.endpointGeneration === kept.binding.endpointGeneration) entry.seq = kept.seq; // the same generation proven again keeps its rows
+  else {
+    if (entry) entry.dropped = true;
+    entry = { sessionId: kept.binding.sessionId, endpointGeneration: kept.binding.endpointGeneration, seq: kept.seq, rows: null, attemptedAt: -Infinity };
+    nativeSkills.delete(paneId);
+    nativeSkills.set(paneId, entry);
+    if (nativeSkills.size > 128) nativeSkills.delete(nativeSkills.keys().next().value!);
+  }
+  if (entry.flight || now - entry.attemptedAt < NATIVE_REFRESH_MS) return { rows: entry.rows, ...(entry.flight ? { refreshed: entry.flight } : {}) };
+  // The one place a catalog request can cause a process: the gjc CLI is the only way to the broker. It never
+  // waits for it, runs once per period per pane, and only while the adapter holds a live binding (above).
+  entry.attemptedAt = now;
+  const target = entry;
+  target.flight = refreshNativeSkills(target, paneId, home, platform, options.now ?? Date.now, options.query ?? nativeQuery, generationCurrent).finally(() => { target.flight = undefined; });
+  return { rows: entry.rows, refreshed: target.flight };
+}
+
+registerCatalogSource({ agent: "gjc", owns: ["skills"], rows: async (pane) => (await gjcNativeSkills(pane.pane_id)).rows });
