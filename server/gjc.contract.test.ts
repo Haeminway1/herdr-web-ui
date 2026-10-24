@@ -23,6 +23,21 @@ let brokerClock = 0;
 const sdkCli = join(home, "gjc-sdk-fixture.js");
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
+async function until<T>(deadline: number, read: () => Promise<T>, accept: (value: T) => boolean, label: string): Promise<T> {
+  let last: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const value = await read();
+      if (accept(value)) return value;
+      last = value;
+    } catch (error) {
+      last = error;
+    }
+    await Bun.sleep(50);
+  }
+  throw new Error(`Timed out waiting for ${label}${last instanceof Error ? `: ${last.message}` : ""}`);
+}
+
 // The stand-in is a Bun script named gjc; it holds only the requested store directory and prints the pane's fixed screen.
 writeFileSync(script, "if (process.env.GJC_TEST_CWD) process.chdir(process.env.GJC_TEST_CWD);\nfor (const path of process.argv.slice(2)) require('node:fs').openSync(path, 'r');\nconsole.log('GJC fixture ready'); console.log(process.env.GJC_TEST_SCREEN || ''); setInterval(() => {}, 1000);\n");
 mkdirSync(bin);
@@ -92,7 +107,7 @@ function heldPaths(pid: number): string[] {
 }
 
 async function pane(paths: string[], screen = "", cwd = home): Promise<string> {
-  const created = await workspaceCreate({ cwd: home, label: "herdr-web-ui-test-gjc-binding" });
+  const created = await workspaceCreate({ cwd: home, label: "ovis-test-gjc-binding" });
   workspaces.push(created.workspace.workspace_id);
   const id = created.root_pane.pane_id;
   const args = paths.map(shellQuote).join(" ");
@@ -500,7 +515,7 @@ it("SDK GJC resolution respects the process foreground cwd", async () => withSdk
 
 it("starts the gjc this server found on its PATH, by absolute path, and waits until it runs in the pane", async () => withSdkFixture(async () => {
   const shell = async () => {
-    const created = await workspaceCreate({ cwd: home, label: "herdr-web-ui-test-gjc-start" });
+    const created = await workspaceCreate({ cwd: home, label: "ovis-test-gjc-start" });
     workspaces.push(created.workspace.workspace_id);
     return created.root_pane.pane_id;
   };
@@ -514,8 +529,13 @@ it("starts the gjc this server found on its PATH, by absolute path, and waits un
     process.env["PATH"] = `${spacedBin}:${previousPath ?? ""}`;
     const id = await shell();
     await startShellAgent("gjc", id, [dir]);
-    const info = await herdrRpc<{ process_info?: { foreground_processes?: { argv?: string[] }[] } }>("pane.process_info", { pane_id: id });
-    expect(info.process_info?.foreground_processes?.find((candidate) => isGjcProcess(candidate.argv ?? []))?.argv?.slice(-1)).toEqual([dir]);
+    // read until herdr shows it: one read right after the start can still miss the process it reported in front (#1462)
+    const gjcArgv = (info: { process_info?: { foreground_processes?: { argv?: string[] }[] } }) =>
+      info.process_info?.foreground_processes?.find((candidate) => isGjcProcess(candidate.argv ?? []))?.argv;
+    const info = await until(Date.now() + 10_000,
+      () => herdrRpc<{ process_info?: { foreground_processes?: { argv?: string[] }[] } }>("pane.process_info", { pane_id: id }),
+      (read) => gjcArgv(read)?.at(-1) === dir, "the started gjc, given the sessions directory, in the pane's foreground");
+    expect(gjcArgv(info)?.slice(-1)).toEqual([dir]);
     process.env["PATH"] = "/nonexistent";
     const bare = await shell();
     await expect(startShellAgent("gjc", bare, [], { timeoutMs: 1500 })).rejects.toThrow("not on this server's PATH");
