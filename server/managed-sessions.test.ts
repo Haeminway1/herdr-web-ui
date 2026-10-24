@@ -70,6 +70,46 @@ it("routes a managed GJC ahead of a misleading Codex child and unrelated newer f
   expect(answer.history_id).toStartWith(`managed-${nonce}-1:`);
 });
 
+it("recovers Claude chat after directory-trust startup only when Manager publishes the exact native binding", async () => {
+  const base = join(root, "claude");
+  const store = join(base, "projects", "fixture-project");
+  mkdirSync(store, { recursive: true, mode: 0o700 });
+  sessionFile = join(store, `${sessionId}.jsonl`);
+  writeFileSync(sessionFile, [
+    JSON.stringify({ type: "file-history-snapshot", snapshot: {} }),
+    JSON.stringify({ type: "user", uuid: "fixture-user", sessionId, cwd: root, message: { role: "user", content: "synthetic post-trust request" } }),
+    JSON.stringify({ type: "assistant", uuid: "fixture-assistant", parentUuid: "fixture-user", sessionId, cwd: root, message: { role: "assistant", content: [{ type: "text", text: "synthetic post-trust answer" }] } }),
+  ].join("\n") + "\n", { mode: 0o600 });
+  pane = { ...pane, agent: "claude", agent_status: "done", agent_session: { agent: "claude", kind: "id", source: "herdr", value: sessionId }, tokens: { ...pane.tokens, hm_create_failed: "agent_not_ready" } };
+  record.harness = "claude"; record.launcher_harness = "claude";
+  record.env = { CLAUDE_CONFIG_DIR: base };
+  record.session_id = null; record.session_file = null; delete record.file_identity;
+  // Answering native directory trust can produce a transcript after Manager's launch wait
+  // expired. A herdr session ID alone cannot authorize bypassing the managed nonce/generation.
+  for (const state of ["starting", "identity_pending", "blocked"]) {
+    record.state = state;
+    record.error = state === "blocked" ? "blocked_agent_not_ready" : "identity_pending";
+    save();
+    const original = readFileSync(recordFile, "utf8");
+    expect(await resolve()).toMatchObject({ identity: { state: state === "blocked" ? "blocked" : "identity_pending", session_id: null }, sessionFile: null });
+    await expect(conversationForPane(pane)).rejects.toThrow(String(record.error));
+    expect(readFileSync(recordFile, "utf8")).toBe(original);
+  }
+  // A valid persisted Manager recovery is picked up without changing pane identity, clearing
+  // failure tokens, answering trust, guessing by cwd/recency or restarting the Web UI.
+  record.state = "ready"; record.error = null;
+  record.session_id = sessionId; record.session_file = sessionFile; pinCurrentFile();
+  const answer = await conversationForPane(pane);
+  expect(answer.source).toBe("claude-transcript");
+  expect(answer.managed_session).toMatchObject({ state: "ready", session_id: sessionId, generation: 1 });
+  expect(answer.turns).toHaveLength(2);
+  expect(answer.turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "synthetic post-trust answer" });
+  expect(await resolveManagedSession({ ...pane, pane_id: "another-pane" }, namespace, deps)).toMatchObject({ identity: { reason: "blocked_pane_identity" }, sessionFile: null });
+  writeFileSync(sessionFile, JSON.stringify({ type: "user", sessionId: "wrong-session", cwd: root }) + "\n");
+  expect((await resolve()).identity.reason).toBe("blocked_session_header");
+  await expect(conversationForPane(pane)).rejects.toThrow("blocked_session_header");
+});
+
 it("projects both panes and agents without converting identity ready into engine idle", async () => {
   const snapshot = { panes: [pane], agents: [{ ...pane, name: "provider-child" }], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
   const result = await labelManagedPanes(snapshot);

@@ -28,6 +28,7 @@
     "scripts/grok-chat-browser-qa.ts",
     "scripts/gjc-status-browser-regression.ts",
     "scripts/managed-chat-demo-regression.ts",
+    "scripts/mobile-chat-app-regression.ts",
     "scripts/fork-sync.test.ts",
     "scripts/sidebar-activity-demo-regression.ts",
     "scripts/file-preview-text-browser-qa.ts",

@@ -867,7 +867,41 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const wasConnected = useRef(connected);
   const seenInvalidation = useRef({ pane: paneId, key: invalidationKey });
 
+  // Both a restored place and a prepended page start with estimated row heights. Keep the
+  // actual reader row at its measured offset until layout settles, yielding to any new input.
+  const restoreRowAtOffset = (key: string, index: number, offset: number): void => {
+    stopRestore.current?.();
+    const list = timeline.current, node = scroller.current;
+    if (list === null || node === null) return;
+    const scope = slots.current.scope, olderAt = olderCount.current;
+    pagingAway.current = true; stickToBottom.current = false; setAway(true);
+    void list.scrollToIndex({ index, viewPosition: 0, viewOffset: offset, animated: false });
+    let frame = 0, frames = 0, stable = 0;
+    const stop = (): void => {
+      cancelAnimationFrame(frame);
+      for (const type of ["wheel", "touchmove", "pointerdown"]) node.removeEventListener(type, stop);
+      document.removeEventListener("keydown", stop, true);
+      dropPendingListScroll(list);
+      if (stopRestore.current === stop) stopRestore.current = null;
+    };
+    const settle = (): void => {
+      if (++frames > 30 || timeline.current !== list || slots.current.scope !== scope || olderCount.current !== olderAt || prependAnchor.current !== null) { stop(); return; }
+      const row = node.querySelector<HTMLElement>(`[data-chat-row="${CSS.escape(key)}"]`);
+      if (row !== null) {
+        const delta = row.getBoundingClientRect().top - node.getBoundingClientRect().top - offset;
+        if (Math.abs(delta) > 1) { stable = 0; void list.scrollToOffset({ offset: node.scrollTop + delta, animated: false }); }
+        else if (++stable >= 2) { stop(); return; }
+      }
+      frame = requestAnimationFrame(settle);
+    };
+    for (const type of ["wheel", "touchmove", "pointerdown"]) node.addEventListener(type, stop, { passive: true });
+    document.addEventListener("keydown", stop, true);
+    stopRestore.current = stop;
+    frame = requestAnimationFrame(settle);
+  };
+
   const dropOlder = (): void => {
+    stopRestore.current?.();
     olderGeneration.current += 1; loadingOlder.current = false;
     heldFrom.current = null; olderCount.current = 0; setOlder([]); setOlderCursor(undefined); setOlderState("idle");
     incarnation.current += 1;
@@ -1155,7 +1189,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     if (anchor === null) return;
     prependAnchor.current = null;
     const index = slots.current.rows.findIndex((row) => row.key === anchor.key);
-    if (index >= 0) void timeline.current?.scrollToIndex({ index, viewPosition: 0, viewOffset: anchor.offset, animated: false });
+    if (index >= 0) restoreRowAtOffset(anchor.key, index, anchor.offset);
   }, [older]);
 
   // Prompts belong to the visible screen, not the native transcript: a Codex directory-trust
@@ -1304,12 +1338,44 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   }, [state.source, ChatTimeline]);
 
   useEffect(() => {
+    let touch: { x: number; y: number } | null = null;
+    const readUpward = (node: HTMLDivElement): void => {
+      if (!stickToBottom.current || node.scrollHeight <= node.clientHeight) return;
+      // Input arrives before native scrolling (and the list coalesces scroll callbacks in a
+      // frame). A transcript read, item measurement or keyboard resize in between must not
+      // follow past the reader's finger. Cancel both the list's deferred follow and a browser
+      // glide now, rather than trying to infer intent from an offset they may already overwrite.
+      pagingAway.current = true;
+      stickToBottom.current = false;
+      dropPendingListScroll(timeline.current);
+      node.scrollTo({ top: node.scrollTop, behavior: "instant" });
+      lastScrollTop.current = node.scrollTop;
+      setAway(true);
+      setEndPresentation(null);
+    };
     const mark = (event: Event): void => {
       const node = scroller.current;
-      if (node !== null && event.target instanceof Node && node.contains(event.target)) scrollInputAt.current = performance.now();
+      if (event.type === "touchend" || event.type === "touchcancel") { touch = null; return; }
+      if (node === null || !(event.target instanceof Node) || !node.contains(event.target)) { touch = null; return; }
+      scrollInputAt.current = performance.now();
+      if (event.type === "touchstart" || event.type === "touchmove") {
+        const { touches } = event as TouchEvent;
+        const point = touches.length === 1 ? touches[0] : undefined;
+        if (point === undefined) { touch = null; return; }
+        if (event.type === "touchmove" && touch !== null) {
+          const dx = point.clientX - touch.x, dy = point.clientY - touch.y;
+          if (dy > 0 && dy > Math.abs(dx)) readUpward(node);
+        }
+        touch = { x: point.clientX, y: point.clientY };
+      } else if (event instanceof WheelEvent) {
+        if (event.deltaY < 0 && Math.abs(event.deltaY) >= Math.abs(event.deltaX)) readUpward(node);
+      } else if (event instanceof KeyboardEvent && ["ArrowUp", "PageUp", "Home"].includes(event.key)
+        && !(event.target instanceof Element && event.target.closest("input, textarea, [contenteditable='true']"))) {
+        readUpward(node);
+      }
     };
     const options = { capture: true, passive: true } as const;
-    const types = ["wheel", "touchmove", "pointerdown", "keydown"] as const;
+    const types = ["wheel", "touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "keydown"] as const;
     for (const type of types) document.addEventListener(type, mark, options);
     return () => { for (const type of types) document.removeEventListener(type, mark, options); };
   }, []);
@@ -1366,6 +1432,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const scrollToBottom = (): void => {
     const node = scroller.current;
     if (node === null) return;
+    stopRestore.current?.();
     // Away/new-message state clears in measureEnd once the end is really on screen (#1342).
     pagingAway.current = false; stickToBottom.current = true;
     // A lens change can unmount us before the deferred list scroll emits its first event.
@@ -1379,6 +1446,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const scroll = (direction: -1 | 1) => {
       const node = scroller.current;
       if (!node) return;
+      stopRestore.current?.();
       const prose = node.querySelector<HTMLElement>(".chat-turn-agent > .markdown, .chat-bubble") ?? node;
       const style = getComputedStyle(prose);
       const lineHeight = parseFloat(style.lineHeight);
@@ -1453,33 +1521,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     if (saved === null || !loaded || error !== null || state.source !== "conversation") return;
     restoring.current = null;
     const index = chatRestoreIndex(saved, history.current ?? null, timelineRows.map((row) => chatTurnAnchor(row.turn)));
-    const list = timeline.current, node = scroller.current;
-    if (index === null || list === null || node === null) return;
+    if (index === null) return;
     const key = timelineRows[index]!.key;
-    pagingAway.current = true; stickToBottom.current = false; setAway(true);
-    void list.scrollToIndex({ index, viewPosition: 0, viewOffset: saved.offset, animated: false });
-    const olderAt = olderCount.current;
-    let frame = 0, frames = 0, stable = 0;
-    const stop = (): void => {
-      cancelAnimationFrame(frame);
-      for (const type of ["wheel", "touchmove", "pointerdown"]) node.removeEventListener(type, stop);
-      document.removeEventListener("keydown", stop, true);
-      if (stopRestore.current === stop) stopRestore.current = null;
-    };
-    const settle = (): void => {
-      if (++frames > 30 || timeline.current !== list || olderCount.current !== olderAt || prependAnchor.current !== null) { stop(); return; }
-      const row = node.querySelector<HTMLElement>(`[data-chat-row="${CSS.escape(key)}"]`);
-      if (row !== null) {
-        const delta = row.getBoundingClientRect().top - node.getBoundingClientRect().top - saved.offset;
-        if (Math.abs(delta) > 1) { stable = 0; void list.scrollToOffset({ offset: node.scrollTop + delta, animated: false }); }
-        else if (++stable >= 2) { stop(); return; }
-      }
-      frame = requestAnimationFrame(settle);
-    };
-    for (const type of ["wheel", "touchmove", "pointerdown"]) node.addEventListener(type, stop, { passive: true });
-    document.addEventListener("keydown", stop, true);
-    stopRestore.current = stop;
-    frame = requestAnimationFrame(settle);
+    restoreRowAtOffset(key, index, saved.offset);
   }, [loaded, error, state.source, timelineRows]);
   // Covers first layout, restored short chats and a fresh read that changes no scroll offset.
   useLayoutEffect(() => { measureEnd(); });
@@ -1488,6 +1532,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const rowKeys = useMemo(() => timelineRows.map((row) => row.key), [timelineRows]);
   // a tick takes the reader to its turn: reading there, follow left off
   const jumpToTurn = useCallback((index: number) => {
+    stopRestore.current?.();
     pagingAway.current = true; stickToBottom.current = false; setAway(true);
     void timeline.current?.scrollToIndex({ index, animated: false, viewPosition: 0 });
   }, []);
