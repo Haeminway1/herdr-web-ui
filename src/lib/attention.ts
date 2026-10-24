@@ -1,5 +1,7 @@
+import { useEffect, type Dispatch, type SetStateAction } from "react";
 import type { Machine } from "../../shared/machines.ts";
 import type { HerdrPane, PaneAttention, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
+import { markPaneSeen } from "./api.ts";
 import { panesNeedingInput } from "./needsInput.ts";
 
 export interface AttentionEntry { machine: Machine; pane: HerdrPane; workspace: WorkspaceInfo }
@@ -47,4 +49,24 @@ export function applyPaneAttention(snapshot: SessionSnapshot, paneId: string, at
     return { ...pane, attention };
   });
   return changed ? { ...snapshot, panes } : snapshot;
+}
+
+/** A visible selected pane is read without changing the native pane's focus. */
+export function usePaneAttention(locked: boolean | null, drawerOpen: boolean, machineId: string, pane: HerdrPane | null, setMachines: Dispatch<SetStateAction<Machine[]>>): void {
+  useEffect(() => {
+    if (locked !== false || drawerOpen || !pane || !isUnread(pane)) return;
+    let disposed = false;
+    const paneId = pane.pane_id;
+    const read = () => {
+      if (document.visibilityState !== "visible") return;
+      void markPaneSeen(paneId, machineId).then((attention) => {
+        if (disposed || !attention) return;
+        setMachines((list) => list.map((entry) => entry.id === machineId && entry.snapshot
+          ? { ...entry, snapshot: applyPaneAttention(entry.snapshot, paneId, attention) } : entry));
+      }).catch(() => undefined);
+    };
+    read();
+    document.addEventListener("visibilitychange", read);
+    return () => { disposed = true; document.removeEventListener("visibilitychange", read); };
+  }, [locked, drawerOpen, machineId, pane?.pane_id, pane?.attention?.finished_at, pane?.attention?.seen_at, pane?.agent_status]);
 }
