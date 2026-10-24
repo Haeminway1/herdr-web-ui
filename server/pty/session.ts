@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { ptyHost } from "./host.ts";
 
 const HOST_SCRIPT = join(import.meta.dir, "pty-host.mjs");
 
@@ -37,9 +38,13 @@ export class PtySession {
   private paused = false;
 
   constructor(private readonly options: PtySessionOptions) {
+    // The bridge's bearer token is for browsers; neither the sidecar nor the attach needs it.
+    const env = { ...process.env, ...options.env };
+    delete env["OVIS_TOKEN"];
+    delete env["HERDR_WEB_TOKEN"];
     this.proc = Bun.spawn(
-      ["node", HOST_SCRIPT, String(options.cols), String(options.rows), options.command, ...options.args],
-      { stdin: "pipe", stdout: "pipe", stderr: "inherit", env: { ...process.env, ...options.env } },
+      [...ptyHost(HOST_SCRIPT), String(options.cols), String(options.rows), options.command, ...options.args],
+      { stdin: "pipe", stdout: "pipe", stderr: "inherit", env },
     );
 
     // Process exit can precede the final stdout read. Deliver every byte before
@@ -89,6 +94,10 @@ export class PtySession {
     this.send({ t: "r", c: cols, r: rows });
   }
 
+  /**
+   * Tells the command its window changed without changing it (SIGWINCH at the same size): a resize
+   * to the size the pty already has delivers no signal. Ignored on Windows, which has no SIGWINCH.
+   */
   winch(): void {
     this.send({ t: "w" });
   }
