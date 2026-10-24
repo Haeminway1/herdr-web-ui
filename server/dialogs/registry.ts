@@ -1,28 +1,17 @@
 import { readers } from "./index.ts";
 import { claudeModelListWaits, CLAUDE_EFFORT_GUARD_RE } from "./claude.ts";
 import { codexModelListWaits } from "./codex.ts";
-import type { OmoAsk, ParsedPrompt } from "./shared.ts";
-import type { InteractionPlan } from "./interaction-plan.ts";
+import type { DialogReader, OmoAsk } from "./shared.ts";
+export type { DialogReader } from "./shared.ts";
 
+/** One read pass's view of the pane, built once per pass and never changed (onePerPass relies on it). */
 export interface ReaderContext {
-  agent: string;
-  omoAsk: OmoAsk | null;
-  omoTrusted: boolean;
-  omoOpen: OmoAsk[];
-  sent: string | null;
-  working: boolean;
-  /** Fallback cards are read only after the caller knows the pane is blocked. */
-  fallback?: boolean;
-}
-
-export interface DialogReader {
-  id: string;
-  agents: readonly string[];
-  priority: number;
-  parse(screen: string, ctx: ReaderContext): ParsedPrompt | null;
-  reread: "before-commit" | "none";
-  list: "none" | "letter-window" | "slider";
-  interaction?(parsed: ParsedPrompt): InteractionPlan;
+  readonly agent: string;
+  readonly omoAsk: OmoAsk | null;
+  readonly omoTrusted: boolean;
+  readonly omoOpen: readonly OmoAsk[];
+  readonly sent: string | null;
+  readonly working: boolean;
 }
 
 export function readersFor(agent: string): readonly DialogReader[] {
