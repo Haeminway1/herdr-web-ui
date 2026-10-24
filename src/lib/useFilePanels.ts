@@ -41,7 +41,7 @@ export function useFilePanels({ settings, filePanelAvailable, selectedPaneId, se
   }, [settings.webLinks, viewing, fileDocked, closeFile]);
   // the panel is no dialog, so no trap gives the focus back when it closes: what opened the file
   // (a link in the chat, a row of Files) gets it, as it does from the popup
-  useFocusReturn(viewing !== null && fileDocked);
+  const fileOpener = useFocusReturn(viewing !== null && fileDocked);
   // a collapse (below) whose two steps back have not landed: a second click on Show beside the
   // pane, or the kind correction in the same moment, must not queue two steps more and the file twice
   const collapsing = useRef(false);
@@ -75,5 +75,5 @@ export function useFilePanels({ settings, filePanelAvailable, selectedPaneId, se
     if (filePanelAvailable && openPresentation(path, settings.fileOpen) === "panel") setFilesOpen(false);
     openFile({ path, paneId: selectedPaneId, machineId: selectedMachineId });
   }, [openFile, selectedPaneId, selectedMachineId, filePanelAvailable, settings.fileOpen]);
-  return { filesOpen, setFilesOpen, viewing, openFile, closeFile, setPresentation, releaseFile, diffViewing, openDiff, closeDiff, releaseDiff, presentation, fileDocked, webPage, setWebPage, openWebPage, collapsing, presentFile, reportFileKind, toggleFilePresentation, viewFile };
+  return { filesOpen, setFilesOpen, viewing, openFile, closeFile, setPresentation, releaseFile, diffViewing, openDiff, closeDiff, releaseDiff, presentation, fileDocked, fileOpener, webPage, setWebPage, openWebPage, collapsing, presentFile, reportFileKind, toggleFilePresentation, viewFile };
 }

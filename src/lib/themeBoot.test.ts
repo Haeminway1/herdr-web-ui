@@ -113,7 +113,7 @@ describe("theme boot", () => {
       [{ theme: "system", palette: "amber", paletteLight: "catppuccin", paletteDark: "charcoal" }, null],
       [{ theme: "system", palette: "report", paletteLight: "lilac", paletteDark: "forest" }, null],
       [{ theme: "dark", palette: "amber", paletteDark: "charcoal" }, rowFor("amber", "dark")],
-      [{}, rowFor("amber", "dark")],
+      [{}, rowFor("report", "dark")],
     ] as const;
     for (const [record, expected] of cases) {
       for (const dark of [true, false]) {

@@ -6,6 +6,7 @@ import type { HerdrPane } from "../shared/protocol.ts";
 import { storeAgentVersion, type VersionSource } from "./agent-version.ts";
 import { type NativeTranscript, paneProcessRoots } from "./conversation.ts";
 import { HerdrError, paneGet } from "./herdr/client.ts";
+import { resolveManagedSession } from "./managed-sessions.ts";
 
 /** What paneProcessRoots found in a pane's foreground: `omo` is set when omo itself runs there. */
 export type PaneRoots = { omo: unknown } | null | undefined;
@@ -18,11 +19,13 @@ export type PaneRoots = { omo: unknown } | null | undefined;
  * from a process, and is null for any other agent or an omo pane.
  */
 export function resolveAgent(
-  pane: Pick<HerdrPane, "agent" | "agent_session">,
+  pane: Pick<HerdrPane, "agent" | "agent_session" | "managed_session">,
   roots?: PaneRoots,
   store: VersionSource | null = null,
 ): { agent: string | null; version: string | null } {
-  const agent = roots?.omo ? "omo" : pane.agent ?? pane.agent_session?.agent ?? null;
+  const managed = pane.managed_session;
+  const agent = managed !== undefined ? managed.state === "ready" ? managed.harness : null
+    : roots?.omo ? "omo" : pane.agent ?? pane.agent_session?.agent ?? null;
   return { agent, version: storeAgentVersion(agent, store) };
 }
 
@@ -44,13 +47,25 @@ export function typingRoots(roots: { omo: { held: boolean } | null }): PaneRoots
 
 /** The agent a pane runs, a session-holding omo taking precedence over herdr's label, for shaping what is typed into it. */
 export async function paneAgentOf(paneId: string): Promise<string | null> {
-  return (await paneContext(paneId, typingRoots(await paneProcessRoots(paneId, null)))).agent;
+  const context = await paneContext(paneId);
+  if (context.pane.managed_session) return context.agent;
+  return resolveAgent(context.pane, typingRoots(await paneProcessRoots(paneId, null))).agent;
 }
 
 /** `roots`: what paneProcessRoots found for this pane; null or none keeps herdr's label. */
 export async function paneContext(paneId: string, roots?: PaneRoots): Promise<{ agent: string | null; cwd: string; pane: Awaited<ReturnType<typeof paneGet>> }> {
-  const pane = await paneGet(paneId);
-  const cwd = pane.foreground_cwd ?? pane.cwd;
+  let pane = await paneGet(paneId);
+  const managed = await resolveManagedSession(pane);
+  if (managed) {
+    if (managed.lookupError) throw managed.lookupError;
+    const identity = managed.identity;
+    pane = {
+      ...pane, agent: identity.harness, managed_session: identity,
+      agent_session: identity.state === "ready" && identity.harness && identity.session_id
+        ? { agent: identity.harness, kind: "id", source: "herdr-manager", value: identity.session_id } : null,
+    };
+  }
+  const cwd = managed ? pane.cwd : pane.foreground_cwd ?? pane.cwd;
   if (!cwd) throw new HerdrError("cwd_not_found", `pane ${paneId} has no working directory`);
   return { agent: resolveAgent(pane, roots).agent, cwd, pane };
 }

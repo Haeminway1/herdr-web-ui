@@ -5,6 +5,19 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const SETTINGS_ZH: Record<string, string> = {
+  "A dim resident row starts this agent in its folder": "点击灰色的常驻行会在其文件夹中启动此智能体",
+  "Empty for the agent's own default": "留空则使用智能体默认值",
+  "Folder": "文件夹",
+  "Group sessions by": "会话分组",
+  "Name of {folder}": "{folder} 的名称",
+  "On top": "置顶",
+  "Pin a session in the sidebar to add its folder. Rename one here; On top stays above the Resident / Work toggle.": "在侧边栏固定会话即可添加其文件夹。可在此重命名；“置顶”始终显示在常驻/工作切换上方。",
+  "Reasoning": "推理",
+  "Report": "报告",
+  "Repository": "仓库",
+  "Resident agents": "常驻智能体",
+  "Sidebar layout": "侧边栏布局",
+  "Start resident agents with": "常驻智能体启动方式",
   "Direct typing": "直接输入",
   "Terminal input mode": "终端输入模式",
   "Reset shortcuts": "重置快捷键",

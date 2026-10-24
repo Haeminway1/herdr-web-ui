@@ -6,6 +6,7 @@ import { keepEventStream } from "./eventStream.ts";
 import { receiveSeen } from "./seenFinishes.ts";
 import { takeAuthTokenFromUrl } from "./authLink.ts";
 import { applyPaneStatus } from "./snapshot.ts";
+import { applyPaneAttention } from "./attention.ts";
 import { setAgentRowTokens } from "./agentRowTokens.ts";
 import { SnapshotRequests } from "./snapshotRequests.ts";
 import { ReorderCoordinator } from "./workspaceOrder.ts";
@@ -200,6 +201,10 @@ export function useRosterEvents({ locked, receivePreferencesRef, snapshotRequest
       const machine = machinesRef.current.find((m) => m.id === payload.machine_id);
       if (!machine) return;
       const message = payload.message;
+      if (message.type === "pane-attention") {
+        setMachines((list) => list.map((entry) => entry.id === machine.id && entry.snapshot
+          ? { ...entry, snapshot: applyPaneAttention(entry.snapshot, message.pane_id, message.attention) } : entry));
+      }
       if (message.type === "pane-status") {
         onPaneStatus(machine, message, takeNotificationTargetRef);
         setMachines((list) => {

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright-core";
+import type { SessionSnapshot } from "../shared/protocol.ts";
 import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
@@ -75,17 +76,22 @@ try {
     const context = await browser.newContext({ viewport: { width, height: touch ? 844 : 800 }, hasTouch: touch, isMobile: touch, colorScheme: scheme, locale: "en-US" });
     try {
       await context.addInitScript((theme) => {
-        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme }));
+        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme, sidebarLayout: "upstream" }));
         for (const pane of ["w1H:p1", "w1D:p1", "w1K:p1"]) localStorage.setItem(`ovis:view:${pane}`, "chat");
       }, scheme);
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       page.setDefaultTimeout(SETTLE_MS);
-      await page.goto(url(panes.flaky));
+      await page.goto(url(panes.api));
       await page.locator(".conn-live").waitFor({ state: "attached" });
-      await chatStack(page, panes.flaky).waitFor();
+      await chatStack(page, panes.api).waitFor();
       await page.locator(".chat-turn-user").first().waitFor();
+      // The recorded Claude pane opens mid-turn; commands need its completed turn, not a queued send.
+      await page.waitForFunction(async (paneId) => {
+        const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: SessionSnapshot };
+        return snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status === "done";
+      }, panes.api);
       await appFaces(page);
       await run(page, errors);
       assert.deepEqual(errors, [], `page errors at ${width}px (${scheme})`);
@@ -102,7 +108,7 @@ try {
       try {
         await withPane(browser, width, scheme, async (page) => {
           // happy: a Claude /context is accepted, then done on the transcript, on the one bubble for it
-          const claude = await chatOf(page, panes.flaky);
+          const claude = await chatOf(page, panes.api);
           const turnsBefore = await claude.locator(".chat-turn-user").count();
           await send(page, "/context");
           const context = chipFor(claude, "/context");
@@ -121,11 +127,11 @@ try {
           // chat, and returning leaves one quiet command row, without an outcome chip or an
           // unconfirmed screen preview.
           await send(page, "/btw is the retry test flaky on CI too?");
-          await peekStack(page, panes.flaky).waitFor();
+          await peekStack(page, panes.api).waitFor();
           await page.locator(".terminal-banner-command").waitFor();
           await page.screenshot({ path: shot("btw-terminal"), animations: "disabled" });
           await page.getByRole("button", { name: "Back to Chat", exact: true }).click();
-          const back = await chatOf(page, panes.flaky);
+          const back = await chatOf(page, panes.api);
           const btw = back.locator(".chat-terminal-command", { hasText: "/btw" });
           await btw.waitFor();
           assert.equal(await btw.count(), 1);
@@ -134,20 +140,20 @@ try {
           await page.screenshot({ path: shot("btw-returned"), animations: "disabled" });
           // the answer is still open in the terminal, where the next message would be typed and do
           // nothing: the composer says so (src/lib/inputRow.ts), and dismissing it there clears that
-          const stillOpen = chatStack(page, panes.flaky).locator(".composer-notice", { hasText: "/btw is still open in the terminal" });
+          const stillOpen = chatStack(page, panes.api).locator(".composer-notice", { hasText: "/btw is still open in the terminal" });
           await stillOpen.waitFor();
           await stillOpen.getByRole("button", { name: "Show terminal", exact: true }).click();
-          await peekStack(page, panes.flaky).waitFor();
+          await peekStack(page, panes.api).waitFor();
           if (width <= 480) {
-            const escape = page.locator(`.terminal-stack[data-pane-owner="${panes.flaky}"] .key-bar .key[data-key="Escape"]`);
-            await page.waitForFunction((pane) => document.querySelector<HTMLButtonElement>(`.terminal-stack[data-pane-owner="${pane}"] .key-bar .key[data-key="Escape"]`)?.disabled === false, panes.flaky);
+            const escape = page.locator(`.terminal-stack[data-pane-owner="${panes.api}"] .key-bar .key[data-key="Escape"]`);
+            await page.waitForFunction((pane) => document.querySelector<HTMLButtonElement>(`.terminal-stack[data-pane-owner="${pane}"] .key-bar .key[data-key="Escape"]`)?.disabled === false, panes.api);
             await escape.click();
           } else {
             await page.waitForFunction(() => document.activeElement?.classList.contains("xterm-helper-textarea") === true);
             await page.keyboard.press("Escape");
           }
           await page.getByRole("button", { name: "Back to Chat", exact: true }).click();
-          await chatStack(page, panes.flaky).waitFor();
+          await chatStack(page, panes.api).waitFor();
           await page.locator(".composer-notice", { hasText: "is still open in the terminal" }).waitFor({ state: "detached" });
           await send(page, "and one more question for the transcript");
           await back.locator(".chat-bubble-body", { hasText: "and one more question for the transcript" }).waitFor();
@@ -158,11 +164,11 @@ try {
           if (!(width <= 480)) {
             await btw.getByRole("button", { name: "Open Terminal", exact: true }).focus();
             await page.keyboard.press("Enter");
-            await peekStack(page, panes.flaky).waitFor();
+            await peekStack(page, panes.api).waitFor();
             await page.locator(".terminal-banner-command").getByText("/btw ran", { exact: true }).waitFor();
             assert.equal(await page.locator(".terminal-banner-command").getByText("Chat may come back when you close it", { exact: true }).count(), 0, "a row's peek is ended by hand");
             await page.getByRole("button", { name: "Back to Chat", exact: true }).click();
-            const again = await chatOf(page, panes.flaky);
+            const again = await chatOf(page, panes.api);
             assert.equal(await again.locator(".chat-terminal-command").count(), 1);
             console.log(`PASS ${label}: the row's keyboard action opens a peek that Back to Chat ends`);
           }
@@ -184,7 +190,13 @@ try {
           console.log(`PASS ${label}: an inline $review to the Codex pane shows its chip`);
 
           // an unlisted /myext run to the pi pane: accepted, then unknown, since nothing can show its result
-          const pi = await chatOf(page, panes.cli);
+          // pi is backfilled by the demo transport, so its ID is not in the recorded panes.json.
+          const piPanes = await page.evaluate(async () => {
+            const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: SessionSnapshot };
+            return snapshot.panes.filter((pane) => pane.agent === "pi").map((pane) => pane.pane_id);
+          });
+          assert.equal(piPanes.length, 1, "the demo exposes exactly one pi pane");
+          const pi = await chatOf(page, piPanes[0]!);
           await send(page, "/myext run");
           const myext = chipFor(pi, "/myext run");
           await myext.and(page.locator('[data-outcome-state="unknown"]')).waitFor();
@@ -195,20 +207,27 @@ try {
 
           // Hermes' registered informational reader still renders the actual result, not a
           // terminal-only receipt. Dismiss affects this card alone and never sends input.
-          const hermes = await chatOf(page, panes.hermes);
+          // Like pi, Hermes is backfilled and has no ID in the recorded panes.json.
+          const hermesPanes = await page.evaluate(async () => {
+            const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: SessionSnapshot };
+            return snapshot.panes.filter((pane) => pane.agent === "hermes").map((pane) => pane.pane_id);
+          });
+          assert.equal(hermesPanes.length, 1, "the demo exposes exactly one Hermes pane");
+          const hermesPane = hermesPanes[0]!;
+          const hermes = await chatOf(page, hermesPane);
           await send(page, "/status");
           const result = hermes.locator(".chat-outcome-result");
           await result.waitFor();
           assert.ok((await result.locator("pre").textContent())?.includes("Session"));
           assert.equal(await hermes.locator(".chat-terminal-command").count(), 0);
-          assert.equal(await chatStack(page, panes.hermes).count(), 1);
+          assert.equal(await chatStack(page, hermesPane).count(), 1);
           await page.screenshot({ path: shot("hermes-result"), animations: "disabled" });
           await result.getByRole("button", { name: "Dismiss", exact: true }).click();
           await result.waitFor({ state: "detached" });
           console.log(`PASS ${label}: Hermes informational result cards stay in Chat and dismiss normally`);
         });
       } catch (error) {
-        failures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+        failures.push(`${label}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
       }
     }
   } finally {

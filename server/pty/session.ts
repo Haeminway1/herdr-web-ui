@@ -94,6 +94,10 @@ export class PtySession {
     this.send({ t: "r", c: cols, r: rows });
   }
 
+  /**
+   * Tells the command its window changed without changing it (SIGWINCH at the same size): a resize
+   * to the size the pty already has delivers no signal. Ignored on Windows, which has no SIGWINCH.
+   */
   winch(): void {
     this.send({ t: "w" });
   }

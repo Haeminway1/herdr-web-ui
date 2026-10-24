@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import type { ConversationMetadata, ConversationTurn } from "../shared/protocol.ts";
+import type { ConversationMetadata, ConversationTurn, ManagedSessionIdentity } from "../shared/protocol.ts";
 
 /**
  * A transcript is read a page at a time, the newest page re-read on every append
@@ -12,7 +12,7 @@ export const TRANSCRIPT_WINDOW_BYTES = 16 * 1024 * 1024;
 
 export class ConversationUnavailable extends Error {
   /** `screen`: the model and effort the agent's own live status line states (start-screen.ts), for the scrollback standing in */
-  constructor(reason: string, readonly screen?: ConversationMetadata) {
+  constructor(reason: string, readonly managedSession?: ManagedSessionIdentity, readonly screen?: ConversationMetadata) {
     super(reason);
     this.name = "ConversationUnavailable";
   }
@@ -38,6 +38,7 @@ export class HistoryChanged extends Error {
 export type RecognizedConversation = {
   activity?: "thinking" | "working" | "idle";
   source: "grok-transcript" | "agy-transcript" | "claude-transcript" | "omp-transcript" | "omo-transcript" | "gjc-transcript" | "pi-transcript" | "cmd-transcript" | "codex-transcript" | "devin-transcript" | "opencode-transcript" | "hermes-transcript";
+  managed_session?: ManagedSessionIdentity;
   turns: ConversationTurn[];
   metadata: ConversationMetadata;
   /** `metadata` was read off the agent's own screen (ConversationResponse.screen) */

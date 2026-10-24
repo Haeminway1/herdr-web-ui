@@ -26,7 +26,13 @@ it("the demo's Send now reads the pane at rest before it sends a first message: 
       timers.delete(id!);
       timer!.run();
     };
-    const workspace = (await (await demo.fetch("/api/session")).json()).snapshot.workspaces[0].workspace_id;
+    const snapshot = (await (await demo.fetch("/api/session")).json()).snapshot;
+    const workspace = snapshot.workspaces[0].workspace_id;
+    const folder = snapshot.panes.find((pane: any) => pane.workspace_id === workspace).cwd;
+    const skills = await demo.fetch(`/api/agent/commands?agent=codex&cwd=${encodeURIComponent(folder)}`);
+    assert.equal(skills.status, 200);
+    assert.deepEqual((await skills.json()).commands.map((row: any) => [row.name, row.trigger]), [["review-pr", "$"], ["release-notes", "$"], ["flaky-tests", "$"]]);
+    assert.equal((await demo.fetch("/api/agent/commands?agent=codex&cwd=/not-a-demo-folder")).status, 400);
     // no page connection named: the first message is held for Send now
     const made = await (await demo.fetch("/api/tab/create", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ workspace_id: workspace, agent: { kind: "omp" }, first_message: "Plan the config file" }) })).json();

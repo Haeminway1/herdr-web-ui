@@ -90,9 +90,9 @@ async function firstLine(stdout: ReadableStream<Uint8Array>): Promise<string> {
 
 async function heldOmo(): Promise<{ pid: number; argv: string[]; cwd: string }> {
   const agentDir = join(root, "agent");
-  // Keep the process that signals ready: another exec can make /proc/<pid>/environ
-  // briefly empty while the composer looks up the store holding this session.
-  const child = Bun.spawn(["sh", "-c", "echo ready; read -r stop"], { cwd: root, env: { OMO_CODING_AGENT_DIR: agentDir, PATH: process.env["PATH"] ?? "" }, stdin: "pipe", stdout: "pipe" });
+  // Signal from the final process: an exec after readiness can make /proc/environ
+  // temporarily unreadable while the sender verifies this holder's identity.
+  const child = Bun.spawn([process.execPath, "-e", "console.log('ready'); await Bun.stdin.text()"], { cwd: root, env: { OMO_CODING_AGENT_DIR: agentDir, PATH: process.env["PATH"] ?? "" }, stdin: "pipe", stdout: "pipe" });
   children.push(child);
   expect(await firstLine(child.stdout)).toBe("ready\n");
   const holders = join(agentDir, "sessions", omoSessionFolder(root), "session-holders", "sess-1");

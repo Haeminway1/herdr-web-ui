@@ -2,6 +2,7 @@ import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, re
 import nodePath, { join } from "node:path";
 
 import { GJC_NATIVE_DIRECTORY, GJC_NATIVE_LEASE_MS, isGjcNativeBindingShape, type GjcNativeBinding } from "../shared/gjc-native.ts";
+import { lookupExecutionError } from "./gjc-sdk-error.ts";
 
 export const GJC_NATIVE_MAX_BYTES = 16 * 1024;
 // Keep the transcript header limit independent of the smaller identity-record limit.
@@ -69,14 +70,15 @@ function readNativeFile(home: string, pid: number): unknown | null {
       || after.dev !== afterPath.dev || after.ino !== afterPath.ino
       || !samePath(realpathSync(filePath), canonicalFile, process.platform)) return null;
     return JSON.parse(bytes.toString("utf8")) as unknown;
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof SyntaxError) return null;
+    throw lookupExecutionError(error);
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
 }
 
-/** Read the process-scoped lifecycle record from the default GJC agent store. */
+/** Read an established native owner's record; failed I/O cannot prove identity absence. */
 export function readGjcNativeBinding(home: string, pid: number, now?: number): GjcNativeBinding | null {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   const value = readNativeFile(home, pid);
@@ -91,8 +93,8 @@ function canonicalDirectory(path: string): string | null {
   try {
     if (!statSync(path).isDirectory()) return null;
     return realpathSync(path);
-  } catch {
-    return null;
+  } catch (error) {
+    throw lookupExecutionError(error);
   }
 }
 
@@ -113,8 +115,9 @@ function readSessionHeader(path: string): { id: unknown; cwd: unknown; type: unk
     const value: unknown = JSON.parse(bytes.subarray(0, newline).toString("utf8"));
     if (!isRecord(value)) return null;
     return { id: value.id, cwd: value.cwd, type: value.type };
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof SyntaxError) return null;
+    throw lookupExecutionError(error);
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
@@ -140,7 +143,7 @@ export function validateGjcNativeTranscript(
 
   let path: string;
   try { path = realpathSync(session.path); }
-  catch { return null; }
+  catch (error) { throw lookupExecutionError(error); }
   const relative = nodePath.relative(root, path);
   if (relative === "" || nodePath.isAbsolute(relative)) return null;
   const parts = relative.split(nodePath.sep);

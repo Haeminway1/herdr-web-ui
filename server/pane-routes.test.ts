@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "bun:test";
+import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +9,8 @@ import { registry } from "./dialogs/registry.ts";
 import { findLastIndex } from "./dialogs/shared.ts";
 import { handlePaneRequest } from "./pane-routes.ts";
 import { paneAgentOf, resolveAgent } from "./pane-context.ts";
+import * as managed from "./managed-sessions.ts";
+import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import { openCodeServiceOptions } from "./opencode-service.ts";
 
 // The real RPC client against a unix socket this test owns; only herdr's answers are synthetic.
@@ -16,6 +18,7 @@ let root: string;
 let listener: ReturnType<typeof Bun.listen>;
 let socketBefore: string | undefined;
 let panes: Record<string, { agent?: string; session?: string; process: { pid: number; argv: string[]; cwd: string }[] }>;
+let processInfoRequests: string[];
 
 const paneInfo = (id: string) => ({
   pane_id: id, workspace_id: "w", tab_id: "w:t1", terminal_id: id, cwd: root, focused: false, revision: 0,
@@ -26,6 +29,7 @@ const paneInfo = (id: string) => ({
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ovis-pane-routes-"));
   panes = {};
+  processInfoRequests = [];
   socketBefore = process.env["HERDR_SOCKET"];
   const socket = join(root, "herdr.sock");
   process.env["HERDR_SOCKET"] = socket;
@@ -38,6 +42,7 @@ beforeEach(() => {
         if (!socket.data.buffer.includes("\n")) return;
         const request = JSON.parse(socket.data.buffer) as { id: string; method: string; params?: { pane_id?: string } };
         const id = request.params?.pane_id ?? "";
+        if (request.method === "pane.process_info") processInfoRequests.push(id);
         const result = request.method === "pane.get" ? { pane: paneInfo(id) }
           : request.method === "pane.process_info" ? { process_info: { foreground_processes: panes[id]?.process ?? [] } }
           : request.method === "session.snapshot" ? { snapshot: { panes: Object.keys(panes).map(paneInfo), agents: [] } }
@@ -57,6 +62,40 @@ afterEach(() => {
 });
 
 const OMO_PROCESS = { pid: 2147483647, argv: ["omo"], cwd: "" };
+
+it.each(["identity_pending", "blocked", "ready"] as const)("keeps a managed %s pane's child out of its command catalog", async state => {
+  panes["managed"] = { agent: "claude", process: [{ ...OMO_PROCESS, cwd: root }] };
+  const identity = { id: "a".repeat(32), generation: 1, harness: "gjc" as const, session_id: state === "ready" ? "managed-session" : null, state, reason: null };
+  const resolution = spyOn(managed, "resolveManagedSession").mockResolvedValue({ identity, sessionFile: state === "ready" ? join(root, "managed.jsonl") : null });
+  try {
+    expect(await paneAgentOf("managed")).toBe(state === "ready" ? "gjc" : null);
+    expect(resolveAgent({ agent: "claude", managed_session: identity }, { omo: {} }).agent).toBe(state === "ready" ? "gjc" : null);
+    const url = new URL("http://x/api/pane/commands?pane_id=managed");
+    const response = await handlePaneRequest(new Request(url), url, url.pathname, {});
+    const { commands } = await response!.json() as { commands: { name: string; description: string }[] };
+    if (state === "ready") {
+      expect(commands.some(command => command.name === "new")).toBe(true);
+      expect(commands.some(command => command.description === "Quit omo")).toBe(false);
+    } else expect(commands).toEqual([]);
+    expect(processInfoRequests).toEqual([]);
+  } finally { resolution.mockRestore(); }
+});
+
+it.each(["timeout", "unavailable"] as const)("propagates a managed %s catalog lookup without falling through to the child", async reason => {
+  panes["managed"] = { agent: "claude", process: [{ ...OMO_PROCESS, cwd: root }] };
+  const resolution = spyOn(managed, "resolveManagedSession").mockResolvedValue({
+    identity: { id: "a".repeat(32), generation: 1, harness: "gjc", session_id: null, state: "identity_pending", reason: "identity_pending" },
+    sessionFile: null, lookupError: new GjcSdkLookupError(reason),
+  });
+  try {
+    await expect(paneAgentOf("managed")).rejects.toEqual(new GjcSdkLookupError(reason));
+    const url = new URL("http://x/api/pane/commands?pane_id=managed");
+    const response = await handlePaneRequest(new Request(url), url, url.pathname, {});
+    expect(response!.status).toBe(reason === "timeout" ? 504 : 503);
+    expect(await response!.json()).toMatchObject({ error: { code: reason === "timeout" ? "gjc_sdk_timeout" : "gjc_sdk_unavailable" } });
+    expect(processInfoRequests).toEqual([]);
+  } finally { resolution.mockRestore(); }
+});
 
 it("names an omo pane that herdr labels pi omo in the commands route, and types into it as omo only once omo holds a session", async () => {
   panes["w:p1"] = { agent: "pi", process: [{ ...OMO_PROCESS, cwd: root }] };

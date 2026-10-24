@@ -21,12 +21,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
+import machines from "../site/demo/fixtures/machines.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 
 const repo = join(import.meta.dir, "..");
 const app = mkdtempSync(join(tmpdir(), "herdr-new-session-skills-"));
 const evidence = join(process.env["UI_EVIDENCE_DIR"] || join(repo, "evidence"), "new-session-skills");
+const apiCwd = machines.machines[0]!.snapshot.panes.find((pane) => pane.pane_id === panes.api)!.cwd;
 mkdirSync(evidence, { recursive: true });
 
 interface Recorded { url: string; body: Record<string, unknown> }
@@ -180,7 +182,11 @@ try {
         const dialog = await openDialog(page, "tab-menu");
         await pickAgent(page, dialog, "Codex");
         const chips = dialog.locator(".new-session-skill-chip");
-        await chips.first().waitFor();
+        try { await chips.first().waitFor(); }
+        catch (cause) {
+          await page.screenshot({ path: join(evidence, "phone-dark-skills-failure.png") });
+          throw new Error(`Codex skills did not appear: ${await dialog.innerText()}`, { cause });
+        }
         assert.deepEqual(await chips.allTextContents(), ["$review-pr", "$release-notes", "$flaky-tests"], "Codex's skills in the folder, typed with $");
         assert.equal(await dialog.getByLabel("Model").count(), 1);
         assert.equal(await dialog.getByLabel("Effort").count(), 1);
@@ -202,7 +208,7 @@ try {
         await page.screenshot({ path: join(evidence, "phone-dark-pending.png") });
         const held = await recorded(page);
         assert.equal(held.length, 1, `a double tap on Start sends one tab/create, not ${held.length}`);
-        assert.deepEqual(held[0]!.body, { workspace_id: "w1C", cwd: "/home/demo/checkout-api", label: null, agent: { kind: "codex", args: ["-c", "model_reasoning_effort=high", "--", "$review-pr the export branch"] } }, "the prompt is Codex's own argument behind the end-of-options separator, and no first_message rides along");
+        assert.deepEqual(held[0]!.body, { workspace_id: "w1C", cwd: apiCwd, label: null, agent: { kind: "codex", args: ["-c", "model_reasoning_effort=high", "--", "$review-pr the export branch"] } }, "the prompt is Codex's own argument behind the end-of-options separator, and no first_message rides along");
         await page.evaluate(() => (window as unknown as QaWindow).qaRelease());
         await dialog.waitFor({ state: "detached" });
         await page.locator(".pane-frame.is-current .terminal-stack.is-chat").waitFor();
@@ -246,7 +252,7 @@ try {
         await dialog.waitFor({ state: "detached" });
         const sent = await recorded(page);
         assert.match(String(sent[0]?.body["first_message_connection"]), /^demo-connection-\d+$/, "the request names this page's connection as the one that types the message");
-        assert.deepEqual(sent.map(({ body: { first_message_connection: _, ...body } }) => body), [{ workspace_id: "w1C", cwd: "/home/demo/checkout-api", label: null, agent: { kind: "claude", args: ["--model", "opus", "--effort", "high"] }, first_message: "Plan the config file" }], "the message is the request's first_message, never an argument of Claude Code's");
+        assert.deepEqual(sent.map(({ body: { first_message_connection: _, ...body } }) => body), [{ workspace_id: "w1C", cwd: apiCwd, label: null, agent: { kind: "claude", args: ["--model", "opus", "--effort", "high"] }, first_message: "Plan the config file" }], "the message is the request's first_message, never an argument of Claude Code's");
         // the new pane opens on its chat, where the bridge's pending message shows until the agent rests
         const bubble = page.locator(".pane-frame.is-current .pending-message-bubble", { hasText: "Plan the config file" });
         await bubble.waitFor();
@@ -303,7 +309,7 @@ try {
         assert.equal(await turn.count(), 1, "sent once, on Send now");
         assert.equal(await page.locator(".pane-frame.is-current .pending-message-bubble").count(), 0, "and no copy stays pending");
         assert.deepEqual(await submits(page), [], "the page sent no submit on either connection: Send now is the bridge's pending action");
-        assert.deepEqual((await recorded(page)).map(({ body: { first_message_connection: _, ...body } }) => body), [{ workspace_id: "w1C", cwd: "/home/demo/checkout-api", label: null, agent: { kind: "omp" }, first_message: "Reconnect me" }]);
+        assert.deepEqual((await recorded(page)).map(({ body: { first_message_connection: _, ...body } }) => body), [{ workspace_id: "w1C", cwd: apiCwd, label: null, agent: { kind: "omp" }, first_message: "Reconnect me" }]);
         await settled(page);
         await page.screenshot({ path: join(evidence, "desktop-dark-omp-reconnect-sent.png") });
         log.push("", "POST /api/tab/create bodies, desktop, Oh My Pi with a first message, the socket dropped right after Start (held, then Send now):");
