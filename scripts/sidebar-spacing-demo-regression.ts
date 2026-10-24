@@ -56,8 +56,8 @@ try {
         locale: "en-US",
       });
       await context.addInitScript(() => {
-        localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
-        localStorage.removeItem("herdr-web-ui:pc-collapsed:local");
+        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
+        localStorage.removeItem("ovis:pc-collapsed:local");
       });
       const page = await context.newPage();
       await page.goto(`http://127.0.0.1:${server.port}/app/`);
