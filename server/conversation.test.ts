@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, chmodSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import * as fs from "node:fs";
@@ -2332,16 +2332,27 @@ describe("managed conversation identity", () => {
     expect(nativeLookupCalls).toBe(0);
   });
 
-  it.each([
-    ["identity_pending", "starting", "identity_pending"],
-    ["blocked", "blocked", "blocked_runtime_changed"],
-  ] as const)("does not guess a transcript from a tagged %s pane", async (_name, state, reason) => {
+  it("does not guess a transcript from a tagged identity-pending pane", async () => {
     writeHarness("gjc");
-    record.state = state;
-    record.error = reason;
+    record.state = "starting";
+    record.error = "identity_pending";
     save();
     await expect(resolveTranscript(pane, root, undefined, undefined, undefined, undefined, undefined, managedDeps))
-      .rejects.toMatchObject({ name: "ConversationUnavailable", message: reason, managedSession: { state: _name } });
+      .rejects.toMatchObject({ name: "ConversationUnavailable", message: "identity_pending", managedSession: { state: "identity_pending" } });
+  });
+
+  it("serves saved GJC turns read-only across a Manager runtime-change block, keeping the reason", async () => {
+    writeHarness("gjc", [message("user", "parent prompt"), message("assistant", "parent answer")]);
+    record.state = "blocked"; record.error = "blocked_runtime_changed"; save();
+    const kept = readFileSync(recordFile, "utf8");
+    const answer = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(answer).toMatchObject({
+      source: "gjc-transcript",
+      managed_session: { state: "blocked", reason: "blocked_runtime_changed", readable: true, session_id: sessionId },
+    });
+    expect(answer.turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "parent answer" });
+    expect(nativeLookupCalls).toBe(0);
+    expect(readFileSync(recordFile, "utf8")).toBe(kept);
   });
 
   it("rejects a generation change observed during GJC identity validation", async () => {

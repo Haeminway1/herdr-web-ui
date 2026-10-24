@@ -448,6 +448,56 @@ it("reports only fixed blocked codes, never arbitrary process output from a reco
   await expect(conversationForPane(pane)).rejects.toThrow("blocked_record_state");
 });
 
+it("serves a read-only GJC conversation across a Manager runtime-change block after exact live proof", async () => {
+  record.state = "blocked"; record.error = "blocked_runtime_changed"; save();
+  const kept = readFileSync(recordFile, "utf8");
+  expect(await resolve()).toMatchObject({
+    identity: { state: "blocked", reason: "blocked_runtime_changed", readable: true, session_id: sessionId },
+    sessionFile,
+  });
+  const answer = await conversationForPane(pane);
+  expect(answer).toMatchObject({
+    source: "gjc-transcript",
+    managed_session: { state: "blocked", reason: "blocked_runtime_changed", readable: true, session_id: sessionId },
+  });
+  expect(answer.turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+  const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  expect((await labelManagedPanes(snapshot)).panes[0]).toMatchObject({
+    agent: "gjc", agent_session: null,
+    managed_session: { state: "blocked", reason: "blocked_runtime_changed", readable: true },
+  });
+  expect(readFileSync(recordFile, "utf8")).toBe(kept);
+});
+
+it("serves a read-only OMO conversation across the same lifecycle block only with a proven live process", async () => {
+  useOmo();
+  record.state = "blocked"; record.error = "blocked_runtime_changed"; save();
+  expect(await resolve()).toMatchObject({
+    identity: { state: "blocked", harness: "omo", reason: "blocked_runtime_changed", readable: true, session_id: sessionId },
+    sessionFile,
+  });
+  expect((await conversationForPane(pane)).source).toBe("omo-transcript");
+  delete record.child; save();
+  expect(await resolve()).toMatchObject({ identity: { state: "blocked", reason: "blocked_runtime_identity" }, sessionFile: null });
+  await expect(conversationForPane(pane)).rejects.toThrow("blocked_runtime_identity");
+});
+
+it.each([
+  ["a stopped intent", () => { record.desired_state = "stopped"; }, "blocked_session_stopped"],
+  ["an unrecognized blocker", () => { record.error = "private output\nnot a reason code"; }, "blocked_record_state"],
+  ["a generation mismatch", () => { record.generation = 2; }, "blocked_managed_generation"],
+  ["a changed header", () => { writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "another-session", cwd: root }) + "\n"); }, "blocked_session_header"],
+  ["PID reuse", () => { observed = { ...observed!, starttime: "other" }; }, "blocked_runtime_identity"],
+  ["a native SDK session mismatch", () => { live = { ...live!, sessionId: "another-session" }; }, "blocked_gjc_session_mismatch"],
+] as const)("never reads a runtime-change record through %s", async (_name, mutate, reason) => {
+  record.state = "blocked"; record.error = "blocked_runtime_changed"; save();
+  mutate(); save();
+  const result = await resolve();
+  expect(result).toMatchObject({ identity: { state: "blocked", reason }, sessionFile: null });
+  expect(result.identity.readable).not.toBe(true);
+  await expect(conversationForPane(pane)).rejects.toThrow(reason);
+});
+
 it("waits for a persisted GJC inode pin without upgrading recovery metadata", async () => {
   record.schema = 1; delete record.file_identity; save();
   const original = readFileSync(recordFile, "utf8");

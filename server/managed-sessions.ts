@@ -51,6 +51,8 @@ export function managedNamespace(): string {
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const REASON = /^(?:blocked_[a-z0-9_]{1,64}|identity_pending)$/;
+/** Manager lifecycle blockers that deny new execution but not read-only display of an already bound transcript. */
+const READ_ONLY_LIFECYCLE = new Set(["blocked_runtime_changed"]);
 
 function isHarness(value: unknown): value is Harness {
   return value === "gjc" || value === "omo" || value === "codex" || value === "claude";
@@ -206,11 +208,16 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     const recordCwd = record.cwd;
     identity.harness = recordHarness;
     if (record.desired_state !== "running") return blocked("blocked_session_stopped");
-    if (record.state === "blocked") return blocked(typeof record.error === "string" && REASON.test(record.error) ? record.error : "blocked_record_state");
+    let readOnlyReason: string | null = null;
+    if (record.state === "blocked") {
+      const reason = typeof record.error === "string" && REASON.test(record.error) ? record.error : "blocked_record_state";
+      if (!READ_ONLY_LIFECYCLE.has(reason)) return blocked(reason);
+      readOnlyReason = reason;
+    }
     if (["intent", "registered", "starting", "identity_pending"].includes(String(record.state))) {
       return pending(typeof record.error === "string" && REASON.test(record.error) ? record.error : "identity_pending");
     }
-    if (record.state !== "ready") return blocked("blocked_record_state");
+    if (record.state !== "ready" && readOnlyReason === null) return blocked("blocked_record_state");
     if (typeof record.session_id !== "string" || !ID.test(record.session_id) || typeof record.session_file !== "string" || !isAbsolute(record.session_file)) return blocked("blocked_session_identity");
     const sessionId = record.session_id;
     const hasFileIdentity = Object.hasOwn(record, "file_identity");
@@ -244,27 +251,32 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     if (!initialPermission) return blocked("blocked_session_replaced");
     const meta = header(sessionFile, identity.harness, info);
     if (!meta || meta.id !== sessionId || typeof meta.cwd !== "string" || !isAbsolute(meta.cwd) || realpathSync(meta.cwd) !== recordCwd) return blocked("blocked_session_header");
-    if (identity.harness === "gjc") {
+    if (identity.harness === "gjc" || readOnlyReason !== null) {
       const child = object(record.child);
       if (!child || typeof child.pid !== "number" || !Number.isSafeInteger(child.pid) || child.pid <= 0
         || typeof child.starttime !== "string" || typeof child.boot !== "string") return blocked("blocked_runtime_identity");
       const readIdentity = deps.processIdentity ?? processIdentity;
       const before = readIdentity(child.pid);
       if (!before || before.starttime !== child.starttime || before.boot !== child.boot || before.cwd !== recordCwd) return blocked("blocked_runtime_identity");
-      let live: Awaited<ReturnType<typeof gjcSdkCurrentSession>>;
-      try {
-        live = await (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
-      } catch (error) {
-        throw lookupExecutionError(error);
+      if (identity.harness === "gjc") {
+        let live: Awaited<ReturnType<typeof gjcSdkCurrentSession>>;
+        try {
+          live = await (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
+        } catch (error) {
+          throw lookupExecutionError(error);
+        }
+        const after = readIdentity(before.pid);
+        if (!after || after.pid !== before.pid || after.starttime !== before.starttime || after.boot !== before.boot || after.cwd !== before.cwd) return blocked("blocked_runtime_identity");
+        const rootAfter = lstatSync(namespace);
+        if (!rootAfter.isDirectory() || !owned(rootAfter) || rootAfter.dev !== rootInfo.dev || rootAfter.ino !== rootInfo.ino || !safeAncestors(namespace, rootAfter)) return blocked("blocked_record_root");
+        const recordAfter = recordAt(path);
+        if (recordAfter.unsafe || bindingKey(recordAfter.record) !== bindingKey(record)) return pending("identity_pending");
+        if (!live) return pending("identity_pending");
+        if (live.pid !== before.pid || live.hostIncarnation !== `linux:${before.starttime}` || live.sessionId !== sessionId) return blocked("blocked_gjc_session_mismatch");
+      } else {
+        const after = readIdentity(before.pid);
+        if (!after || after.pid !== before.pid || after.starttime !== before.starttime || after.boot !== before.boot || after.cwd !== before.cwd) return blocked("blocked_runtime_identity");
       }
-      const after = readIdentity(before.pid);
-      if (!after || after.pid !== before.pid || after.starttime !== before.starttime || after.boot !== before.boot || after.cwd !== before.cwd) return blocked("blocked_runtime_identity");
-      const rootAfter = lstatSync(namespace);
-      if (!rootAfter.isDirectory() || !owned(rootAfter) || rootAfter.dev !== rootInfo.dev || rootAfter.ino !== rootInfo.ino || !safeAncestors(namespace, rootAfter)) return blocked("blocked_record_root");
-      const recordAfter = recordAt(path);
-      if (recordAfter.unsafe || bindingKey(recordAfter.record) !== bindingKey(record)) return pending("identity_pending");
-      if (!live) return pending("identity_pending");
-      if (live.pid !== before.pid || live.hostIncarnation !== `linux:${before.starttime}` || live.sessionId !== sessionId) return blocked("blocked_gjc_session_mismatch");
     }
     const after = lstatSync(sessionFile);
     const finalTranscriptDirectoryInfo = lstatSync(transcriptDirectory);
@@ -280,8 +292,10 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       || realpathSync(sessionFile) !== sessionFile || after.dev !== info.dev || after.ino !== info.ino) return blocked("blocked_session_replaced");
     const currentMeta = header(sessionFile, identity.harness, info);
     if (!currentMeta || currentMeta.id !== sessionId || typeof currentMeta.cwd !== "string" || !isAbsolute(currentMeta.cwd) || realpathSync(currentMeta.cwd) !== recordCwd) return blocked("blocked_session_header");
-    identity.state = "ready";
+    identity.state = readOnlyReason === null ? "ready" : "blocked";
+    identity.reason = readOnlyReason;
     identity.session_id = sessionId;
+    if (readOnlyReason !== null) identity.readable = true;
     return { identity, sessionFile, fileIdentity: { dev: info.dev, ino: info.ino } };
   } catch (error) {
     if (error instanceof GjcSdkLookupError || unavailableRead(error)) {

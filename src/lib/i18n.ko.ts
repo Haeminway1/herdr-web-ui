@@ -1410,4 +1410,6 @@ export const KO: Record<string, string> = {
   "Change PC": "PC 바꾸기",
   "This is the demo. Go back to the app's list of PCs to open yours.": "데모 화면입니다. 앱의 PC 목록으로 돌아가 내 PC를 여세요.",
   "This app shows {address}. Go back to its list of PCs to open another.": "이 앱은 {address}를 보여 주고 있습니다. PC 목록으로 돌아가 다른 PC를 열 수 있습니다.",
+  "Showing saved conversation — read-only while the managed session recovers ({reason})": "관리형 세션 복구 중에는 저장된 대화를 읽기 전용으로 표시합니다 ({reason})",
+  "Read-only chat": "읽기 전용 채팅",
 };

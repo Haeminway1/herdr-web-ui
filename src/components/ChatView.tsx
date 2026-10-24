@@ -192,6 +192,18 @@ function conversationState(conversation: ConversationResponse): ChatState {
   return { source: "conversation", conversationSource: conversation.source, managedSession: conversation.managed_session, turns: conversation.turns, messages: [], truncated: false, activity: conversation.activity };
 }
 
+/** A managed identity that may be waiting or read-only, never a proven identity change. */
+function managedSessionTransient(identity: ManagedSessionIdentity | undefined): boolean {
+  return identity !== undefined && (identity.state === "identity_pending"
+    || (identity.state === "blocked" && (identity.readable === true || identity.reason === "blocked_runtime_changed")));
+}
+
+function sameManagedSession(a: ManagedSessionIdentity | undefined, b: ManagedSessionIdentity | undefined): boolean {
+  if (a === undefined || b === undefined || a.id === null || a.generation === null || b.id === null || b.generation === null) return false;
+  return a.id === b.id && a.generation === b.generation
+    && (a.session_id === null || b.session_id === null || a.session_id === b.session_id);
+}
+
 
 function plainText(markdown: string): string {
   return markdown
@@ -766,6 +778,8 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const visible = paneVisible && pageVisible;
   /** the answer last laid out: an unchanged poll (a 304) hands back this very object */
   const lastAnswer = useRef<ConversationResponse | null>(null);
+  /** the last structured answer, kept while a managed identity check is temporarily unavailable */
+  const structuredAnswer = useRef<ConversationResponse | null>(null);
   const [conversationRefresh] = useState(() => new ConversationRefresh());
   const onMetadataRef = useRef(onMetadata);
   onMetadataRef.current = onMetadata;
@@ -940,6 +954,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     // only an answer laid out in full is skipped when it comes back unchanged: a read
     // cancelled mid-way (a pane switch, the page hidden during a gap fill) is redone
     lastAnswer.current = conversation;
+    if (conversation.source !== "scrollback") structuredAnswer.current = conversation;
   };
 
   useLayoutEffect(() => {
@@ -950,6 +965,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     pagingAway.current = false; stickToBottom.current = true; signature.current = ""; setState(EMPTY_STATE); setNewMessages(false); setAway(false); setLoaded(false); setError(null); setErrorStatus(null); setFailures(0); setPrompt(null); setAbandoned(null); setRestored(null); setScreenRead(false);
     dropOlder();
     lastAnswer.current = null;
+    structuredAnswer.current = null;
     setSentOver(null);
     wasConnected.current = connected;
     // Stale while revalidating: the last answer read for this pane draws before paint, and the
@@ -1023,6 +1039,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           conversation = await fetchPaneConversation(paneId);
         }
         if (cancelled || generation !== olderGeneration.current) return;
+        const retained = conversation.source === "scrollback"
+          && managedSessionTransient(conversation.managed_session)
+          && sameManagedSession(structuredAnswer.current?.managed_session, conversation.managed_session);
         if (conversation !== previousAnswer) validatedPresentation.current = readKey;
         const proved = finish.status !== "done" || (readKey === presentationRef.current && finishRef.current.status === "done"
           && finish.epoch !== undefined && finish.id !== undefined
@@ -1032,7 +1051,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           await loadChatTimeline();
           if (cancelled || generation !== olderGeneration.current) return;
         }
-        if (history.current !== conversation.history_id) {
+        if (!retained && history.current !== conversation.history_id) {
           dropOlder(); generation = olderGeneration.current;
           history.current = conversation.history_id; setHistoryId(conversation.history_id);
           pagingAway.current = false; stickToBottom.current = true; setNewMessages(false); setAway(false);
@@ -1057,11 +1076,16 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           olderCount.current += moved.length;
           setOlder((turns) => [...turns, ...moved]);
         }
-        showAnswerDetails(conversation);
+        if (!retained) showAnswerDetails(conversation);
         let next: ChatState;
         if (conversation.source !== "scrollback") next = conversationState(conversation);
+        else if (retained && structuredAnswer.current !== null) {
+          // A temporary identity check keeps the turns already on screen; the status says why.
+          next = { ...conversationState(structuredAnswer.current), managedSession: conversation.managed_session, activity: conversation.activity };
+        }
         else if (conversation.managed_session?.state === "identity_pending" || conversation.managed_session?.state === "blocked") {
           // A managed identity refusal is not permission to read or infer terminal history.
+          structuredAnswer.current = null;
           next = { source: "scrollback", managedSession: conversation.managed_session, turns: [], messages: [], truncated: false };
         }
         else if (agent !== null) next = { source: "scrollback", managedSession: conversation.managed_session, turns: [], messages: [], truncated: false };

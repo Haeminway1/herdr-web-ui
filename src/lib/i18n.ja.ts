@@ -1412,4 +1412,6 @@ export const JA: Record<string, string> = {
   "Change PC": "PCを切り替え",
   "This is the demo. Go back to the app's list of PCs to open yours.": "これはデモです。アプリのPC一覧に戻って、ご自分のPCを開いてください。",
   "This app shows {address}. Go back to its list of PCs to open another.": "このアプリは {address} を表示しています。PC一覧に戻ると別のPCを開けます。",
+  "Showing saved conversation — read-only while the managed session recovers ({reason})": "管理セッションの復旧中は保存済みの会話を読み取り専用で表示します（{reason}）",
+  "Read-only chat": "読み取り専用チャット",
 };
