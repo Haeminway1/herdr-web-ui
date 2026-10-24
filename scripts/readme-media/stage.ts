@@ -3,7 +3,7 @@
  * session (never the one you work in), five workspaces under /tmp/herdr-demo, and curated
  * chats served in place of real transcripts. The real hostname never reaches the page.
  */
-process.env["HERDR_TEST_SESSION"] = "herdr-web-ui-demo";
+process.env["HERDR_TEST_SESSION"] = "ovis-demo";
 await import("../test-herdr.ts");
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
