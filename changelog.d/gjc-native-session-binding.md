@@ -1,6 +1,8 @@
 ### Changed
-- GJC chat and GJC done alerts read the active session reported by a native extension instead of
-  querying the SDK broker. Anyone upgrading must install it with
-  `bun scripts/install-gjc-integration.ts` and restart GJC: without it, chat uses Terminal and the
-  pane keeps herdr's own status, which may miss a done alert. Command menus use the filesystem
-  skill catalog.
+- GJC chat follows the active session reported by its native extension when present, and uses
+  verified SDK discovery otherwise. A pane with native authority never switches to a provider
+  child when its record is unavailable. Command menus retain the filesystem skill catalog.
+
+### Fixed
+- Temporary GJC identity, broker or transcript read failures keep the displayed conversation
+  while verification is pending, including a native record disappearing during its final check.

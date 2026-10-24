@@ -37,6 +37,7 @@ setInterval(() => {}, 1000);
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     try {
       await context.addInitScript((id) => {
+        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
         localStorage.setItem(`ovis:view:${id}`, "terminal");
         // a press reads the pane's scroll position, and only a release after it has arrived asks herdr for
         // the range: count the reads still open so a drag can wait for its own

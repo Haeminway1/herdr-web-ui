@@ -25,7 +25,8 @@
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc } from "./herdr/client.ts";
 import { resolveManagedSession, type ManagedSessionResolution } from "./managed-sessions.ts";
-import { gjcPidUnderShell, gjcTranscriptForPane, isGjcProcess, type GjcProcess } from "./gjc-runtime.ts";
+import { gjcPidUnderShell, isGjcProcess, type GjcProcess } from "./gjc-runtime.ts";
+import { gjcTranscriptForPane } from "./gjc-pane.ts";
 import type { OmoAsks } from "./omo-ask.ts";
 import { processStartedAt } from "./process-start.ts";
 import { OmoStatus, type OmoLine, type OmoPane, type OmoStatusDeps, type OmoTurn } from "./omo-status.ts";

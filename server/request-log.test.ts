@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clientRequestId, RequestLog, requestMethod } from "./request-log.ts";
 import { errorResponse, setRequestRoute } from "./http.ts";
+import { lookupExecutionError } from "./gjc-sdk-error.ts";
 
 const roots: string[] = [];
 const writers: RequestLog[] = [];
@@ -42,6 +43,7 @@ it.skipIf(process.platform === "win32")("neither follows nor writes a symlinked 
   roots.push(root);
   const target = join(root, "untouched.txt");
   writeFileSync(target, "unchanged", { mode: 0o640 });
+  chmodSync(target, 0o640);
   symlinkSync(target, join(root, "http-requests.jsonl"));
   // When
   const writer = new RequestLog(root);
@@ -112,6 +114,25 @@ it("normalizes secret-bearing paths", async () => {
   // Then
   expect(readFileSync(path, "utf8")).not.toContain("private-secret");
   expect(records().map((row) => row.route)).toEqual(["/api/fs/file", "unmatched", "static"]);
+});
+
+it.each(["ENOENT", "EACCES", "BROKER", "ETIMEDOUT"])("preserves typed SDK %s failures through request correlation", async code => {
+  const { writer, path, records } = fixture();
+  const response = await writer.handle(new Request("http://localhost/api/pane/conversation?pane_id=private-pane"), async () => {
+    setRequestRoute("/api/pane/conversation");
+    throw lookupExecutionError(Object.assign(new Error("private broker credentials"), { code }));
+  });
+  const reason = code === "ETIMEDOUT" ? "timeout" : "unavailable";
+  const status = code === "ETIMEDOUT" ? 504 : 503;
+  expect(response?.status).toBe(status);
+  expect(await response?.json()).toEqual({ error: { code: `gjc_sdk_${reason}`, message: "GJC SDK lookup failed" } });
+  expect(response?.headers.get("x-content-type-options")).toBe("nosniff");
+  expect(response?.headers.get("referrer-policy")).toBe("no-referrer");
+  const rows = records();
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ request_id: response?.headers.get("x-request-id"), route: "/api/pane/conversation", status });
+  expect(rows[0]?.request_id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(readFileSync(path, "utf8")).not.toContain("private");
 });
 
 it("rotates at the limit after another writer grows the file", async () => {

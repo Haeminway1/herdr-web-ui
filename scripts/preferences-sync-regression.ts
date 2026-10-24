@@ -241,7 +241,8 @@ try {
       let onWay = Promise.withResolvers<void>();
       let sending = 0;
       let mostAtOnce = 0;
-      const e = await browserAt(browser, {}, [], async (context) => {
+      // This client pins an upstream workspace row; the other clients keep the fork's classic layout.
+      const e = await browserAt(browser, { sidebarLayout: "upstream" }, [], async (context) => {
         await context.route("**/api/preferences", async (route) => {
           if (route.request().method() !== "PUT") { await route.continue(); return; }
           if (hold !== null) { onWay.resolve(); await hold.promise; }

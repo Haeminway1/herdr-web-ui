@@ -6,6 +6,7 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const COMPOSER_KO: Record<string, string> = {
+  "Resize message box": "입력창 크기 조절",
   "Password or PIN": "비밀번호 또는 PIN",
   "Enter a single-line password or PIN.": "한 줄의 비밀번호 또는 PIN을 입력하세요.",
   "Update this PC to use masked input.": "비밀번호 입력창을 사용하려면 이 PC의 앱을 업데이트하세요.",

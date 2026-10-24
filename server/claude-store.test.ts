@@ -115,6 +115,17 @@ describe("claudeProcessSession", () => {
     expect(await claudeProcessSession(home, process.pid)).toBeNull();
     expect(Date.now() - started).toBeLessThan(2000);
   });
+
+  it.skipIf(!NATIVE)("preserves strict PID-record errors with the shared bounded job reader", async () => {
+    const home = nativeRecord();
+    const failure = Object.assign(new Error("fixture read failure"), { code: "EIO" });
+    const opened = spyOn(fsPromises, "open").mockRejectedValue(failure);
+    try {
+      await expect(claudeProcessSession(home, process.pid, join(home, ".claude"), process.platform, undefined, "throw"))
+        .rejects.toMatchObject({ name: "UnreadableClaudeRecord", cause: failure });
+      expect(await claudeJobSession(join(home, ".claude"), "deadbeef")).toBeNull();
+    } finally { opened.mockRestore(); }
+  });
 });
 
 describe("a claude attach pane's job (#1645)", () => {

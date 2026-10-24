@@ -50,7 +50,7 @@ it("reads only the current process record and observes sequence/session transiti
     const resumed = f.record({ sequence: 2, session: { id: "session-b", path: f.sessionFile("session-b"), cwd: f.cwd } });
     f.write(resumed);
     expect(readGjcNativeBinding(f.home, 200, 10_000)).toEqual(resumed);
-    expect(readGjcNativeBinding(f.home, 201, 10_000)).toBeNull();
+    expect(() => readGjcNativeBinding(f.home, 201, 10_000)).toThrow("GJC SDK lookup failed");
 
     const idle = f.record({ sequence: 3, session: null });
     f.write(idle);
@@ -58,10 +58,10 @@ it("reads only the current process record and observes sequence/session transiti
   } finally { f.done(); }
 });
 
-it("rejects missing, malformed, oversized, expired and future identity records", () => {
+it("keeps missing records unavailable and rejects malformed, oversized, expired and future records", () => {
   const f = fixture();
   try {
-    expect(readGjcNativeBinding(f.home, 200, 10_000)).toBeNull();
+    expect(() => readGjcNativeBinding(f.home, 200, 10_000)).toThrow("GJC SDK lookup failed");
     const valid = f.record();
     const path = f.write({ ...valid, version: 2 });
     expect(readGjcNativeBinding(f.home, 200, 10_000)).toBeNull();

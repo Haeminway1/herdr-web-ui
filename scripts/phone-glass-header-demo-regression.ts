@@ -56,7 +56,7 @@ try {
       const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
       try {
         await context.addInitScript(() => {
-          localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+          localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", sidebarLayout: "upstream" }));
           const viewport = window.visualViewport!;
           let height = 795;
           Object.defineProperty(viewport, "height", { get: () => height });
@@ -74,7 +74,11 @@ try {
         const closed = await page.evaluate(async (id) => {
           const { snapshot } = await (await fetch("/api/session")).json() as { snapshot: { panes: { pane_id: string; tab_id: string; workspace_id: string }[]; tabs: { tab_id: string; workspace_id: string }[] } };
           const own = snapshot.panes.find((pane) => pane.pane_id === id)!;
-          const others = snapshot.tabs.filter((tab) => tab.workspace_id === own.workspace_id && tab.tab_id !== own.tab_id);
+          // Own the sibling fixture rather than depending on the demo's current tab grouping.
+          const created = await fetch("/api/tab/create", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspace_id: own.workspace_id }) });
+          if (!created.ok) throw new Error(`tab create ${created.status}`);
+          const { snapshot: current } = await (await fetch("/api/session")).json() as { snapshot: typeof snapshot };
+          const others = current.tabs.filter((tab) => tab.workspace_id === own.workspace_id && tab.tab_id !== own.tab_id);
           for (const tab of others) {
             const response = await fetch("/api/tab/close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tab_id: tab.tab_id }) });
             if (!response.ok) throw new Error(`tab close ${response.status}`);
