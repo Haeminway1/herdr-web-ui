@@ -20,6 +20,8 @@
  *   token and any overrides are read from `env` and `.env` in HERDR_PLUGIN_CONFIG_DIR.
  */
 
+import { mergeEnvLayers } from "../server/legacy-env.ts";
+import { defaultStateDir } from "../server/update-state.ts";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -31,7 +33,8 @@ import { DEFAULT_PORT } from "../shared/protocol.ts";
 import type { RemoteAccess } from "../shared/protocol.ts";
 import { canBind, FALLBACK_PORTS, freePort, savedPort } from "./plugin-port.ts";
 import { activePluginScript } from "./plugin-runtime.ts";
-import { parseTailscale, parseTailscaleIp, parseTailscaleOwner, readTailscale, tailscaleBinary } from "../server/tailscale.ts";
+import { herdrStateDir } from "./plugin-state.ts";
+import { HTTPS_PORT_VARIABLE, HTTPS_PORTS, httpsPorts, parseTailscale, parseTailscaleIp, parseTailscaleOwner, readTailscale, tailscaleBinary } from "../server/tailscale.ts";
 import { descendantProcesses, windowsArgv, windowsProcessTable } from "../server/windows-processes.ts";
 
 /**
@@ -41,8 +44,19 @@ import { descendantProcesses, windowsArgv, windowsProcessTable } from "../server
  */
 const ENV_FILES = ["env", ".env"];
 const ROOT = resolve(process.env["HERDR_PLUGIN_ROOT"] ?? join(import.meta.dir, ".."));
-const STATE_DIR = process.env["HERDR_PLUGIN_STATE_DIR"] ?? join(homedir(), ".local", "state", "herdr-web-ui");
-const CONFIG_DIR = process.env["HERDR_PLUGIN_CONFIG_DIR"] ?? herdrConfigDir() ?? join(homedir(), ".config", "herdr-web-ui");
+/** the dir under its Ovis name, or under the name before the rename while only that one exists */
+function ownDir(parent: string): string {
+  const legacy = join(parent, "herdr-web-ui");
+  const next = join(parent, "ovis");
+  return existsSync(next) || !existsSync(legacy) ? next : legacy;
+}
+const DEFAULT_STATE_DIR = ownDir(join(homedir(), ".local", "state"));
+const MANAGED_STATE_DIR = join(herdrStateDir(process.env, platform(), homedir()), "plugins", "haeminway1.herdr-web-ui");
+// run by hand, without herdr's HERDR_PLUGIN_STATE_DIR: a server started from a checkout keeps its
+// own dir while it runs; otherwise the dir herdr gives the plugin, where its startup hook wrote
+const STATE_DIR = process.env["HERDR_PLUGIN_STATE_DIR"]
+  ?? (pidIn(join(DEFAULT_STATE_DIR, "server.pid")) !== null || !existsSync(MANAGED_STATE_DIR) ? DEFAULT_STATE_DIR : MANAGED_STATE_DIR);
+const CONFIG_DIR = process.env["HERDR_PLUGIN_CONFIG_DIR"] ?? herdrConfigDir() ?? ownDir(join(homedir(), ".config"));
 const PID_FILE = join(STATE_DIR, "server.pid");
 const LOG_FILE = join(STATE_DIR, "server.log");
 /** the server needs a moment to bind and open its first herdr connection */
@@ -55,8 +69,8 @@ const KILL_WAIT_MS = 3_000;
 const SERVE_TIMEOUT_MS = 180_000;
 /** how to come back to `phone` once Tailscale is set up: an action's output goes to herdr's log, not a terminal */
 const PHONE_AGAIN = platform() === "win32"
-  ? "irm https://herdrweb.dev/install.ps1 | iex"
-  : "curl -fsSL https://herdrweb.dev/install.sh | sh";
+  ? "irm https://ovis.sh/install.ps1 | iex"
+  : "curl -fsSL https://ovis.sh/install.sh | sh";
 
 /**
  * Run by hand (`pair` on a headless PC), herdr's env is not there to name the config dir:
@@ -92,12 +106,12 @@ const CONFIG_FILES = ENV_FILES.map((name) => join(CONFIG_DIR, name)).filter((fil
 const fileVars = CONFIG_FILES.map(readEnvFile);
 /** keys both files set to different values: `.env` wins, which someone editing `env` would not expect */
 const shadowed = fileVars.length === 2 ? Object.keys(fileVars[0]!).filter((key) => key in fileVars[1]! && fileVars[0]![key] !== fileVars[1]![key]) : [];
-const env = { ...process.env, ...Object.assign({}, ...fileVars) as Record<string, string> };
+const env = mergeEnvLayers([process.env, ...fileVars]);
 /** HERDR_SOCKET the user put in the config files: it names the session to show, so herdr's own socket does not replace it */
 const configuredSocket = fileVars.some((vars) => (vars["HERDR_SOCKET"] ?? "") !== "");
 const PATH_KEY = platform() === "win32" ? Object.keys(env).sort().find(key => key.toLowerCase() === "path") ?? "PATH" : "PATH";
 /** the app's own state, as the server finds it (server/update-state.ts): the same path with or without herdr's env */
-const APP_STATE_DIR = env["HERDR_WEB_STATE_DIR"] || join(env["XDG_CONFIG_HOME"] || join(homedir(), ".config"), "herdr-web-ui");
+const APP_STATE_DIR = defaultStateDir(env);
 /** the port a start took because the default could not be opened; absent while the default serves */
 const PORT_FILE = join(APP_STATE_DIR, "plugin-port");
 /** a PORT the user set is theirs: it is never swapped for another */
@@ -115,7 +129,7 @@ let origin = originOf(port);
 function toolPath(): string {
   const current = (env[PATH_KEY] ?? "").split(delimiter).filter(Boolean);
   const home = homedir();
-  const extra = [join(home, ".bun", "bin"), join(home, ".local", "bin"), join(home, ".local", "share", "herdr-web-ui", "node", "bin")];
+  const extra = [join(home, ".bun", "bin"), join(home, ".local", "bin"), join(home, ".local", "share", "ovis", "node", "bin"), join(home, ".local", "share", "herdr-web-ui", "node", "bin")];
   return [...current, ...extra.filter((dir) => existsSync(dir) && !current.includes(dir))].join(delimiter);
 }
 
@@ -177,8 +191,13 @@ async function healthError(): Promise<string | null> {
 }
 
 function recordedPid(): number | null {
-  if (!existsSync(PID_FILE)) return null;
-  const pid = Number(readFileSync(PID_FILE, "utf8").trim());
+  return pidIn(PID_FILE);
+}
+
+/** the live process a pid file names, or null */
+function pidIn(file: string): number | null {
+  if (!existsSync(file)) return null;
+  const pid = Number(readFileSync(file, "utf8").trim());
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
     process.kill(pid, 0);
@@ -234,7 +253,7 @@ async function settlePort(): Promise<"ready" | "running" | "failed"> {
     const why = await healthError();
     if (why === null) return "running";
     const pid = recordedPid();
-    failStart(`herdr web ui is running at ${origin}${pid === null ? "" : ` (pid ${pid})`} but cannot reach herdr: ${why}. It keeps this port and answers again once herdr is back.`);
+    failStart(`Ovis is running at ${origin}${pid === null ? "" : ` (pid ${pid})`} but cannot reach herdr: ${why}. It keeps this port and answers again once herdr is back.`);
     return "failed";
   }
   const settings = CONFIG_FILES.at(-1) ?? join(CONFIG_DIR, "env");
@@ -259,14 +278,14 @@ async function settlePort(): Promise<"ready" | "running" | "failed"> {
 async function start(): Promise<number> {
   warnShadowed();
   if (await health()) {
-    process.stdout.write(`herdr web ui already running at ${origin}\n`);
+    process.stdout.write(`Ovis already running at ${origin}\n`);
     return 0;
   }
   mkdirSync(STATE_DIR, { recursive: true });
   const settled = await settlePort();
   if (settled === "failed") return 1;
   if (settled === "running") {
-    process.stdout.write(`herdr web ui already running at ${origin}\n`);
+    process.stdout.write(`Ovis already running at ${origin}\n`);
     return 0;
   }
   if (!portSet) {
@@ -306,9 +325,9 @@ async function start(): Promise<number> {
   // a server that has exited will not answer: its last words are in the log now
   while (Date.now() < deadline && child.exitCode === null) {
     if (await health()) {
-      process.stdout.write(`herdr web ui listening at ${origin}\n`);
-      if ((env["HERDR_WEB_TOKEN"] ?? "") === "") {
-        process.stdout.write(`no token set: your own Tailscale devices get in as you; pair any other device in Settings → Devices, or put HERDR_WEB_TOKEN=<token> in ${join(CONFIG_DIR, "env")}\n`);
+      process.stdout.write(`Ovis listening at ${origin}\n`);
+      if ((env["OVIS_TOKEN"] ?? "") === "") {
+        process.stdout.write(`no token set: your own Tailscale devices get in as you; pair any other device in Settings → Devices, or put OVIS_TOKEN=<token> in ${join(CONFIG_DIR, "env")}\n`);
       }
       return 0;
     }
@@ -381,7 +400,7 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
   const pid = recordedPid();
   if (pid === null) {
     rmSync(PID_FILE, { force: true });
-    process.stdout.write("herdr web ui is not running\n");
+    process.stdout.write("Ovis is not running\n");
     return 0;
   }
   // the whole process group when the server leads one, as `start` spawns it
@@ -397,7 +416,7 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
       || owner.started === undefined || owner.started > recordedAt
       || !existsSync(PID_FILE) || statSync(PID_FILE).mtimeMs !== recordedAt
       || Number(readFileSync(PID_FILE, "utf8").trim()) !== pid) {
-      process.stderr.write("could not verify the recorded herdr web ui process; it was left running and its pid file was kept\n");
+      process.stderr.write("could not verify the recorded Ovis process; it was left running and its pid file was kept\n");
       return 1;
     }
     const tree = [owner, ...descendantProcesses(processes, pid).flatMap(({ pid: memberPid }) => {
@@ -407,14 +426,18 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
     // Windows has no Unix process groups or graceful SIGTERM: include the supervisor and bridge.
     const killed = dependencies.terminateTree(pid);
     if (killed.status !== 0 && recordedPid() !== null) {
-      process.stderr.write(`could not stop herdr web ui: ${killed.error?.message ?? killed.stderr.trim()}\n`);
+      process.stderr.write(`could not stop Ovis: ${killed.error?.message ?? killed.stderr.trim()}\n`);
       return 1;
     }
     const deadline = Date.now() + 10_000;
     let exited = false;
     while (Date.now() < deadline) {
+      // the process table (a PowerShell query, seconds on a busy PC) only tells a reused number from
+      // a member still running: once every number is free, the tree is gone without asking it
+      const alive = tree.filter(member => dependencies.isAlive(member.pid));
+      if (alive.length === 0) { exited = true; break; }
       const currentProcesses = await dependencies.processTable(Math.max(1, deadline - Date.now()));
-      const running = tree.some(member => {
+      const running = alive.some(member => {
         if (!dependencies.isAlive(member.pid)) return false;
         const current = currentProcesses.find(row => row.pid === member.pid);
         return !(member.started !== undefined && current?.started !== undefined && current.started !== member.started);
@@ -423,13 +446,13 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
       await Bun.sleep(50);
     }
     if (!exited) {
-      process.stderr.write("could not confirm herdr web ui stopped; its pid file was kept\n");
+      process.stderr.write("could not confirm Ovis stopped; its pid file was kept\n");
       return 1;
     }
     // Never send another kill to a number Windows may have reassigned after taskkill.
     if (existsSync(PID_FILE) && statSync(PID_FILE).mtimeMs === recordedAt
       && Number(readFileSync(PID_FILE, "utf8").trim()) === pid) rmSync(PID_FILE);
-    process.stdout.write(`stopped herdr web ui (pid ${pid})\n`);
+    process.stdout.write(`stopped Ovis (pid ${pid})\n`);
     return 0;
   } else {
     try {
@@ -457,13 +480,13 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
     const killDeadline = Date.now() + KILL_WAIT_MS;
     while (running() && Date.now() < killDeadline) await Bun.sleep(100);
     if (running()) {
-      process.stderr.write(`herdr web ui (pid ${pid}) is still running after SIGKILL; its pid file is kept\n`);
+      process.stderr.write(`Ovis (pid ${pid}) is still running after SIGKILL; its pid file is kept\n`);
       return 1;
     }
   }
   // a start that ran meanwhile may have recorded its own server: leave that one's pid file alone
   if (existsSync(PID_FILE) && Number(readFileSync(PID_FILE, "utf8").trim()) === pid) rmSync(PID_FILE, { force: true });
-  process.stdout.write(`stopped herdr web ui (pid ${pid})${killed ? `; it was still running after ${STOP_TIMEOUT_MS / 1000}s, so it was killed` : ""}\n`);
+  process.stdout.write(`stopped Ovis (pid ${pid})${killed ? `; it was still running after ${STOP_TIMEOUT_MS / 1000}s, so it was killed` : ""}\n`);
   return 0;
 }
 
@@ -474,11 +497,11 @@ export async function stop(dependencies: StopDependencies = stopDependencies): P
  */
 async function pair(): Promise<number> {
   if (!(await health())) {
-    process.stderr.write(`herdr web ui is not running at ${origin}; start it first\n`);
+    process.stderr.write(`Ovis is not running at ${origin}; start it first\n`);
     return 1;
   }
   const headers: Record<string, string> = { "content-type": "application/json", "x-herdr-machine": "1" };
-  if ((env["HERDR_WEB_TOKEN"] ?? "") !== "") headers["authorization"] = `Bearer ${env["HERDR_WEB_TOKEN"]}`;
+  if ((env["OVIS_TOKEN"] ?? "") !== "") headers["authorization"] = `Bearer ${env["OVIS_TOKEN"]}`;
   const started = await fetch(`${origin}/api/devices/pair/start`, { method: "POST", headers, body: "{}" });
   if (!started.ok) {
     process.stderr.write(`could not start a pairing (${started.status}): ${await started.text()}\n`);
@@ -504,20 +527,23 @@ async function pair(): Promise<number> {
 /**
  * The address a phone opens, as a QR code. When Tailscale runs on this PC but does not yet serve
  * the app, this is the one place that changes it: `tailscale serve` of the app's port on the first
- * free HTTPS port, said out loud with the command that undoes it. Everything else only reads.
- * Run by install.sh (and by hand); neither the server nor startup ever calls it.
+ * free HTTPS port, or only on the one OVIS_TAILSCALE_HTTPS_PORT names, said out loud with the
+ * command that undoes it. Everything else only reads. Run by install.sh (and by hand); neither the
+ * server nor startup ever calls it.
  */
 async function phone(): Promise<number> {
   const say = (line = "") => process.stdout.write(line + "\n");
   const running = await health();
-  say(`herdr web ui on this PC: ${link(origin)}${running ? "" : " (not running yet: it starts with herdr)"}`);
+  say(`Ovis on this PC: ${link(origin)}${running ? "" : " (not running yet: it starts with herdr)"}`);
   if (!["127.0.0.1", "0.0.0.0", "localhost"].includes(host)) {
     say(`HOST is ${host}, so Tailscale, which serves 127.0.0.1, is left alone. On the phone, open ${link(`http://${host}:${port}`)}.`);
     return 0;
   }
+  const chosen = env[HTTPS_PORT_VARIABLE]?.trim() ?? "";
+  const candidates = httpsPorts(chosen);
   const binary = tailscaleBinary();
   let output = await readTailscale(binary);
-  let access = parseTailscale(output, port);
+  let access = parseTailscale(output, port, candidates);
   if (binary === null || access.state === "missing") {
     say("For your phone: install Tailscale on this PC and on the phone (https://tailscale.com/download),");
     say(`sign in to the same account on both, then run: ${PHONE_AGAIN}`);
@@ -530,8 +556,10 @@ async function phone(): Promise<number> {
   let published = false;
   if (access.serving_url === null) {
     if (access.serve_command === null) {
-      say("Tailscale on this PC already uses every HTTPS port this would take (443, 8443, 7317, 17317). Settings → Phone shows what to do.");
-      return 0;
+      if (chosen === "") say(`Tailscale on this PC already uses every HTTPS port this would take (${HTTPS_PORTS.join(", ")}). Settings → Phone shows what to do.`);
+      else if (candidates.length === 0) say(`${HTTPS_PORT_VARIABLE} is "${chosen}", which is not a port (1-65535). Fix it where you set it (the plugin's env file, or the installer's command), then run: ${PHONE_AGAIN}`);
+      else say(`Tailscale on this PC already uses HTTPS port ${candidates[0]}, which ${HTTPS_PORT_VARIABLE} names, so the app is not published on another one. Free that port or name another, then run: ${PHONE_AGAIN}`);
+      return chosen !== "" && candidates.length === 0 ? 1 : 0;
     }
     say(`Publishing the app to your tailnet: ${access.serve_command}`);
     const [, ...args] = access.serve_command.split(" ");
@@ -545,7 +573,7 @@ async function phone(): Promise<number> {
       return 1;
     }
     output = await readTailscale(binary);
-    access = parseTailscale(output, port);
+    access = parseTailscale(output, port, candidates);
     published = true;
   }
   const url = access.serving_url;
@@ -561,7 +589,7 @@ async function phone(): Promise<number> {
   say(`On your phone: ${link(url)}`);
   // the name, not the IP, is what the HTTPS certificate is for: https://100.x.y.z would warn
   if (ip !== null) say(`Tailscale IP of this PC: ${ip}. Open the name above, not the IP: the HTTPS certificate is for the name.`);
-  say(`Scan this with a phone signed in to Tailscale${owner === null ? "" : ` as ${owner}`}; that login gets in without a code (with HERDR_WEB_TOKEN set, after entering the token once).`);
+  say(`Scan this with a phone signed in to Tailscale${owner === null ? "" : ` as ${owner}`}; that login gets in without a code (with OVIS_TOKEN set, after entering the token once).`);
   say("Anyone else on your tailnet needs a pairing code: Settings → Devices, or the pair command.");
   say(qr(url));
   return 0;
@@ -577,11 +605,11 @@ async function phoneSetup(): Promise<number> {
   process.stdout.write(`Phone setup\n\nApp on this PC: ${link(origin)}\n`);
   let code = 0;
   if (!(await health())) {
-    process.stdout.write("The app is not running. Run the Start herdr web ui action, then reopen Phone setup.\n");
+    process.stdout.write("The app is not running. Run the Start Ovis action, then reopen Phone setup.\n");
     code = 1;
   } else {
     const headers: Record<string, string> = {};
-    if (env["HERDR_WEB_TOKEN"]) headers["authorization"] = `Bearer ${env["HERDR_WEB_TOKEN"]}`;
+    if (env["OVIS_TOKEN"]) headers["authorization"] = `Bearer ${env["OVIS_TOKEN"]}`;
     try {
       const response = await fetch(`${origin}/api/access`, { headers, signal: AbortSignal.timeout(5000) });
       if (!response.ok) throw new Error(`access request failed (${response.status})`);
