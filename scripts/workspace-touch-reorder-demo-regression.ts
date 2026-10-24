@@ -29,7 +29,8 @@ const touch = (cdp: CDPSession, type: "touchStart" | "touchMove" | "touchEnd", p
   cdp.send("Input.dispatchTouchEvent", { type, touchPoints: point ? [{ x: point.x, y: point.y }] : [] });
 
 /** A finger moves after the row lifts, or immediately for a quick scroll stroke. */
-async function stroke(page: Page, cdp: CDPSession, from: { x: number; y: number }, to: { x: number; y: number }, holdMs: number, during?: () => Promise<void>): Promise<void> {
+async function stroke(page: Page, cdp: CDPSession, from: { x: number; y: number }, destination: { x: number; y: number } | (() => Promise<{ x: number; y: number }>), holdMs: number, during?: () => Promise<void>): Promise<void> {
+  const to = typeof destination === "function" ? await destination() : destination;
   await touch(cdp, "touchStart", from);
   if (holdMs > 0) await page.locator(".workspace.is-lifted").waitFor({ timeout: 5_000 });
   const steps = 12;
@@ -37,6 +38,9 @@ async function stroke(page: Page, cdp: CDPSession, from: { x: number; y: number 
     await touch(cdp, "touchMove", { x: Math.round(from.x + (to.x - from.x) * step / steps), y: Math.round(from.y + (to.y - from.y) * step / steps) });
     await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   }
+  // Layout above the rows can shift while the finger holds. Finish this same stroke
+  // over the live target, not a stale viewport coordinate that now belongs to another row.
+  if (typeof destination === "function") await touch(cdp, "touchMove", await destination());
   await during?.();
   await touch(cdp, "touchEnd");
 }
@@ -79,8 +83,10 @@ async function checkPinned(page: Page, cdp?: CDPSession): Promise<void> {
   const restRows = () => page.locator(".machine-workspaces .sidebar-list > .workspace-list:not(.workspace-list-pinned) > .workspace-group").evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.workspace));
   const restBefore = await restRows();
   const drag = async (source: string, target: string, expectPinnedDrop = false) => {
-    if (cdp) await stroke(page, cdp, await centerOf(page, source), await centerOf(page, target), 1, async () => {
+    if (cdp) await stroke(page, cdp, await centerOf(page, source), () => centerOf(page, target), 1, async () => {
       if (!expectPinnedDrop) return;
+      await page.locator(`.workspace-list-pinned > .workspace-group[data-workspace="${source}"].is-lifted`).waitFor({ timeout: 5_000 });
+      await page.locator(`.workspace-list-pinned > .workspace-group[data-workspace="${target}"][data-drop="after"]`).waitFor({ timeout: 5_000 });
       const hover = await page.locator(".workspace-list-pinned .workspace-group").evaluateAll((rows) => rows.map((row) => {
         const rect = row.getBoundingClientRect();
         return { id: (row as HTMLElement).dataset.workspace, drop: (row as HTMLElement).dataset.drop,
