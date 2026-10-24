@@ -2,7 +2,7 @@ id = "haeminway1.herdr-web-ui"
 name = "herdr web ui (fork)"
 version = "0.4.1113"
 min_herdr_version = "0.9.0"
-description = "Browser and phone client for herdr: chat and live terminal for every agent pane, remote PCs over SSH, web push alerts"
+description = "Ovis, the browser and phone client for herdr: chat and live terminal for every agent pane, remote PCs over SSH, web push alerts"
 platforms = ["linux", "macos", "windows"]
 
 # what is missing, in one line, before `bun install` would fail some steps later
@@ -30,6 +30,11 @@ platforms = ["linux", "macos"]
 command = ["bun", "run", "build"]
 platforms = ["windows"]
 
+# the release's Rust PTY host, checked against its SHA-256; without one, terminals use the Node sidecar
+[[build]]
+command = ["sh", "scripts/with-bun.sh", "scripts/pty-sidecar.ts", "install"]
+platforms = ["linux", "macos"]
+
 # One-shot per herdr start: brings the bridge up if it is not already answering.
 [[startup]]
 command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "start"]
@@ -41,42 +46,42 @@ platforms = ["windows"]
 
 [[actions]]
 id = "start"
-title = "Start herdr web ui"
+title = "Start Ovis"
 contexts = ["workspace"]
 command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "start"]
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "start-windows"
-title = "Start herdr web ui"
+title = "Start Ovis"
 contexts = ["workspace"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "start"]
 platforms = ["windows"]
 
 [[actions]]
 id = "stop"
-title = "Stop herdr web ui"
+title = "Stop Ovis"
 contexts = ["workspace"]
 command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "stop"]
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "stop-windows"
-title = "Stop herdr web ui"
+title = "Stop Ovis"
 contexts = ["workspace"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "stop"]
 platforms = ["windows"]
 
 [[actions]]
 id = "status"
-title = "herdr web ui status"
+title = "Ovis status"
 contexts = ["workspace"]
 command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "status"]
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "status-windows"
-title = "herdr web ui status"
+title = "Ovis status"
 contexts = ["workspace"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "status"]
 platforms = ["windows"]
