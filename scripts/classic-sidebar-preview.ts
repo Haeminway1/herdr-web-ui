@@ -5,8 +5,8 @@ import { buildDemoApp } from "./demo-build.ts";
 
 const PREVIEW_PATH = "/";
 const FIXTURE_TRANSPORT = `<script src="./demo-transport.js"></script><script>(() => {
-  if (localStorage.getItem("herdr-web-ui:resident-tab") === null) {
-    localStorage.setItem("herdr-web-ui:resident-tab", "work");
+  if (localStorage.getItem("ovis:resident-tab") === null) {
+    localStorage.setItem("ovis:resident-tab", "work");
   }
   const managerFolder = "/tmp/herdr-classic-sidebar-preview/manager";
   const residentFolder = "/tmp/herdr-classic-sidebar-preview/resident";
@@ -66,6 +66,10 @@ const FIXTURE_TRANSPORT = `<script src="./demo-transport.js"></script><script>((
     if (body.type === "machines") body.machines = body.machines.map(machine => ({ ...machine, snapshot: expandSnapshot(machine.snapshot) }));
     const message = body.type === "machine-message" ? body.message : body;
     if (message.type === "snapshot") message.snapshot = expandSnapshot(message.snapshot);
+    if (body.type === "machines" || message.type === "snapshot") {
+      const root = document.documentElement;
+      root.dataset.classicPreviewStreamSnapshots = String(Number(root.dataset.classicPreviewStreamSnapshots || 0) + 1);
+    }
     return new MessageEvent("message", { data: JSON.stringify(body) });
   };
   const wrapStream = stream => {
