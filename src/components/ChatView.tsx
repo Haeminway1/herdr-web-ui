@@ -25,6 +25,7 @@ import { appendChatRowSlots, createChatRowSlots, prependChatRowSlots } from "../
 import { ChatDetails, ChatRowMemoryContext, useChatRowToggle, type ChatRowMemory } from "../lib/chatRowState.tsx";
 import { turnRevision } from "../lib/turnRevision.ts";
 import { conversationFinishEvidence, conversationFinishPresented } from "../lib/panePresentation.ts";
+import { managedSessionTransient, sameManagedSession } from "../lib/managedSession.ts";
 import { seenKey } from "../lib/seenFinishes.ts";
 import { useWholeOutput as useScopedOutput } from "../lib/useWholeOutput.ts";
 import { turnSkills } from "../lib/skillActivity.ts";
@@ -191,19 +192,6 @@ const EMPTY_STATE: ChatState = { source: "conversation", turns: [], messages: []
 function conversationState(conversation: ConversationResponse): ChatState {
   return { source: "conversation", conversationSource: conversation.source, managedSession: conversation.managed_session, turns: conversation.turns, messages: [], truncated: false, activity: conversation.activity };
 }
-
-/** A managed identity that may be waiting or read-only, never a proven identity change. */
-function managedSessionTransient(identity: ManagedSessionIdentity | undefined): boolean {
-  return identity !== undefined && (identity.state === "identity_pending"
-    || (identity.state === "blocked" && (identity.readable === true || identity.reason === "blocked_runtime_changed")));
-}
-
-function sameManagedSession(a: ManagedSessionIdentity | undefined, b: ManagedSessionIdentity | undefined): boolean {
-  if (a === undefined || b === undefined || a.id === null || a.generation === null || b.id === null || b.generation === null) return false;
-  return a.id === b.id && a.generation === b.generation
-    && (a.session_id === null || b.session_id === null || a.session_id === b.session_id);
-}
-
 
 function plainText(markdown: string): string {
   return markdown

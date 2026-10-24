@@ -44,11 +44,13 @@ describe("managed session status in chat", () => {
     expect(html).not.toContain("Waiting for");
   });
 
-  it("explains a readable lifecycle block instead of claiming the session is blocked", () => {
+  it("explains an available conversation with only the restart restricted", () => {
     const html = render("blocked", "blocked_runtime_changed", true);
     expect(html).toContain('data-managed-state="blocked"');
     expect(html).toContain('data-managed-readable="true"');
-    expect(html).toContain("Showing saved conversation — read-only while the managed session recovers (blocked_runtime_changed)");
+    expect(html).toContain("Conversation available; restarting the managed session is restricted (blocked_runtime_changed)");
     expect(html).not.toContain("Managed session blocked:");
+    expect(html).not.toContain("read-only");
+    expect(html).not.toContain("recovering");
   });
 });

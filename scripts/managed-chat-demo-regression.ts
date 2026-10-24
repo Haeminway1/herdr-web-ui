@@ -93,7 +93,8 @@ try {
           await page.goto(`${base}&managed=read-only`);
           const readOnly = page.locator('.pane-frame.is-current .chat-frame [data-managed-readable="true"]');
           await readOnly.waitFor();
-          assert.match(await readOnly.innerText(), /read-only/);
+          assert.match(await readOnly.innerText(), /Conversation available/);
+          assert.match(await readOnly.innerText(), /restarting the managed session is restricted/);
           assert.ok(await page.locator(".pane-frame.is-current .chat-turn").count() > 0);
           assert.equal(await page.locator(".pane-frame.is-current .chat-terminal-fallback").count(), 0);
           await page.screenshot({ path: join(shots, `${name}-read-only.png`) });
