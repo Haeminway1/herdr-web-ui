@@ -3,15 +3,15 @@ import type { Browser } from "playwright-core";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
+import { paneRead, paneSendKeys } from "../server/herdr/client.ts";
 
 /** Mac keyboard events in an isolated context, against a pane owned by the UI suite. */
 export async function checkCommandBackspace(browser: Browser, origin: string, paneId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
   await context.addInitScript((id) => {
     Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
-    localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
+    localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+    localStorage.setItem(`ovis:view:${id}`, "terminal");
   }, paneId);
   try {
     const page = await context.newPage();
@@ -63,7 +63,7 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
       await input.dispatchEvent("keydown", {
         key: "Backspace", code: "Backspace", metaKey: true, ...composition, bubbles: true, cancelable: true,
       });
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(300); // fixed wait: a composing Backspace may send no line-delete byte
       assert.equal(inputs.slice(before).some(({ text }) => text === "\x15"), false,
         "an active composition must not receive a line-deletion sequence");
     }
@@ -81,9 +81,10 @@ process.stdin.on("data", (data) => {
 });
 `);
     try {
-      await paneSendKeys(paneId, ["ctrl+c"]);
-      await paneSendText(paneId, `node ${script}`);
-      await paneSendKeys(paneId, ["Enter"]);
+      // Keep cleanup and launch behind the earlier browser keystrokes on the same input stream.
+      await input.press("Control+c");
+      await input.pressSequentially(`node '${script.replaceAll("'", "'\\''")}'`);
+      await input.press("Enter");
       const deadline = Date.now() + 10_000;
       while (!(await paneRead({ paneId, source: "visible" })).text.includes("Owned Cmd+Backspace readline test")) {
         if (Date.now() > deadline) throw new Error("readline fixture did not start");
@@ -114,7 +115,7 @@ process.stdin.on("data", (data) => {
   const nonMac = await browser.newContext();
   await nonMac.addInitScript((id) => {
     Object.defineProperty(navigator, "platform", { get: () => "Linux x86_64" });
-    localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
+    localStorage.setItem(`ovis:view:${id}`, "terminal");
   }, paneId);
   try {
     const page = await nonMac.newPage();
