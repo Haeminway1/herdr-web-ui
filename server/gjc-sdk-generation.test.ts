@@ -23,13 +23,13 @@ describe("SDK generation revocation", () => {
     await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, { generationStatus: async () => { throw new Error("secret index unavailable"); } })).rejects.toEqual(new GjcSdkLookupError("unavailable"));
   });
 
-  it.each(["ENOENT", "EACCES"])("sanitizes %s discovery and generation API failures", async (code) => {
+  it.each(["ENOENT", "EACCES", "BROKER", "EPIPE", "ECONNREFUSED", "ETIMEDOUT"])("sanitizes %s discovery and generation API failures", async (code) => {
     const secret = `private ${code} session credentials`;
     const unavailable = Promise.reject<GjcSdkGenerationObserver>(Object.assign(new Error(secret), { code }));
     for (const observer of [unavailable, { generationStatus: async () => { throw Object.assign(new Error(secret), { code }); } }]) {
       const failure = await gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer).catch(error => error);
       expect(failure).toBeInstanceOf(GjcSdkLookupError);
-      expect(failure).toMatchObject({ reason: "unavailable", message: "GJC SDK lookup failed" });
+      expect(failure).toMatchObject({ reason: code === "ETIMEDOUT" ? "timeout" : "unavailable", message: "GJC SDK lookup failed" });
       expect(JSON.stringify(failure)).not.toContain(secret);
     }
   });
@@ -37,5 +37,22 @@ describe("SDK generation revocation", () => {
   it("bounds a hung generation observation without accepting cached broker evidence", async () => {
     const observer: GjcSdkGenerationObserver = { generationStatus: () => new Promise(() => {}) };
     await expect(gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer)).rejects.toEqual(new GjcSdkLookupError("timeout"));
+  });
+
+  it.each([{ killed: true }, { signal: "SIGKILL" }, { code: "ERR_CHILD_PROCESS_TIMEOUT" }])("keeps execution timeout %j typed after a successful generation proof", async (metadata) => {
+    let fail = false;
+    const observer: GjcSdkGenerationObserver = { generationStatus: async () => {
+      if (fail) throw Object.assign(new Error("private broker path and credentials"), metadata);
+      return { status: "current" };
+    } };
+    const read = () => gjcSdkGenerationCurrent("/fixture/agent", "session-a", 4, observer);
+    expect(await read()).toBe(true);
+    fail = true;
+    const failure = await read().catch(error => error);
+    expect(failure).toBeInstanceOf(GjcSdkLookupError);
+    expect(failure).toMatchObject({ reason: "timeout", message: "GJC SDK lookup failed" });
+    expect(JSON.stringify(failure)).not.toContain("private");
+    fail = false;
+    expect(await read()).toBe(true);
   });
 });
