@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { appendFileSync, chmodSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import * as fs from "node:fs";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { MAX_TURNS, parseOmpTranscript } from "./transcript-records.ts";
+import { turnStarts } from "./transcript-turns.ts";
+import { claudeImageType } from "./claude-transcript.ts";
 import { toolVerb } from "../src/lib/toolVerbs.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
 import { parseAgyTranscript } from "./agy.ts";
@@ -17,11 +20,23 @@ import { DevinHistoryChanged } from "./devin.ts";
 import { GjcSdkLookupError } from "./gjc-sdk-error.ts";
 import type { GjcSdkSessionIdentity } from "./gjc-sdk.ts";
 import type { ManagedSessionDeps } from "./managed-sessions.ts";
-import * as gjcRuntime from "./gjc-runtime.ts";
+import * as gjcRuntime from "./gjc-pane.ts";
 import * as omo from "./omo.ts";
 import * as conversation from "./conversation.ts";
+import * as conversationShared from "./conversation-shared.ts";
 import { handlePaneRequest } from "./pane-routes.ts";
-import { ConversationUnavailable, conversationForPane, conversationImage, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, resolveTranscript, toolOutput, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
+import { ConversationUnavailable, conversationForPane, conversationImage, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, managedQuestionsForPane, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, resolveTranscript, toolOutput, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput, TRANSCRIPT_WINDOW_BYTES } from "./conversation.ts";
+
+it("preserves managed identity and screen metadata across the extracted conversation error boundary", () => {
+  const identity = { id: "fixture-nonce", harness: "gjc" as const, generation: 2, state: "identity_pending" as const, reason: "unavailable", session_id: "fixture-session" };
+  const screen = { model: "fixture-model", reasoning_effort: null };
+  const failure = new conversationShared.ConversationUnavailable("identity_pending", identity, screen);
+  expect(failure).toBeInstanceOf(ConversationUnavailable);
+  expect(failure.managedSession).toBe(identity);
+  expect(failure.screen).toBe(screen);
+  expect(new conversationShared.ConversationNotStarted("fixture-session")).toBeInstanceOf(ConversationUnavailable);
+  expect(new conversationShared.HistoryChanged()).toBeInstanceOf(HistoryChanged);
+});
 
 describe("conversation image cache policy", () => {
   it("revalidates a managed tool ref instead of caching it as a native immutable id", async () => {
@@ -102,7 +117,7 @@ describe("omo skill roots", () => {
     const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({
       process_info: { foreground_processes: [{ pid: -1, argv: ["omo"] }] },
     });
-    const identity = spyOn(omo, "omoProcessIdentity").mockReturnValue({ agentDir, heldIds: [], custom: false });
+    const identity = spyOn(omo, "omoProcessIdentity").mockReturnValue({ agentDir, heldIds: [], custom: false, held: false });
     try {
       expect((await paneProcessRoots("omo-cwd-fixture", "omo")).omo?.agentDir).toBe(agentDir);
     } finally {
@@ -113,6 +128,30 @@ describe("omo skill roots", () => {
 });
 
 describe("pane process roots", () => {
+  it("binds an omo pane to the omo process holding a session, not an omo-looking one listed before it", async () => {
+    const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({
+      process_info: { foreground_processes: [
+        { pid: 301, argv: ["/install/omo-ai/node_modules/claude-sdk/cli.js"], cwd: "/repo" },
+        { pid: 302, argv: ["omo"], cwd: "/repo" },
+      ] },
+    });
+    const identity = spyOn(omo, "omoProcessIdentity").mockImplementation((process) =>
+      ({ agentDir: "/fixture-agent", heldIds: process.pid === 302 ? ["sess-1"] : [], custom: false, held: process.pid === 302 }));
+    const environ = spyOn(omo, "processEnviron").mockReturnValue(null);
+    try {
+      const roots = await paneProcessRoots("omo-held-fixture", "claude");
+      expect(roots.pid).toBe(302);
+      expect(roots.omo?.held).toBeTrue();
+      // with none held, the first omo process still answers, unheld, as before
+      identity.mockImplementation(() => ({ agentDir: "/fixture-agent", heldIds: [], custom: false, held: false }));
+      expect(await paneProcessRoots("omo-held-fixture", "claude")).toMatchObject({ pid: 301, omo: { held: false } });
+    } finally {
+      environ.mockRestore();
+      identity.mockRestore();
+      rpc.mockRestore();
+    }
+  });
+
   for (const agent of ["claude", "codex", "omp", "gjc", "pi", "opencode", "devin", "grok", "hermes", "agy"]) {
     it(`reads ${agent}'s environment from its foreground executable`, async () => {
       const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({
@@ -124,7 +163,7 @@ describe("pane process roots", () => {
       const identity = spyOn(omo, "omoProcessIdentity").mockReturnValue(null);
       const environ = spyOn(omo, "processEnviron").mockReturnValue(["AGENT_HOME=/fixture"]);
       try {
-        expect(await paneProcessRoots("process-fixture", agent)).toEqual({
+        expect(await paneProcessRoots("process-fixture", agent)).toMatchObject({
           omo: null, environ: ["AGENT_HOME=/fixture"], pid: 102, cwd: "/agent",
         });
         expect(rpc).toHaveBeenCalledTimes(1);
@@ -149,7 +188,26 @@ describe("pane process roots", () => {
     const environ = spyOn(omo, "processEnviron").mockReturnValue(null);
     try {
       expect((await paneProcessRoots("runtime-fixture", "codex")).pid).toBe(102);
-      expect(await paneProcessRoots("runtime-fixture", "claude")).toEqual({ omo: null, environ: null, pid: null, cwd: null });
+      expect(await paneProcessRoots("runtime-fixture", "claude")).toMatchObject({ omo: null, environ: null, pid: null, cwd: null });
+    } finally {
+      environ.mockRestore();
+      identity.mockRestore();
+      rpc.mockRestore();
+    }
+  });
+
+  it("reads an npm Codex's roots from its native child, not the node launcher listed before it", async () => {
+    const rpc = spyOn(herdr, "herdrRpc").mockResolvedValue({
+      process_info: { foreground_processes: [
+        { pid: 201, argv: ["node", "/tools/bin/codex"], cwd: "/launcher" },
+        { pid: 202, argv: ["/tools/vendor/x86_64-unknown-linux-musl/bin/codex"], cwd: "/native" },
+      ] },
+    });
+    const identity = spyOn(omo, "omoProcessIdentity").mockReturnValue(null);
+    const environ = spyOn(omo, "processEnviron").mockReturnValue(["CODEX_HOME=/fixture"]);
+    try {
+      expect(await paneProcessRoots("launcher-fixture", "codex")).toMatchObject({ pid: 202, cwd: "/native", environ: ["CODEX_HOME=/fixture"] });
+      expect(environ).toHaveBeenCalledWith(202);
     } finally {
       environ.mockRestore();
       identity.mockRestore();
@@ -302,11 +360,15 @@ describe("Devin pane identity", () => {
     const pane = { pane_id: "pane-a", cwd, agent: "devin", agent_session: { agent: "devin", kind: "id", value: "one" } } as HerdrPane;
     const db = new Database(dbPath);
     try {
+      // Cache identity needs committed rows, not a durable sync for each fixture node.
+      db.exec("PRAGMA synchronous = OFF");
       db.exec("CREATE TABLE sessions(id TEXT, working_directory TEXT, main_chain_id INTEGER, hidden INTEGER, model TEXT); CREATE TABLE message_nodes(session_id TEXT,node_id INTEGER,parent_node_id INTEGER,chat_message TEXT,created_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT,tool_call_json TEXT,tool_call_update_json TEXT)");
       // more turns than one page holds, so the newest page carries a cursor
       db.query("INSERT INTO sessions VALUES ('one', ?, 120, 0, NULL)").run(cwd);
       const insert = db.query("INSERT INTO message_nodes VALUES ('one', ?, ?, ?, 1700000000)");
-      for (let node = 1; node <= 120; node++) insert.run(node, node === 1 ? null : node - 1, JSON.stringify({ role: "user", content: `synthetic ${node}` }));
+      db.transaction(() => {
+        for (let node = 1; node <= 120; node++) insert.run(node, node === 1 ? null : node - 1, JSON.stringify({ role: "user", content: `synthetic ${node}` }));
+      })();
       mockedPanes = [pane];
       mockedProcesses = [{ argv: ["/usr/local/bin/devin", "--resume", "one"] }];
       // the store never changes below, so only a forgotten cache can move the identity
@@ -329,7 +391,7 @@ describe("Devin pane identity", () => {
       mockedProcesses = [];
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000); // Seven awaited pane reads, including three complete ancestry/cache builds.
 });
 
 /** Minimal but shape-true slices of a Claude Code session jsonl. */
@@ -367,11 +429,53 @@ describe("parseClaudeTranscript", () => {
       { role: "assistant", ts: "2026-09-19T08:00:02.000Z", end_ts: "2026-09-19T08:00:05.000Z", parts: [
         { kind: "text", text: "먼저 상태를 확인하겠습니다." },
         // the row says what the agent said the command is for; the command stays in the input
-        { kind: "tool", name: "Bash", summary: "check tree", input: expect.stringContaining("git status"), output: "M src/app.ts" },
+        { kind: "tool", name: "Bash", summary: "check tree", input: expect.stringContaining("git status"), output: "M src/app.ts", call_id: "toolu_1", state: "ok" },
         { kind: "thinking", text: "internal reasoning stays private" },
         { kind: "text", text: "변경된 파일이 하나입니다." },
       ] },
     ]);
+  });
+
+  describe("native call id and state", () => {
+    const prompt = JSON.stringify({ type: "user", message: { role: "user", content: "plan it" } });
+    const use = (id: string, input: object = { todos: [] }) => JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id, name: "TodoWrite", input }] } });
+    const result = (id: string, content: unknown, isError?: boolean) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, ...(isError === undefined ? {} : { is_error: isError }) }] } });
+    const tools = (text: string) => parseClaudeTranscript(text).flatMap((turn) => turn.parts).filter((part) => part.kind === "tool");
+
+    it("pending call has native id and pending state", () => {
+      expect(tools([prompt, use("toolu_a")].join("\n"))).toMatchObject([{ call_id: "toolu_a", state: "pending", output: "" }]);
+    });
+
+    it("empty successful result is ok", () => {
+      const [part] = tools([prompt, use("toolu_a"), result("toolu_a", "")].join("\n"));
+      expect(part).toMatchObject({ call_id: "toolu_a", state: "ok", output: "" });
+      expect(part?.kind === "tool" && part.error).toBeFalsy();
+    });
+
+    it("explicit failed result is error", () => {
+      expect(tools([prompt, use("toolu_a"), result("toolu_a", "", true)].join("\n"))).toMatchObject([{ call_id: "toolu_a", state: "error", error: true }]);
+      // a result that only reads like a failure is still the success the flag says
+      expect(tools([prompt, use("toolu_b"), result("toolu_b", "Error: exit code 1", false)].join("\n"))).toMatchObject([{ call_id: "toolu_b", state: "ok" }]);
+    });
+
+    it("repeated identical calls retain distinct ids", () => {
+      const parts = tools([prompt, use("toolu_a"), result("toolu_a", "same"), use("toolu_b"), result("toolu_b", "same")].join("\n"));
+      expect(parts.map((part) => part.kind === "tool" && [part.call_id, part.state, part.input, part.output])).toEqual([
+        ["toolu_a", "ok", parts[1]?.kind === "tool" ? parts[1].input : "", "same"],
+        ["toolu_b", "ok", parts[0]?.kind === "tool" ? parts[0].input : "", "same"],
+      ]);
+    });
+
+    it("append and full poll replacement preserve call id and update or omit state", () => {
+      const first = [prompt, use("toolu_a"), use("toolu_b")];
+      expect(tools(first.join("\n")).map((part) => part.kind === "tool" && [part.call_id, part.state])).toEqual([["toolu_a", "pending"], ["toolu_b", "pending"]]);
+      // the next poll reads the file again with both results appended
+      const second = [...first, result("toolu_a", ""), result("toolu_b", "denied", true)];
+      expect(tools(second.join("\n")).map((part) => part.kind === "tool" && [part.call_id, part.state])).toEqual([["toolu_a", "ok"], ["toolu_b", "error"]]);
+      // a cut output keeps the id beside its fetch ref
+      const long = tools([prompt, use("toolu_c"), result("toolu_c", "x".repeat(5000))].join("\n"))[0];
+      expect(long).toMatchObject({ call_id: "toolu_c", state: "ok", output_ref: "toolu_c", output_size: 5000 });
+    });
   });
 
   it("shows a pasted text without Claude Code's paste wrapper, in string and block prompts", () => {
@@ -757,6 +861,160 @@ describe("parseClaudeTranscript", () => {
     }
   });
 
+  describe("a rewound Claude conversation", () => {
+    // Claude Code 2.1.304, recorded: apple and banana answered, /rewind to before apple, Restore
+    // conversation, then "cherry" sent. Claude keeps the old turns in the file; the new prompt hangs
+    // from apple's parent (null), so it opens the branch the session now follows. The attachments
+    // keep their chain fields and type only; the request bookkeeping records are left out.
+    const recorded = readFileSync(new URL("./fixtures/claude-rewind-2.1.304-fork.jsonl", import.meta.url), "utf8");
+    const roots: string[] = [];
+    afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); forgetTranscriptState(); });
+    const file = (): string => {
+      const root = mkdtempSync(join(tmpdir(), "herdr-rewind-"));
+      roots.push(root);
+      return join(root, "session.jsonl");
+    };
+    const prompts = (turns: ConversationTurn[]) => turns.filter((turn) => turn.role === "user").flatMap((turn) => turn.parts.flatMap((part) => part.kind === "text" ? [part.text] : []));
+    const lines = recorded.split("\n").filter(Boolean);
+
+    it("hides the turns a restore left behind once the next prompt forks", () => {
+      const path = file();
+      writeFileSync(path, recorded);
+      expect(prompts(transcriptPage("claude-transcript", path).turns)).toEqual(["cherry"]);
+    });
+
+    it("follows the fork on the live page, and a cold read agrees", () => {
+      const path = file();
+      const fork = lines.findIndex((line) => line.includes('"content":"cherry"'));
+      writeFileSync(path, `${lines.slice(0, fork).join("\n")}\n`);
+      expect(prompts(transcriptPage("claude-transcript", path).turns)).toEqual(["apple", "banana"]);
+      appendFileSync(path, `${lines.slice(fork).join("\n")}\n`);
+      const warm = transcriptPage("claude-transcript", path);
+      expect(prompts(warm.turns)).toEqual(["cherry"]);
+      forgetTranscriptState();
+      expect(transcriptPage("claude-transcript", path).turns).toEqual(warm.turns);
+    });
+
+    // the same restore, with a screenshot sent in place of "cherry": a prompt all the same, also
+    // when the picture makes its record longer than the branch reader parses whole
+    for (const size of [16, 900 * 1024]) it(`hides the turns a restore left behind when the next prompt is only a picture of ${size} bytes`, () => {
+      const path = file();
+      const png = Buffer.alloc(size);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png);
+      const picture = { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } };
+      const entries = lines.map((line) => JSON.parse(line) as { message?: { content?: unknown } });
+      const fork = entries.findIndex((entry) => entry.message?.content === "cherry");
+      const write = (from: number, to: number) => appendFileSync(path, `${entries.slice(from, to).map((entry) => JSON.stringify(entry.message?.content === "cherry" ? { ...entry, message: { ...entry.message, content: [picture] } } : entry)).join("\n")}\n`);
+      write(0, fork);
+      expect(prompts(transcriptPage("claude-transcript", path).turns)).toEqual(["apple", "banana"]);
+      write(fork, entries.length);
+      const warm = transcriptPage("claude-transcript", path).turns;
+      expect(prompts(warm)).toEqual([]);
+      expect(warm[0]?.parts.map((part) => part.kind)).toEqual(["image"]);
+      forgetTranscriptState();
+      expect(transcriptPage("claude-transcript", path).turns).toEqual(warm);
+    });
+
+    it("hides the turns a restore left behind when a screenshot prompt crosses a cold read's window", () => {
+      // a long session read cold: the picture's record starts in the first 16 MiB and ends past them
+      const path = file();
+      const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+      const rows = [JSON.stringify({ type: "user", uuid: id(0), parentUuid: null, message: { role: "user", content: "apple" } })];
+      let size = rows[0]!.length + 1;
+      let n = 1;
+      for (; size < TRANSCRIPT_WINDOW_BYTES - 512 * 1024; n++) {
+        rows.push(JSON.stringify({ type: "assistant", uuid: id(n), parentUuid: id(n - 1), message: { content: [{ type: "text", text: "x".repeat(200_000) }] } }));
+        size += rows.at(-1)!.length + 1;
+      }
+      // the turn the restore goes back over, on the newest page
+      rows.push(JSON.stringify({ type: "user", uuid: id(800), parentUuid: id(n - 1), message: { role: "user", content: "banana" } }));
+      rows.push(JSON.stringify({ type: "assistant", uuid: id(801), parentUuid: id(800), message: { content: [{ type: "text", text: "banana answered" }], stop_reason: "end_turn" } }));
+      size += rows.at(-2)!.length + rows.at(-1)!.length + 2;
+      const png = Buffer.alloc(2 * 1024 * 1024);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png);
+      rows.push(JSON.stringify({ type: "user", uuid: id(900), parentUuid: null, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } }] } }));
+      expect(size + rows.at(-1)!.length).toBeGreaterThan(TRANSCRIPT_WINDOW_BYTES);
+      rows.push(JSON.stringify({ type: "assistant", uuid: id(901), parentUuid: id(900), message: { content: [{ type: "text", text: "cherry answered" }], stop_reason: "end_turn" } }));
+      writeFileSync(path, `${rows.join("\n")}\n`);
+      forgetTranscriptState();
+      const turns = transcriptPage("claude-transcript", path).turns;
+      expect(prompts(turns)).toEqual([]);
+      expect(turns.map((turn) => turn.parts.map((part) => part.kind === "text" ? part.text : part.kind))).toEqual([["image"], ["cherry answered"]]);
+    });
+
+    it("keeps the turns before a message rewound to in the middle", () => {
+      // the same records, rewound to before banana instead: the next prompt hangs from apple's answer
+      const path = file();
+      const entries = lines.map((line) => JSON.parse(line) as { type?: string; uuid?: string; parentUuid?: string | null; message?: { content?: unknown } });
+      const appleAnswer = entries.find((entry) => entry.type === "assistant")!.uuid!;
+      const shifted = entries.map((entry) => entry.message?.content === "cherry" ? { ...entry, parentUuid: appleAnswer } : entry);
+      writeFileSync(path, `${shifted.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+      expect(prompts(transcriptPage("claude-transcript", path).turns)).toEqual(["apple", "cherry"]);
+    });
+
+    it("a slash command's echo off the chain hides nothing when the conversation goes on from elsewhere", () => {
+      // the echo hangs from q1, past q1's answer, but the next prompt continues from that answer: the
+      // answer stays on Claude's active chain, so nothing between q1 and the echo is off the branch
+      const path = file();
+      const base = { isSidechain: false, userType: "external", cwd: "/p", sessionId: "s", version: "2.1.304", gitBranch: "", timestamp: "2026-10-20T10:00:00.000Z" };
+      const answer = (uuid: string, parentUuid: string, text: string) => ({ ...base, parentUuid, type: "assistant", message: { role: "assistant", content: [{ type: "text", text }], stop_reason: "end_turn" }, uuid });
+      writeFileSync(path, [
+        { ...base, parentUuid: null, type: "user", message: { role: "user", content: "q1" }, uuid: "q1" },
+        answer("a1", "q1", "Alpha answered."),
+        { ...base, parentUuid: "q1", type: "system", subtype: "local_command", content: "<command-name>/context</command-name>\n            <command-message>context</command-message>\n            <command-args></command-args>", level: "info", uuid: "echo" },
+        { ...base, parentUuid: "echo", type: "system", subtype: "local_command", content: "<local-command-stdout>Context Usage</local-command-stdout>", level: "info", uuid: "stdout" },
+        { ...base, parentUuid: "a1", type: "user", message: { role: "user", content: "q2" }, uuid: "q2" },
+        answer("a2", "q2", "Beta answered."),
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      const turns = transcriptPage("claude-transcript", path).turns;
+      const answers = turns.filter((turn) => turn.role === "assistant").flatMap((turn) => turn.parts.flatMap((part) => part.kind === "text" ? [part.text] : []));
+      expect(prompts(turns)).toEqual(["q1", "q2"]);
+      expect(answers).toEqual(["Alpha answered.", "Beta answered."]);
+    });
+
+    it("follows a terminal restore continued through a slash command and an API error", () => {
+      const path = file();
+      const fork = lines.findIndex((line) => line.includes('"content":"cherry"'));
+      writeFileSync(path, lines.slice(0, fork).join("\n") + "\n");
+      expect(prompts(transcriptPage("claude-transcript", path).turns)).toEqual(["apple", "banana"]);
+      const appleAnswer = lines.map((line) => JSON.parse(line)).find((entry) => entry.type === "assistant").uuid;
+      const base = { isSidechain: false, timestamp: "2026-10-20T10:00:00.000Z" };
+      appendFileSync(path, [
+        { ...base, parentUuid: appleAnswer, type: "system", subtype: "local_command", content: "<command-name>/context</command-name>", uuid: "echo" },
+        { ...base, parentUuid: "echo", type: "system", subtype: "local_command", content: "<local-command-stdout>Context Usage</local-command-stdout>", uuid: "stdout" },
+        { ...base, parentUuid: "stdout", type: "user", message: { role: "user", content: "cherry" }, uuid: "cherry" },
+        { ...base, parentUuid: "cherry", type: "assistant", isApiErrorMessage: true, message: { role: "assistant", content: [{ type: "text", text: "Invalid API key" }], stop_reason: "stop_sequence" }, uuid: "refused" },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      const warm = transcriptPage("claude-transcript", path);
+      expect(prompts(warm.turns)).toEqual(["apple", "cherry"]);
+      forgetTranscriptState();
+      expect(transcriptPage("claude-transcript", path).turns).toEqual(warm.turns);
+    });
+
+    it("a record off the chain that opens no turn hides nothing", () => {
+      const path = file();
+      writeFileSync(path, recorded);
+      const first = transcriptPage("claude-transcript", path);
+      appendFileSync(path, `${JSON.stringify({ parentUuid: null, isSidechain: false, type: "system", subtype: "informational", content: "x", uuid: "not-on-the-chain" })}\n`);
+      expect(prompts(transcriptPage("claude-transcript", path).turns)).toEqual(prompts(first.turns));
+    });
+
+    it("a send cancelled before any reply and sent again moves no history", () => {
+      // Esc before any reply, then the re-send from the same parent: the cancelled prompt holds no
+      // answer, so the cancelled-prompt rule hides it and the history id stays (paging is kept)
+      const path = file();
+      const base = { isSidechain: false, userType: "external", cwd: "/p", sessionId: "s", version: "2.1.304", gitBranch: "" };
+      const user = (uuid: string, parentUuid: string | null, content: string) => JSON.stringify({ parentUuid, ...base, type: "user", message: { role: "user", content }, uuid, timestamp: "2026-10-20T10:00:00.000Z" });
+      const answer = (uuid: string, parentUuid: string, text: string) => JSON.stringify({ parentUuid, ...base, type: "assistant", message: { role: "assistant", content: [{ type: "text", text }], stop_reason: "end_turn" }, uuid, timestamp: "2026-10-20T10:00:01.000Z" });
+      writeFileSync(path, [user("u1", null, "first"), answer("a1", "u1", "one"), user("u2", "a1", "cancelled"), JSON.stringify({ type: "last-prompt" })].join("\n") + "\n");
+      const shown = transcriptPage("claude-transcript", path);
+      appendFileSync(path, [user("u3", "a1", "re-sent"), answer("a3", "u3", "two")].join("\n") + "\n");
+      const after = transcriptPage("claude-transcript", path);
+      expect(after.history_id).toBe(shown.history_id);
+      expect(prompts(after.turns)).toEqual(["first", "re-sent"]);
+    });
+  });
+
   describe("subagent notifications", () => {
     const roots: string[] = [];
     afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); forgetTranscriptState(); });
@@ -1116,6 +1374,56 @@ describe("gjc sessions", () => {
       JSON.stringify({ type: "message", timestamp: "2026-09-25T00:00:01.000Z", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "401 Authentication Failed" } }),
     ].join("\n");
     expect(parseOmpTranscript(text).at(-1)?.parts).toEqual([{ kind: "text", text: "Error: 401 Authentication Failed" }]);
+  });
+
+  it("hides agent-attributed IRC deliveries without hiding quoted user text or adding a page boundary", () => {
+    const irc = (customType: string, content: string, details: Record<string, string>) => JSON.stringify({
+      type: "custom_message", customType, display: true, content, details, attribution: "agent", timestamp: "2026-10-01T00:00:01.000Z",
+    });
+    const quoted = "I saw these messages in the transcript:\n[IRC `0-WindowsPaths` → you]\nMy bash is restricted...\n[IRC you → `0-WindowsPaths` (auto)]";
+    const text = [
+      JSON.stringify({ type: "message", timestamp: "2026-10-01T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: quoted }] } }),
+      irc("irc:incoming", "[IRC `0-WindowsPaths` → you]\n\nMy bash is restricted...", { observationId: "incoming-1", from: "0-WindowsPaths", message: "My bash is restricted..." }),
+      irc("irc:autoreply", "[IRC you → `0-WindowsPaths` (auto)]\n\nI will handle it.", { observationId: "reply-1", to: "0-WindowsPaths", reply: "I will handle it." }),
+      irc("irc:relay", "[IRC `you` → `0-WindowsPaths`]\n\nI will handle it.", { observationId: "relay-1", from: "you", to: "0-WindowsPaths", body: "I will handle it.", kind: "reply" }),
+      JSON.stringify({ type: "message", timestamp: "2026-10-01T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "I will handle it." }] } }),
+    ].join("\n");
+    const home = mkdtempSync(join(tmpdir(), "herdr-gjc-irc-")); roots.push(home);
+    const path = join(home, "session.jsonl");
+    writeFileSync(path, `${text}\n`);
+    try {
+      expect(transcriptPage("gjc-transcript", path).turns).toEqual([
+        { role: "user", ts: "2026-10-01T00:00:00.000Z", parts: [{ kind: "text", text: quoted }] },
+        { role: "assistant", ts: "2026-10-01T00:00:02.000Z", end_ts: "2026-10-01T00:00:02.000Z", parts: [{ kind: "text", text: "I will handle it." }] },
+      ]);
+    } finally { forgetTranscriptState(); }
+  });
+
+  it("hides IRC deliveries a gjc build older than their attribution wrote (#1541)", () => {
+    const delivery = (customType: string, content: string) => JSON.stringify({ type: "custom_message", customType, display: true, content });
+    const text = [
+      JSON.stringify({ type: "message", timestamp: "2026-10-01T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "coordinate with the other pane" }] } }),
+      delivery("irc:incoming", "[IRC `0-WindowsPaths` → you]\n\nMy bash is restricted..."),
+      delivery("irc:autoreply", "[IRC you → `0-WindowsPaths` (auto)]\n\nI will handle it."),
+      delivery("irc:relay", "[IRC `you` → `0-WindowsPaths`]\n\nI will handle it."),
+      JSON.stringify({ type: "message", timestamp: "2026-10-01T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "Done." }] } }),
+    ].join("\n");
+    expect(parseOmpTranscript(text).map((turn) => turn.parts)).toEqual([
+      [{ kind: "text", text: "coordinate with the other pane" }],
+      [{ kind: "text", text: "Done." }],
+    ]);
+  });
+
+  it("keeps user-attributed IRC records and ordinary notices whose text quotes IRC", () => {
+    const content = "[IRC `0-WindowsPaths` → you]\n\nA quoted example, not an internal delivery.";
+    const text = [
+      { type: "custom_message", customType: "irc:incoming", attribution: "user", display: true, content },
+      { type: "custom_message", customType: "async-result", attribution: "agent", display: true, content },
+    ].map((entry) => JSON.stringify(entry)).join("\n");
+    expect(parseOmpTranscript(text).map((turn) => turn.parts)).toEqual([
+      [{ kind: "notice", text: content, source: "irc:incoming" }],
+      [{ kind: "notice", text: content, source: "async-result" }],
+    ]);
   });
 
   it("ends a turn at a background result gjc delivers, so the answer before it stays the answer", () => {
@@ -1604,6 +1912,62 @@ describe("images and compactions in a Claude transcript", () => {
     expect(JSON.stringify(turns)).not.toContain("iVBOR");
   });
 
+  it("names a picture a tool returned by its entry, its result and its place there, and never carries its data", () => {
+    const png = "iVBORw0KGgoAAAANSUhEUg==";
+    const turns = parseClaudeTranscript(lines(
+      { type: "user", uuid: "00000000-2222-3333-4444-555555555555", message: { content: "open both shots" } },
+      { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_a", name: "Read", input: { file_path: "a.txt" } }, { type: "tool_use", id: "toolu_b", name: "Read", input: { file_path: "b.png" } }], stop_reason: "tool_use" } },
+      { type: "user", uuid: "77777777-2222-3333-4444-555555555555", message: { content: [
+        { type: "tool_result", tool_use_id: "toolu_a", content: "plain text" },
+        { type: "tool_result", tool_use_id: "toolu_b", content: [
+          { type: "text", text: "read b.png" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: png } },
+          // a type the chat never shows, and bytes that are no picture under a type it does
+          { type: "image", source: { type: "base64", media_type: "image/svg+xml", data: "PHN2Zz4=" } },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "PHN2Zz4=" } },
+        ] },
+      ] } },
+    ));
+    const tools = turns.flatMap((turn) => turn.parts).filter((part) => part.kind === "tool");
+    expect(tools.map((tool) => [tool.output, tool.images])).toEqual([
+      ["plain text", undefined],
+      ["read b.png", [{ media_type: "image/png", ref: "77777777-2222-3333-4444-555555555555:1:1" }]],
+    ]);
+    expect(JSON.stringify(turns)).not.toContain(png);
+  });
+
+  it("opens a turn at a prompt that is only a picture, as at a text one", () => {
+    const picture = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+    const records = [
+      { type: "user", uuid: "11111111-2222-3333-4444-555555555555", message: { content: "first" } },
+      { type: "assistant", message: { content: [{ type: "text", text: "one" }], stop_reason: "end_turn" } },
+      { type: "user", uuid: "22222222-2222-3333-4444-555555555555", message: { content: [picture("iVBORw0KGgoAAAANSUhEUg==")] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "two" }], stop_reason: "end_turn" } },
+      // what the parser draws no picture for opens nothing either
+      { type: "user", uuid: "33333333-2222-3333-4444-555555555555", message: { content: [picture("PHN2Zz4=")] } },
+    ].map((record) => JSON.stringify(record));
+    const bytes = Buffer.from(records.join("\n"));
+    expect(turnStarts(bytes, "claude-transcript")).toEqual([0, records[0]!.length + records[1]!.length + 2]);
+  });
+
+  it("keeps a tool's result on the page of its call when a picture shares the result's record", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-image-"));
+    try {
+      const path = join(dir, "session.jsonl");
+      const picture = { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoAAAANSUhEUg==" } };
+      const text = lines(
+        { type: "user", uuid: "11111111-2222-3333-4444-555555555555", message: { content: "read it" } },
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_r", name: "Read", input: { file_path: "a.png" } }], stop_reason: "tool_use" } },
+        { type: "user", uuid: "22222222-2222-3333-4444-555555555555", message: { content: [{ type: "tool_result", tool_use_id: "toolu_r", content: [{ type: "text", text: "Read output" }, picture] }, picture] } },
+        { type: "assistant", message: { content: [{ type: "text", text: "done" }], stop_reason: "end_turn" } },
+      );
+      writeFileSync(path, `${text}\n`);
+      const page = transcriptPage("claude-transcript", path).turns;
+      expect(page).toEqual(parseClaudeTranscript(text));
+      expect(page.flatMap((turn) => turn.parts).find((part) => part.kind === "tool")).toMatchObject({ output: "Read output", images: [{ media_type: "image/png", ref: "22222222-2222-3333-4444-555555555555:0:1" }] });
+    } finally { rmSync(dir, { recursive: true, force: true }); forgetTranscriptState(); }
+  });
+
   it("marks where a compaction folded the conversation, with its summary", () => {
     const turns = parseClaudeTranscript(lines(
       { type: "user", timestamp: "2026-09-27T00:00:00Z", message: { content: "before" } },
@@ -1619,7 +1983,7 @@ describe("transcriptImage", () => {
     try {
       const path = join(dir, "session.jsonl");
       const uuid = "11111111-2222-3333-4444-555555555555";
-      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
       writeFileSync(path, [
         { type: "user", uuid: "99999999-2222-3333-4444-555555555555", message: { content: [{ type: "text", text: "x" }] } },
         { type: "user", uuid, message: { content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } }, { type: "text", text: "what?" }, { type: "image", source: { type: "base64", media_type: "image/svg+xml", data: "PHN2Zz4=" } }] } },
@@ -1634,6 +1998,259 @@ describe("transcriptImage", () => {
       expect(transcriptImage(path, "../../etc/passwd:0")).toBeNull();
       expect(transcriptImage(join(dir, "missing.jsonl"), `${uuid}:0`)).toBeNull();
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("decodes a tool's picture by its place in the result, and only a picture the page would name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-image-"));
+    try {
+      const path = join(dir, "session.jsonl");
+      const uuid = "77777777-2222-3333-4444-555555555555";
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+      const image = (media_type: string, data: string) => ({ type: "image", source: { type: "base64", media_type, data } });
+      // just past the endpoint's 8 MiB, behind a real PNG signature
+      const huge = png.toString("base64") + "A".repeat(Math.ceil(8 * 1024 * 1024 * 4 / 3));
+      const records = [
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_b", name: "Read", input: { file_path: "b.png" } }], stop_reason: "tool_use" } },
+        { type: "user", uuid, message: { content: [
+          { type: "tool_result", tool_use_id: "toolu_a", content: "plain text" },
+          { type: "tool_result", tool_use_id: "toolu_b", content: [{ type: "text", text: "read b.png" }, image("image/png", png.toString("base64")), image("image/png", "PHN2Zz4="), image("image/png", huge)] },
+        ] } },
+      ];
+      writeFileSync(path, records.map((entry) => JSON.stringify(entry)).join("\n"));
+      const read = transcriptImage(path, `${uuid}:1:1`);
+      expect(read?.mediaType).toBe("image/png");
+      expect(Buffer.from(read!.bytes).equals(png)).toBe(true);
+      // the page names the same one picture the endpoint serves
+      const tool = parseClaudeTranscript(readFileSync(path, "utf8")).flatMap((turn) => turn.parts).find((part) => part.kind === "tool");
+      expect(tool?.kind === "tool" ? tool.images : null).toEqual([{ media_type: "image/png", ref: `${uuid}:1:1` }]);
+      // the result's text, no picture at that place, a result named as if it were the picture,
+      // bytes that are no picture, a picture past the endpoint's size, a ref that is no ref
+      for (const ref of [`${uuid}:1:0`, `${uuid}:0:0`, `${uuid}:1:9`, `${uuid}:1`, `${uuid}:1:2`, `${uuid}:1:3`, `${uuid}:1:1:0`, `${uuid}:1:x`]) expect(transcriptImage(path, ref)).toBeNull();
+      // a /clear puts the pictures before it out of reach, as it does their page
+      appendFileSync(path, `\n${JSON.stringify({ type: "user", message: { role: "user", content: "<command-name>/clear</command-name>" } })}\n`);
+      expect(transcriptImage(path, `${uuid}:1:1`)).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); forgetTranscriptState(); }
+  });
+
+  it("serves only the pictures of the branch the page shows, from the entry it draws", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-image-"));
+    try {
+      const path = join(dir, "session.jsonl");
+      const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+      const picture = (data: string) => ({ type: "image", source: { type: "base64", media_type: data.startsWith("R0lG") ? "image/gif" : "image/png", data } });
+      const png = "iVBORw0KGgoAAAANSUhEUg==";
+      const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+      const read = (n: number, parent: number) => ({ type: "assistant", uuid: id(n), parentUuid: id(parent), message: { content: [{ type: "tool_use", id: `toolu_${n}`, name: "Read", input: { file_path: "a.png" } }], stop_reason: "tool_use" } });
+      const result = (n: number, parent: number, call: number, data: string, extra = {}) => ({ type: "user", uuid: id(n), parentUuid: id(parent), ...extra, message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_${call}`, content: [{ type: "text", text: "Read output" }, picture(data)] }] } });
+      const answer = (n: number, parent: number) => ({ type: "assistant", uuid: id(n), parentUuid: id(parent), message: { content: [{ type: "text", text: `answer ${n}` }], stop_reason: "end_turn" } });
+      writeFileSync(path, [
+        { type: "user", uuid: id(1), parentUuid: null, message: { role: "user", content: "look at the old shot" } },
+        read(2, 1), result(3, 2, 2, png), answer(4, 3),
+        // a rewind back to the start, and a prompt that is only a picture
+        { type: "user", uuid: id(5), parentUuid: null, message: { role: "user", content: [picture(png)] } },
+        read(6, 5),
+        // a record the parser hides, under the id of the result it draws
+        result(7, 6, 6, gif, { isMeta: true }), result(7, 6, 6, png), answer(8, 7),
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      const refs = transcriptPage("claude-transcript", path).turns.flatMap((turn) => turn.parts.flatMap((part) => part.kind === "image" ? [part.ref] : part.kind === "tool" ? (part.images ?? []).map((image) => image.ref) : []));
+      expect(refs).toEqual([`${id(5)}:0`, `${id(7)}:0:1`]);
+      expect(transcriptImage(path, `${id(5)}:0`)?.mediaType).toBe("image/png");
+      expect(transcriptImage(path, `${id(7)}:0:1`)?.mediaType).toBe("image/png");
+      // the Read the rewind left behind is no picture of this conversation's
+      expect(transcriptImage(path, `${id(3)}:0:1`)).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); forgetTranscriptState(); }
+  });
+
+  it("serves a tool's picture only from a result the page draws, one that answers a call it shows", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-image-"));
+    try {
+      const path = join(dir, "session.jsonl");
+      const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+      const picture = { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoAAAANSUhEUg==" } };
+      const call = (n: number, toolId: string, extra = {}) => ({ type: "assistant", uuid: id(n), ...extra, message: { content: [{ type: "tool_use", id: toolId, name: "Read", input: { file_path: "a.png" } }], stop_reason: "tool_use" } });
+      const result = (toolId: string, withPicture = true) => ({ type: "tool_result", tool_use_id: toolId, content: withPicture ? [{ type: "text", text: "Read output" }, picture] : "text only" });
+      const user = (n: number, content: unknown[]) => ({ type: "user", uuid: id(n), message: { role: "user", content } });
+      writeFileSync(path, [
+        { type: "user", uuid: id(1), message: { role: "user", content: "read the shots" } },
+        call(2, "toolu_a"), user(3, [result("toolu_a")]),
+        // no call made it: an orphan result
+        user(4, [result("toolu_none")]),
+        // a second answer to a call already answered
+        user(5, [result("toolu_a")]),
+        // answered by the entry's own first result, then again
+        call(6, "toolu_b"), user(7, [result("toolu_b", false), result("toolu_b")]),
+        // a call the parser hides
+        call(8, "toolu_c", { isMeta: true }), user(9, [result("toolu_c")]),
+        { type: "assistant", uuid: id(10), message: { content: [{ type: "text", text: "done" }], stop_reason: "end_turn" } },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      const refs = transcriptPage("claude-transcript", path).turns.flatMap((turn) => turn.parts.flatMap((part) => part.kind === "tool" ? (part.images ?? []).map((image) => image.ref) : []));
+      expect(refs).toEqual([`${id(3)}:0:1`]);
+      expect(transcriptImage(path, `${id(3)}:0:1`)?.mediaType).toBe("image/png");
+      for (const ref of [`${id(4)}:0:1`, `${id(5)}:0:1`, `${id(7)}:1:1`, `${id(9)}:0:1`]) expect(transcriptImage(path, ref)).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); forgetTranscriptState(); }
+  });
+
+  it("judges a tool's picture by every record the page reads, whatever its size or its call's id", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-image-"));
+    try {
+      const path = join(dir, "session.jsonl");
+      const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+      const png = (size: number) => {
+        const bytes = Buffer.alloc(size);
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes);
+        return { type: "image", source: { type: "base64", media_type: "image/png", data: bytes.toString("base64") } };
+      };
+      const call = (n: number, toolId: unknown) => ({ type: "assistant", uuid: id(n), message: { content: [{ type: "tool_use", id: toolId, name: "Read", input: { file_path: "a.png" } }], stop_reason: "tool_use" } });
+      const user = (n: number, toolId: string, pictures: unknown[]) => ({ type: "user", uuid: id(n), message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: pictures }] } });
+      writeFileSync(path, [
+        { type: "user", uuid: id(1), message: { role: "user", content: "read the shots" } },
+        // one result holding two 5 MiB pictures: a record past the history scan's carry
+        call(2, "toolu_big"), user(3, "toolu_big", [png(5 * 1024 * 1024), png(5 * 1024 * 1024)]),
+        // a second answer to it, which the page does not draw
+        user(4, "toolu_big", [png(16)]),
+        // a call whose id is written as a number, answered by its text, and one whose id JSON escapes
+        call(5, 7), user(6, "7", [png(16)]),
+        call(7, 'toolu_"x'), user(8, 'toolu_"x', [png(16)]),
+        // a call's id and a prompt's uuid written with \u escapes: JSON reads them as the plain ones
+        call(11, "toolu_e"), user(12, "toolu_e", [png(16)]),
+        { type: "assistant", uuid: id(10), message: { content: [{ type: "text", text: "done" }], stop_reason: "end_turn" } },
+        { type: "user", uuid: id(13), message: { role: "user", content: [png(16)] } },
+      ].map((entry) => JSON.stringify(entry)).join("\n").replace('"id":"toolu_e"', '"id":"toolu_\\u0065"').replace(`"uuid":"${id(13)}"`, `"uuid":"\\u0030${id(13).slice(1)}"`) + "\n");
+      expect(readFileSync(path, "utf8")).toContain('"id":"toolu_\\u0065"');
+      const refs = transcriptPage("claude-transcript", path).turns.flatMap((turn) => turn.parts.flatMap((part) => part.kind === "image" ? [part.ref] : part.kind === "tool" ? (part.images ?? []).map((image) => image.ref) : []));
+      expect(refs).toEqual([`${id(3)}:0:0`, `${id(3)}:0:1`, `${id(6)}:0:0`, `${id(8)}:0:0`, `${id(12)}:0:0`, `${id(13)}:0`]);
+      for (const ref of refs) expect(transcriptImage(path, ref)?.mediaType).toBe("image/png");
+      expect(transcriptImage(path, `${id(4)}:0:0`)).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); forgetTranscriptState(); }
+  });
+
+  it("reads a picture's record a window at a time, never the transcript whole", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-image-"));
+    const alloc = spyOn(Buffer, "alloc");
+    try {
+      const path = join(dir, "session.jsonl");
+      const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+      const png = Buffer.alloc(1_200_000);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png);
+      const filler = (n: number, size: number) => JSON.stringify({ type: "assistant", uuid: id(n), message: { content: [{ type: "text", text: "x".repeat(size) }], stop_reason: "end_turn" } });
+      const lines: string[] = [JSON.stringify({ type: "user", uuid: id(1), message: { role: "user", content: "read the shot" } })];
+      for (let n = 0; n < 20; n += 1) lines.push(filler(100 + n, 1024 * 1024));
+      lines.push(JSON.stringify({ type: "assistant", uuid: id(2), message: { content: [{ type: "tool_use", id: "toolu_a", name: "Read", input: { file_path: "a.png" } }], stop_reason: "tool_use" } }));
+      // the picture's id ends 3 bytes past a search window's edge, so the edge cuts it in two
+      const record = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_a", content: [{ type: "text", text: "Read output" }, { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } }] }] }, uuid: id(3) });
+      const before = lines.join("\n").length + 1;
+      const idEnd = (pad: number) => before + filler(99, pad).length + 1 + record.indexOf(id(3)) + id(3).length;
+      const edge = Math.ceil((idEnd(0) - 3) / (1024 * 1024)) * 1024 * 1024;
+      lines.push(filler(99, edge + 3 - idEnd(0)), record);
+      const transcript = lines.join("\n") + "\n";
+      writeFileSync(path, transcript);
+      expect((transcript.indexOf(id(3)) + id(3).length) % (1024 * 1024)).toBe(3);
+      expect(transcript.length).toBeGreaterThan(TRANSCRIPT_WINDOW_BYTES + 1024 * 1024);
+      alloc.mockClear();
+      const image = transcriptImage(path, `${id(3)}:0:1`);
+      expect(image?.mediaType).toBe("image/png");
+      expect(Buffer.from(image!.bytes).equals(png)).toBe(true);
+      // no read took the transcript whole
+      expect(Math.max(...alloc.mock.calls.map(([size]) => Number(size)))).toBeLessThan(transcript.length - 1024 * 1024);
+    } finally { alloc.mockRestore(); rmSync(dir, { recursive: true, force: true }); forgetTranscriptState(); }
+  });
+
+  it("reads a record's cut strings as JSON does: their escapes, their marks, their spelling", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-image-"));
+    try {
+      const path = join(dir, "session.jsonl");
+      const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+      const pngBytes = (size: number) => {
+        const bytes = Buffer.alloc(size);
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes);
+        return bytes;
+      };
+      const png = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+      const small = pngBytes(16).toString("base64");
+      const pad = "x".repeat(2048);
+      const call = (n: number, toolId: unknown) => JSON.stringify({ type: "assistant", uuid: id(n), message: { content: [{ type: "tool_use", id: toolId, name: "Read", input: { file_path: "a.png", pad } }], stop_reason: "tool_use" } });
+      const result = (n: number, toolId: string, data = small) => JSON.stringify({ type: "user", uuid: id(n), message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: [png(data)] }] } });
+      // a picture whose every base64 character is written as a \u escape: six times its text
+      const escaped = pngBytes(1_500_000);
+      const escapedText = [...escaped.toString("base64")].map((char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+      writeFileSync(path, [
+        JSON.stringify({ type: "user", uuid: id(1), message: { role: "user", content: "read the shots" } }),
+        // an escape JSON does not have, past where a string is cut: the page reads no such record
+        JSON.stringify({ type: "user", uuid: id(2), message: { role: "user", content: [png(small), { type: "text", text: pad }] } }).replace(pad, `${pad}\\q`),
+        // an id that ends as a cut string's mark once did, after a string that is cut
+        call(3, "toolu_\u0000cut:0"), result(4, "toolu_\u0000cut:0"),
+        call(5, "toolu_esc"), result(6, "toolu_esc").replace(`"data":"${small}"`, `"data":"${escapedText}"`),
+        // a line that is JSON but no record, between a call and its result
+        call(7, "toolu_n"), "null", result(8, "toolu_n"),
+        // a call id written as a number in another spelling than the text it is keyed by
+        call(9, 1000).replace('"id":1000', '"id":1e3'), result(10, "1000"),
+        call(12, 1000).replace('"id":1000', '"id":1e400'), result(13, "Infinity"),
+        // a call id that starts with a BOM is another id than the same text without it
+        call(14, `\uFEFF${"a".repeat(1024)}`), result(15, "a".repeat(1024)),
+        JSON.stringify({ type: "assistant", uuid: id(11), message: { content: [{ type: "text", text: "done" }], stop_reason: "end_turn" } }),
+      ].join("\n") + "\n");
+      const refs = transcriptPage("claude-transcript", path).turns.flatMap((turn) => turn.parts.flatMap((part) => part.kind === "image" ? [part.ref] : part.kind === "tool" ? (part.images ?? []).map((image) => image.ref) : []));
+      expect(refs).toEqual([`${id(4)}:0:0`, `${id(6)}:0:0`, `${id(8)}:0:0`, `${id(10)}:0:0`, `${id(13)}:0:0`]);
+      for (const ref of refs) expect(transcriptImage(path, ref)?.mediaType).toBe("image/png");
+      expect(transcriptImage(path, `${id(15)}:0:0`)).toBeNull();
+      expect(Buffer.from(transcriptImage(path, `${id(6)}:0:0`)!.bytes).equals(escaped)).toBe(true);
+      expect(transcriptImage(path, `${id(2)}:0`)).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); forgetTranscriptState(); }
+  });
+
+  it("serves nothing a record it cannot hold could decide, rather than guess", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-image-"));
+    try {
+      const path = join(dir, "session.jsonl");
+      const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+      const picture = { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoAAAANSUhEUg==" } };
+      // a result whose shape alone is past what the endpoint holds: thousands of strings under the cut
+      const shapeOnly = Array.from({ length: 4200 }, () => "x".repeat(1023));
+      writeFileSync(path, [
+        { type: "user", uuid: id(1), message: { role: "user", content: "read the shot" } },
+        { type: "assistant", uuid: id(2), message: { content: [{ type: "tool_use", id: "toolu_a", name: "Read", input: { file_path: "a.png" } }], stop_reason: "tool_use" } },
+        { type: "user", uuid: id(3), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_a", content: [picture], pad: shapeOnly }] } },
+        // a second answer to the call, which the page does not draw
+        { type: "user", uuid: id(4), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_a", content: [picture] }] } },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      const refs = transcriptPage("claude-transcript", path).turns.flatMap((turn) => turn.parts.flatMap((part) => part.kind === "tool" ? (part.images ?? []).map((image) => image.ref) : []));
+      expect(refs).toEqual([`${id(3)}:0:0`]);
+      expect(transcriptImage(path, `${id(4)}:0:0`)).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); forgetTranscriptState(); }
+  });
+
+  it("holds a window, a record's shape and the picture, never a record whole however large", () => {
+    const dir = mkdtempSync(join(tmpdir(), "herdr-image-"));
+    const alloc = spyOn(Buffer, "alloc");
+    try {
+      const path = join(dir, "session.jsonl");
+      const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+      const png = Buffer.alloc(300_000);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png);
+      const pad = "x".repeat(20 * 1024 * 1024);
+      writeFileSync(path, [
+        { type: "user", uuid: id(1), message: { role: "user", content: "read the shot" } },
+        // a call and its result, each padded past the largest picture the chat shows
+        { type: "assistant", uuid: id(2), message: { content: [{ type: "tool_use", id: "toolu_a", name: "Read", input: { file_path: "a.png", pad } }], stop_reason: "tool_use" } },
+        { type: "user", uuid: id(3), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_a", content: [{ type: "text", text: pad }, { type: "image", source: { type: "base64", media_type: "image/png", data: png.toString("base64") } }] }] } },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      // the first read scans the history once; the endpoint's own reads are what is left
+      expect(transcriptImage(path, `${id(3)}:0:1`)?.mediaType).toBe("image/png");
+      alloc.mockClear();
+      const image = transcriptImage(path, `${id(3)}:0:1`);
+      expect(Buffer.from(image!.bytes).equals(png)).toBe(true);
+      expect(Math.max(...alloc.mock.calls.map(([size]) => Number(size)))).toBeLessThanOrEqual(1024 * 1024);
+    } finally { alloc.mockRestore(); rmSync(dir, { recursive: true, force: true }); forgetTranscriptState(); }
+  });
+
+  it("takes a picture up to the endpoint's size exactly, its padding left out", () => {
+    const png = (size: number) => {
+      const bytes = Buffer.alloc(size);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes);
+      return { type: "image", source: { type: "base64", media_type: "image/png", data: bytes.toString("base64") } };
+    };
+    expect(claudeImageType(png(8 * 1024 * 1024))).toBe("image/png");
+    expect(claudeImageType(png(8 * 1024 * 1024 + 1))).toBeNull();
   });
 });
 
@@ -1760,6 +2377,8 @@ describe("Agy native ledger through shared paging", () => {
     mkdirSync(join(path, ".."), { recursive: true });
     mkdirSync(join(root, "conversations"));
     db = new Database(join(root, "conversations", `${session}.db`));
+    // The ledger tests observe committed DB changes, never recovery after a crash.
+    db.exec("PRAGMA synchronous = OFF");
     db.exec("CREATE TABLE steps(idx INTEGER PRIMARY KEY)");
     writeFileSync(path, "");
     forgetTranscriptState();
@@ -1827,14 +2446,15 @@ describe("Agy native ledger through shared paging", () => {
     expect(turns[2]!.role).toBe("user");
   });
   it("keeps paging and refs stable on append, then rejects them on a DB-only idle rewind", () => {
-    for (let i = 0; i < 80; i++) { add(i * 2, "USER_INPUT", `prompt ${i}`); add(i * 2 + 1, "GENERIC", "x".repeat(5000)); }
+    // One prompt beyond the 50-prompt page boundary, committed as one fixture batch.
+    db.transaction(() => { for (let i = 0; i < 51; i++) { add(i * 2, "USER_INPUT", `prompt ${i}`); add(i * 2 + 1, "GENERIC", "x".repeat(5000)); } })();
     const first = page();
     expect(first.cursor).not.toBeNull();
     const older = transcriptPage("agy-transcript", path, { before: first.cursor! });
     const tool = first.turns.flatMap((t) => t.parts).find((p) => p.kind === "tool")!;
     if (tool.kind !== "tool") throw new Error("missing result");
     expect(transcriptToolOutput("agy-transcript", path, tool.output_ref!)).toBe("x".repeat(5000));
-    add(160, "USER_INPUT", "append");
+    add(102, "USER_INPUT", "append");
     expect(page().history_id).toBe(first.history_id);
     expect(transcriptPage("agy-transcript", path, { before: first.cursor! })).toEqual(older);
     db.exec("DELETE FROM steps WHERE idx >= 4");
@@ -1985,11 +2605,20 @@ describe("managed conversation identity", () => {
 
   const save = (): void => { writeFileSync(recordFile, JSON.stringify(record), { mode: 0o600 }); };
   const message = (role: string, text: string): string => JSON.stringify({ type: "message", message: { role, content: [{ type: "text", text }] } });
+  const pictureBytes = (label: string): Buffer<ArrayBuffer> => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(label)]);
   const managedDeps: ManagedSessionDeps = {
     processIdentity: (pid) => observed?.pid === pid ? { ...observed } : null,
     gjcSession: async () => live,
     paneById: async () => pane,
   };
+
+  function attachmentRef(nativeRef: string): string {
+    const pin = record.file_identity as { dev: number; ino: number };
+    const binding = createHash("sha256").update(JSON.stringify([
+      record.harness, record.session_id, pin.dev, pin.ino, sessionFile,
+    ])).digest("hex");
+    return `managed-${nonce}-${record.generation}:${binding}:${nativeRef}`;
+  }
 
   function writeHarness(harness: "gjc" | "omo" | "codex" | "claude", entries: string[] = []): string {
     record.harness = harness;
@@ -2086,6 +2715,82 @@ describe("managed conversation identity", () => {
     expect(answer.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: "parent answer" });
   });
 
+  const questionEntry = (harness: "codex" | "omo", text: string): string => JSON.stringify(harness === "codex"
+    ? { type: "response_item", payload: { type: "function_call", name: "request_user_input_async", call_id: "call-managed", arguments: JSON.stringify({ questions: [{ title: text, options: ["First", "Second"] }] }) } }
+    : { type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "ask_user_question", id: "call-managed", arguments: { questions: [{ question: text, options: ["First", "Second"] }] } }] } });
+
+  it.each(["codex", "omo"] as const)("reads %s questions only from the exact pinned manager session and scopes its cache to the generation", async harness => {
+    writeHarness(harness, [questionEntry(harness, "manager question")]);
+    const decoy = join(root, "provider-child.jsonl");
+    writeFileSync(decoy, questionEntry(harness, "unauthorized question") + "\n");
+    pane.agent_session = { agent: "codex", kind: "path", source: "provider-child", value: decoy };
+    const first = await managedQuestionsForPane(pane, managedDeps);
+    expect(JSON.stringify(first)).toContain("manager question");
+    expect(JSON.stringify(first)).not.toContain("unauthorized question");
+    if (harness === "codex") expect(first.codex).toEqual([{ key: "call-managed:0", title: "manager question", options: ["First", "Second"] }]);
+    else expect(first.omo).toEqual([{ id: "call-managed", wait: true, args: { questions: [{ question: "manager question", options: ["First", "Second"] }] } }]);
+    const inode = statSync(sessionFile).ino;
+    record.generation = 2;
+    pane.tokens!.hm_managed_generation = "2";
+    writeHarness(harness, [questionEntry(harness, "changed question")]);
+    expect(statSync(sessionFile).ino).toBe(inode);
+    const next = await managedQuestionsForPane(pane, managedDeps);
+    expect(next.identity).not.toBe(first.identity);
+    expect(JSON.stringify(next)).toContain("changed question");
+    expect(JSON.stringify(next)).not.toContain("manager question");
+  });
+
+  it.each(["codex", "omo"] as const)("withholds %s questions after a file swap only during the content open", async harness => {
+    writeHarness(harness, [questionEntry(harness, "manager question")]);
+    const replacement = join(root, "replacement.jsonl"), held = join(root, "held.jsonl");
+    writeFileSync(replacement, questionEntry(harness, "unauthorized question") + "\n", { mode: 0o600 });
+    const open = fs.openSync;
+    let opens = 0, swapped = false;
+    const intercepted = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (String(path) === sessionFile && ++opens === 3) {
+        renameSync(sessionFile, held); renameSync(replacement, sessionFile);
+        try { return Reflect.apply(open, fs, [path, ...args]); }
+        finally { renameSync(sessionFile, replacement); renameSync(held, sessionFile); swapped = true; }
+      }
+      return Reflect.apply(open, fs, [path, ...args]);
+    }) as typeof fs.openSync);
+    try {
+      await expect(managedQuestionsForPane(pane, managedDeps)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
+      expect(swapped).toBe(true);
+    } finally { intercepted.mockRestore(); }
+    expect(JSON.stringify(await managedQuestionsForPane(pane, managedDeps))).toContain("manager question");
+  });
+
+  it.each(["codex", "omo"].flatMap(harness => ["ENOENT", "EACCES"].map(code => ({ harness: harness as "codex" | "omo", code }))))("keeps $harness question-content $code errors sanitized and typed", async ({ harness, code }) => {
+    writeHarness(harness, [questionEntry(harness, "manager question")]);
+    await managedQuestionsForPane(pane, managedDeps);
+    const open = fs.openSync;
+    let opens = 0;
+    const denied = spyOn(fs, "openSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (String(path) === sessionFile && ++opens === 3) throw Object.assign(new Error("private question evidence"), { code });
+      return Reflect.apply(open, fs, [path, ...args]);
+    }) as typeof fs.openSync);
+    try {
+      const failure = await managedQuestionsForPane(pane, managedDeps).catch(error => error);
+      expect(failure).toEqual(new GjcSdkLookupError("unavailable"));
+      expect(JSON.stringify(failure)).not.toContain("private question evidence");
+    } finally { denied.mockRestore(); }
+  });
+
+  it.each(["codex", "omo"].flatMap(harness => ["nonce", "generation", "workspace", "terminal", "cwd", "closed"].map(change => ({ harness: harness as "codex" | "omo", change }))))("withholds $harness questions when final pane ownership changes: $change", async ({ harness, change }) => {
+    writeHarness(harness, [questionEntry(harness, "manager question")]);
+    let reads = 0;
+    const deps: ManagedSessionDeps = { ...managedDeps, paneById: async () => {
+      if (++reads === 1) return structuredClone(pane);
+      if (change === "closed") return null;
+      return { ...pane, ...(change === "workspace" ? { workspace_id: "changed-workspace" } : {}),
+        ...(change === "terminal" ? { terminal_id: "changed-terminal" } : {}), ...(change === "cwd" ? { cwd: "/changed" } : {}),
+        tokens: { ...pane.tokens, ...(change === "nonce" ? { hm_managed_session: "f".repeat(32) } : {}), ...(change === "generation" ? { hm_managed_generation: "2" } : {}) } };
+    } };
+    await expect(managedQuestionsForPane(pane, deps)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "blocked_managed_identity_changed" });
+    expect(reads).toBe(2);
+  });
+
   it.each([300 * 1024, 1024 * 1024])("reads managed Codex history with a %i-byte session header", async (bytes) => {
     writeHarness("codex");
     const header = { type: "session_meta", payload: { id: sessionId, cwd: root, padding: "" } };
@@ -2162,9 +2867,12 @@ describe("managed conversation identity", () => {
     expect((await conversationForPane(pane, undefined, {}, managedDeps)).managed_session?.state).toBe("ready");
   });
 
-  it.each(["image", "tool"] as const)("never returns transient replacement %s bytes after authorization", async (kind) => {
+  it.each(["image", "tool-image", "tool"] as const)("never returns transient replacement %s bytes after authorization", async (kind) => {
+    const picture = (label: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data: pictureBytes(label).toString("base64") } });
     const entry = (label: string): string[] => [
-      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from(label).toString("base64") } }] } }),
+      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [picture(label)] } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "managed-image", name: "Read", input: { file_path: "fixture.png" } }] } }),
+      JSON.stringify({ type: "user", uuid: sessionId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "managed-image", content: [picture(label)] }] } }),
       JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "managed-tool", content: label }] } }),
     ];
     writeHarness("claude", entry("original bytes"));
@@ -2183,15 +2891,46 @@ describe("managed conversation identity", () => {
       try { return (open as (...args: unknown[]) => number)(path, flags, ...args); }
       finally { renameSync(sessionFile, replacement); renameSync(original, sessionFile); }
     }) as typeof fs.openSync);
-    const ref = `managed-${nonce}-1:${kind === "image" ? `${imageId}:0` : "managed-tool"}`;
+    const ref = attachmentRef(kind === "image" ? `${imageId}:0` : kind === "tool-image" ? `${sessionId}:0:0` : "managed-tool");
     try {
-      if (kind === "image") await expect(conversationImage(pane.pane_id, ref, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      if (kind !== "tool") await expect(conversationImage(pane.pane_id, ref, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
       else await expect(toolOutput(pane.pane_id, ref, undefined, undefined, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
       expect(swapped).toBe(true);
     } finally { spy.mockRestore(); }
-    if (kind === "image") expect((await conversationImage(pane.pane_id, ref, undefined, undefined, managedDeps))?.bytes).toEqual(Buffer.from("original bytes"));
+    if (kind !== "tool") expect((await conversationImage(pane.pane_id, ref, undefined, undefined, managedDeps))?.bytes).toEqual(pictureBytes("original bytes"));
     else expect(await toolOutput(pane.pane_id, ref, undefined, undefined, undefined, undefined, managedDeps)).toBe("original bytes");
     snapshot.mockRestore();
+  });
+
+  it.each(["ENOENT", "EACCES"])("preserves typed unavailable for a managed tool image stream %s failure", async code => {
+    const picture = { type: "image", source: { type: "base64", media_type: "image/png", data: pictureBytes("managed picture").toString("base64") } };
+    writeHarness("claude", [
+      JSON.stringify({ type: "user", message: { role: "user", content: "read the picture" } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "read-picture", name: "Read", input: { file_path: "fixture.png" } }] } }),
+      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "read-picture", content: [picture] }] } }),
+    ]);
+    const first = await conversationForPane(pane, undefined, {}, managedDeps);
+    const size = statSync(sessionFile).size;
+    const read = fs.readSync;
+    let failures = 0;
+    const denied = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+      if (args[1].byteLength === size) {
+        failures++;
+        throw Object.assign(new Error("private image stream details"), { code });
+      }
+      return Reflect.apply(read, fs, args);
+    }) as typeof fs.readSync);
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    const ref = attachmentRef(`${imageId}:0:0`);
+    try {
+      const failure = await conversationImage(pane.pane_id, ref, undefined, undefined, managedDeps).catch(error => error);
+      expect(failure).toEqual(new GjcSdkLookupError("unavailable"));
+      expect(JSON.stringify(failure)).not.toContain("private image stream details");
+      expect(failures).toBe(1);
+    } finally { denied.mockRestore(); snapshot.mockRestore(); }
+    const recovered = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(recovered.history_id).toBe(first.history_id);
+    expect(recovered.turns).toEqual(first.turns);
   });
 
   it("pins inherited Codex segment bytes against a transient swap during history chain discovery", async () => {
@@ -2228,12 +2967,12 @@ describe("managed conversation identity", () => {
       finally { renameSync(parent, replacement); renameSync(original, parent); }
     }) as typeof fs.openSync);
     try {
-      await expect(toolOutput(pane.pane_id, `managed-${nonce}-1:inherited`, undefined, undefined, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      await expect(toolOutput(pane.pane_id, attachmentRef("inherited"), undefined, undefined, undefined, undefined, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
       expect(swapped).toBe(true);
     } finally { spy.mockRestore(); snapshot.mockRestore(); }
     expect(await conversationForPane(pane, undefined, {}, managedDeps)).toMatchObject({ source: "codex-transcript" });
     const fresh = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
-    try { expect(await toolOutput(pane.pane_id, `managed-${nonce}-1:inherited`, undefined, undefined, undefined, undefined, managedDeps)).toBe("original inherited bytes"); }
+    try { expect(await toolOutput(pane.pane_id, attachmentRef("inherited"), undefined, undefined, undefined, undefined, managedDeps)).toBe("original inherited bytes"); }
     finally { fresh.mockRestore(); }
   });
 
@@ -2250,7 +2989,7 @@ describe("managed conversation identity", () => {
     writeFileSync(parent, kept, { mode: 0o600 });
     writeFileSync(sessionFile, line("session_meta", { id: sessionId, cwd: root, history_base: { thread_id: thread, end_ordinal_exclusive: 3, end_byte_offset: Buffer.byteLength(kept) } }));
     const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
-    const output = () => toolOutput(pane.pane_id, `managed-${nonce}-1:inherited`, undefined, undefined, undefined, undefined, managedDeps);
+    const output = () => toolOutput(pane.pane_id, attachmentRef("inherited"), undefined, undefined, undefined, undefined, managedDeps);
     try {
       expect(await output()).toBe("secured inherited bytes");
       chmodSync(parent, mode);
@@ -2399,13 +3138,13 @@ describe("managed conversation identity", () => {
     try {
       const answer = await conversationForPane(pane, undefined, {}, { ...managedDeps, paneById: undefined });
       expect(answer.managed_session).toMatchObject({ state: "ready", id: nonce, generation: 1 });
-      expect(snapshot).toHaveBeenCalledTimes(1);
+      expect(snapshot).toHaveBeenCalledTimes(2);
     } finally { snapshot.mockRestore(); }
   });
 
   it.each(["nonce", "generation", "removed", "closed"] as const)("rejects a live pane %s change even while the former managed record stays ready", async (change) => {
     const entries = [
-      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from("old image").toString("base64") } }] } }),
+      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: pictureBytes("old image").toString("base64") } }] } }),
       JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "same-tool", name: "Bash", input: {} }] } }),
       JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "same-tool", content: "old output" }] } }),
     ];
@@ -2424,9 +3163,9 @@ describe("managed conversation identity", () => {
         name: "ConversationUnavailable", message: "blocked_managed_identity_changed",
       });
       snapshot.mockResolvedValueOnce({ panes: [pane] } as SessionSnapshot);
-      expect(await conversationImage(pane.pane_id, `managed-${nonce}-1:${imageId}:0`, undefined, undefined, deps)).toBeNull();
+      expect(await conversationImage(pane.pane_id, attachmentRef(`${imageId}:0`), undefined, undefined, deps)).toBeNull();
       snapshot.mockResolvedValueOnce({ panes: [pane] } as SessionSnapshot);
-      expect(await toolOutput(pane.pane_id, `managed-${nonce}-1:same-tool`, undefined, undefined, undefined, undefined, deps)).toBeNull();
+      expect(await toolOutput(pane.pane_id, attachmentRef("same-tool"), undefined, undefined, undefined, undefined, deps)).toBeNull();
       expect(record.state).toBe("ready");
       expect(record.generation).toBe(1);
     } finally { snapshot.mockRestore(); }
@@ -2438,8 +3177,77 @@ describe("managed conversation identity", () => {
     await expect(conversationForPane(pane, undefined, {}, deps)).rejects.toEqual(new GjcSdkLookupError("unavailable"));
   });
 
+  it.each(["image", "tool output"])("withholds %s when ownership changes after the final managed proof", async asset => {
+    writeHarness("claude", [
+      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: pictureBytes("old image").toString("base64") } }] } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "same-tool", name: "Bash", input: {} }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "same-tool", content: "old output" }] } }),
+    ]);
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    let reads = 0;
+    const deps: ManagedSessionDeps = { ...managedDeps, paneById: async () => ++reads === 1 ? structuredClone(pane)
+      : { ...pane, tokens: { ...pane.tokens, hm_managed_generation: "2" } } };
+    try {
+      const result = asset === "image"
+        ? await conversationImage(pane.pane_id, attachmentRef(`${imageId}:0`), undefined, undefined, deps)
+        : await toolOutput(pane.pane_id, attachmentRef("same-tool"), undefined, undefined, undefined, undefined, deps);
+      expect(result).toBeNull();
+      expect(reads).toBe(2);
+    } finally { snapshot.mockRestore(); }
+  });
+
+  it.each(["session", "inode", "path"] as const)("rejects retained attachment refs after a same-generation %s change", async change => {
+    const output = "managed fixture output".repeat(300);
+    writeHarness("claude", [
+      JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: pictureBytes("managed fixture image").toString("base64") } }] } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "same-tool", name: "Bash", input: {} }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "same-tool", content: output }] } }),
+    ]);
+    const refs = async () => {
+      const answer = await conversationForPane(pane, undefined, {}, managedDeps);
+      const parts = answer.turns.flatMap(turn => turn.parts);
+      const image = parts.find(part => part.kind === "image");
+      const tool = parts.find(part => part.kind === "tool");
+      if (image?.kind !== "image" || tool?.kind !== "tool" || !tool.output_ref) throw new Error("missing managed refs");
+      return { image: image.ref, tool: tool.output_ref };
+    };
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    try {
+      const old = await refs();
+      const original = statSync(sessionFile);
+      if (change === "session") {
+        const nextSession = "00000000-0000-4000-8000-000000000002";
+        writeFileSync(sessionFile, readFileSync(sessionFile, "utf8").replace(sessionId, nextSession));
+        record.session_id = nextSession;
+        expect(statSync(sessionFile).ino).toBe(original.ino);
+      } else if (change === "inode") {
+        const text = readFileSync(sessionFile);
+        renameSync(sessionFile, join(root, "held-original.jsonl"));
+        writeFileSync(sessionFile, text, { mode: 0o600 });
+        const current = statSync(sessionFile);
+        expect(current.ino).not.toBe(original.ino);
+        record.file_identity = { dev: current.dev, ino: current.ino };
+      } else {
+        const nextPath = join(root, "claude", "projects", "moved.jsonl");
+        renameSync(sessionFile, nextPath);
+        sessionFile = nextPath;
+        record.session_file = nextPath;
+        expect(statSync(sessionFile).ino).toBe(original.ino);
+      }
+      save();
+      expect(record.generation).toBe(1);
+      expect(await toolOutput(pane.pane_id, old.tool, undefined, undefined, undefined, undefined, managedDeps)).toBeNull();
+      expect(await conversationImage(pane.pane_id, old.image, undefined, undefined, managedDeps)).toBeNull();
+      const fresh = await refs();
+      expect(fresh.tool).not.toBe(old.tool);
+      expect(fresh.image).not.toBe(old.image);
+      expect(await toolOutput(pane.pane_id, fresh.tool, undefined, undefined, undefined, undefined, managedDeps)).toBe(output);
+      expect((await conversationImage(pane.pane_id, fresh.image, undefined, undefined, managedDeps))?.bytes).toEqual(pictureBytes("managed fixture image"));
+    } finally { snapshot.mockRestore(); }
+  });
+
   it("uses the managed Claude record for prompt attachments and tool output", async () => {
-    const image = Buffer.from("managed image bytes").toString("base64");
+    const image = pictureBytes("managed image bytes").toString("base64");
     const output = "exact managed tool output".repeat(300);
     const entries = [
       JSON.stringify({ type: "user", uuid: imageId, message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: image } }] } }),
@@ -2458,11 +3266,11 @@ describe("managed conversation identity", () => {
       if (tool?.kind !== "tool" || imagePart?.kind !== "image") throw new Error("missing managed auxiliary refs");
       const toolRef = tool.output_ref!;
       const imageRef = imagePart.ref;
-      expect(toolRef).toBe(`managed-${nonce}-1:managed-tool`);
-      expect(imageRef).toBe(`managed-${nonce}-1:${imageId}:0`);
+      expect(toolRef).toBe(attachmentRef("managed-tool"));
+      expect(imageRef).toBe(attachmentRef(`${imageId}:0`));
       expect(await toolOutput(pane.pane_id, toolRef, undefined, undefined, undefined, undefined, managedDeps)).toBe(output);
       const attachment = await conversationImage(pane.pane_id, imageRef, undefined, undefined, managedDeps);
-      expect(attachment?.bytes).toEqual(Buffer.from("managed image bytes"));
+      expect(attachment?.bytes).toEqual(pictureBytes("managed image bytes"));
       expect(await toolOutput(pane.pane_id, "managed-tool", undefined, undefined, undefined, undefined, managedDeps)).toBeNull();
       expect(await conversationImage(pane.pane_id, `${imageId}:0`, undefined, undefined, managedDeps)).toBeNull();
       expect((await conversationForPane(pane, undefined, {}, managedDeps)).turns).toEqual(first.turns);
@@ -2475,8 +3283,8 @@ describe("managed conversation identity", () => {
       expect(await conversationImage(pane.pane_id, imageRef, undefined, undefined, managedDeps)).toBeNull();
       const second = await conversationForPane(pane, undefined, {}, managedDeps);
       expect(second.history_id).not.toBe(first.history_id);
-      expect(await toolOutput(pane.pane_id, `managed-${nonce}-2:managed-tool`, undefined, undefined, undefined, undefined, managedDeps)).toBe(output);
-      expect((await conversationImage(pane.pane_id, `managed-${nonce}-2:${imageId}:0`, undefined, undefined, managedDeps))?.bytes).toEqual(Buffer.from("managed image bytes"));
+      expect(await toolOutput(pane.pane_id, attachmentRef("managed-tool"), undefined, undefined, undefined, undefined, managedDeps)).toBe(output);
+      expect((await conversationImage(pane.pane_id, attachmentRef(`${imageId}:0`), undefined, undefined, managedDeps))?.bytes).toEqual(pictureBytes("managed image bytes"));
       expect(nativeLookupCalls).toBe(0);
     } finally {
       snapshot.mockRestore();

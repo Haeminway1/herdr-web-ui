@@ -1,7 +1,7 @@
 import type { DialogReader } from "./registry.ts";
 import { type InteractivePrompt } from "../../shared/protocol.ts";
 import { createHash } from "node:crypto";
-import { ANSI_RE, type AnswerStep, KEY, type MenuRow, NUMBERED_OPTION_RE, type NumberedRow, type ParsedPrompt, SELECTED_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parseNumberedRows, publicPrompt, sequentialRows, parsedByPublicPrompt } from "./shared.ts";
+import { ANSI_RE, type AnswerStep, KEY, type MenuRow, NUMBERED_OPTION_RE, type NumberedRow, type ParsedPrompt, SELECTED_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parseNumberedRows, publicPrompt, sequentialRows } from "./shared.ts";
 
 /**
  * The last resort, for a pane herdr reports blocked that none of the readers above know (a
@@ -27,6 +27,9 @@ const ARROWS_RE = /[↑↓]|\barrow keys\b/i;
 const MENU_HINT_RE = /\b(?:select|choose|pick|confirm|navigate|move|esc|cancel)\b|[↑↓↵⏎]|\b(?:enter|type)\s+(?:(?:a|an|the)\s+)?number\b|\b\d\s*[-–]\s*\d\b/i;
 
 const GJC_SELECT_HINT_RE = /^(?:\[↑↓ to navigate, enter to select, esc to (?:cancel|go back)\]|up\/down navigate\s+enter select(?:\s+←\/→ question)?\s+esc cancel|↑\/↓ select\s+enter(?:\s+←\/→ question)?\s+esc\s+PgUp\/PgDn\/Ctrl\+u\/d: question · Wheel: transcript)$/i;
+
+/** GJC also uses the Nerd Font chevron for its active question row. */
+const GJC_SELECTED_RE = /^[❯›>]\s*/;
 
 /** an input field waiting at a line's end ("Password:", "Choice: 2") */
 const INPUT_FIELD_RE = /:\s*\S{0,3}$/;
@@ -187,7 +190,7 @@ function screenCard(lines: string[], shown: number[], steady: SteadyReader, pars
   const screen = shown.map((index) => {
     const line = cleanLine(lines[index]!);
     // GJC moves its cursor within the same menu; the selectedIndex is checked separately on reread.
-    return steady.read(cursorRows?.has(index) ? line.replace(SELECTED_RE, "") : line);
+    return steady.read(cursorRows?.has(index) ? line.replace(GJC_SELECTED_RE, "") : line);
   }).join("\n");
   parsed.id = createHash("sha256").update(JSON.stringify({ card: parsed.id, screen, ...(steady.working === null ? {} : { working: steady.working }) })).digest("hex").slice(0, 12);
   return publicPrompt(parsed);
@@ -260,8 +263,8 @@ function fallbackGjcSelectionMenu(agent: string, lines: string[], shown: number[
   const rows: MenuRow[] = [];
   for (let index = start; index < end; index += 1) {
     const text = cleanLine(lines[index]!);
-    const selected = SELECTED_RE.test(text);
-    const label = normalizeText(text.replace(SELECTED_RE, ""));
+    const selected = GJC_SELECTED_RE.test(text);
+    const label = normalizeText(text.replace(GJC_SELECTED_RE, ""));
     // A windowed/truncated list is not a complete set of choices. Keep its manual keys.
     if (!label || /^\(\d+\/\d+\)$/.test(label) || /…|\.\.\./.test(label)) return null;
     rows.push({ label, selected, checked: false, lineIndex: index });
@@ -271,29 +274,13 @@ function fallbackGjcSelectionMenu(agent: string, lines: string[], shown: number[
   return { start, rows, selectedIndex };
 }
 
+/**
+ * The fallback cards' answer behaviour, found by their responder when one is answered. They read no
+ * screen here: parseFallbackPrompt draws a fallback card only once herdr reports the pane blocked
+ * and no reader knows its screen (prompt.ts).
+ */
 export const readers: readonly DialogReader[] = [
-  {
-    id: "fallback-menu", agents: ["*"], priority: 1000,
-    reread: "none", list: "none",
-    parse: (screen, ctx) => {
-      const parsed = ctx.fallback ? parsedByPublicPrompt.get(parseFallbackPrompt(ctx.agent, screen)) ?? null : null;
-      return parsed?.responder === "fallback-menu" ? parsed : null;
-    },
-  },
-  {
-    id: "fallback-gjc-menu", agents: ["*"], priority: 1000,
-    reread: "before-commit", list: "none",
-    parse: (screen, ctx) => {
-      const parsed = ctx.fallback ? parsedByPublicPrompt.get(parseFallbackPrompt(ctx.agent, screen)) ?? null : null;
-      return parsed?.responder === "fallback-gjc-menu" ? parsed : null;
-    },
-  },
-  {
-    id: "fallback-keys", agents: ["*"], priority: 1000,
-    reread: "none", list: "none",
-    parse: (screen, ctx) => {
-      const parsed = ctx.fallback ? parsedByPublicPrompt.get(parseFallbackPrompt(ctx.agent, screen)) ?? null : null;
-      return parsed?.responder === "fallback-keys" ? parsed : null;
-    },
-  },
+  { id: "fallback-menu", agents: ["*"], priority: 1000, reread: "none", list: "none", parse: () => null },
+  { id: "fallback-gjc-menu", agents: ["*"], priority: 1000, reread: "before-commit", list: "none", parse: () => null },
+  { id: "fallback-keys", agents: ["*"], priority: 1000, reread: "none", list: "none", parse: () => null },
 ];
