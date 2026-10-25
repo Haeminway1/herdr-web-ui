@@ -1,11 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InteractivePrompt } from "../shared/protocol.ts";
+import * as conversation from "./conversation.ts";
 
-import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, modelListWaits, openOmoAsks, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, openOmoAsks, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
+import { registry } from "./dialogs/registry.ts";
 
 const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
 // Real omo-ai 5.1.30 pane.read captures at 120 and 45 columns, with the recorded open calls.
@@ -2516,6 +2518,36 @@ Step 4: Credential source
     }
   });
 
+  test("reads GJC Nerd Font question cursors without exposing transcript summaries as choices", () => {
+    const dialog = `──────────────
+
+Use read-only checks.
+
+Which approach?
+
+──────────────
+│ Inspect now (Recommended) │
+│  Clarify scope first       │
+│  Other (type your own)     │
+──────────────
+
+ ↑/↓ select  enter  esc  PgUp/PgDn/Ctrl+u/d: question · Wheel: transcript
+
+──────────────
+`;
+    const screen = `Earlier question summary\n├─  Inspect now\n└─  Clarify scope first\n\nWorking…\n${dialog}`;
+    const prompt = parseFallbackPrompt("gjc", screen);
+    expect(labels(prompt)).toEqual(["Inspect now (Recommended)", "Clarify scope first", "Other (type your own)", "Esc"]);
+    expect(prompt.question).toBe("Which approach?");
+    expect(prompt.body).toBe("Use read-only checks.");
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+    const moved = parseFallbackPrompt("gjc", screen.replace("│ Inspect", "│  Inspect").replace("│  Clarify", "│ Clarify"));
+    expect(moved.id).toBe(prompt.id);
+    expect(answerKeys(moved, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
+    expect(labels(parseFallbackPrompt("claude", screen))).toEqual(["↑", "↓", "Enter", "Esc"]);
+    expect(labels(parseFallbackPrompt("gjc", screen.replace("│ Inspect", "│  Inspect")))).toEqual(["↑", "↓", "Enter", "Esc"]);
+  });
+
   test("does not infer GJC choices without the exact footer, a selected row, or the GJC agent", () => {
     const footer = "[↑↓ to navigate, Enter to select, Esc to cancel]";
     const generic = ["↑", "↓", "Enter", "Esc"];
@@ -2978,6 +3010,22 @@ describe("pi's dialogs", () => {
     expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
   });
 
+  // As OmO 5.1.40 drew its init-deep advisor: pi's widget, Escape named `esc`, a timeout ticking in the title
+  test("reads OmO's select, which names Escape esc and counts down in its title", () => {
+    const omo = (seconds: number, title = "Init-deep") => piScreen(` ${title} (${seconds}s)\n\n → Run now\n   Skip this time\n   Never in this project\n   Never anywhere\n ↑↓ navigate  enter select  esc/ctrl+c cancel`);
+    const prompt = parseInteractivePrompt("pi", omo(9))!;
+    expect(prompt.fallback).toBeUndefined();
+    expect(prompt.question).toBe("Init-deep (9s)");
+    expect(prompt.options.map((option) => option.label)).toEqual(["Run now", "Skip this time", "Never in this project", "Never anywhere"]);
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+    // a tick of the countdown is the same card, so an answer tapped after it still lands
+    expect(parseInteractivePrompt("pi", omo(8))!.id).toBe(prompt.id);
+    // only the count is left out: another title is another question
+    expect(parseInteractivePrompt("pi", omo(9, "Reindex"))!.id).not.toBe(prompt.id);
+    const input = parseInteractivePrompt("pi", piScreen(" Branch name?\n\n>\n enter submit  esc/ctrl+c cancel"))!;
+    expect(input.custom_option_index).toBe(0);
+  });
+
   test("reads a confirm as an approval, and declines it by pressing No", () => {
     const prompt = parseInteractivePrompt("pi", piScreen(" Clear session?\n All messages will be lost.\n\n → Yes\n   No\n" + MENU_HINT))!;
     expect(prompt.kind).toBe("approval");
@@ -2987,6 +3035,37 @@ describe("pi's dialogs", () => {
     // measured on pi: pressing "No" answers the confirmation false, where Escape would leave
     // it unanswered, so the card's decline presses the row it shows
     expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  // senpi asks a confirm as a select titled `${title}\n${message}`, so a timeout ticks at the end of the message
+  test("keeps a timed confirm's card through its countdown, which ticks after its message", () => {
+    const confirm = (seconds: number, message = "All messages will be lost.") => piScreen(` Clear session?\n ${message} (${seconds}s)\n\n → Yes\n   No\n ↑↓ navigate  enter select  esc/ctrl+c cancel`);
+    const prompt = parseInteractivePrompt("pi", confirm(9))!;
+    expect(prompt.kind).toBe("approval");
+    expect(prompt.question).toBe("All messages will be lost. (9s)");
+    // a Yes tapped after a tick answers the same card
+    expect(parseInteractivePrompt("pi", confirm(8))!.id).toBe(prompt.id);
+    expect(parseInteractivePrompt("pi", confirm(9, "Only this tab is cleared."))!.id).not.toBe(prompt.id);
+    // a narrow pane can wrap `(10s)` onto a line of its own where `(9s)` still fits
+    const wrappedCount = piScreen(" Clear session?\n All messages will be lost.\n (10s)\n\n \u2192 Yes\n   No\n \u2191\u2193 navigate  enter select  esc/ctrl+c cancel");
+    expect(parseInteractivePrompt("pi", wrappedCount)!.id).toBe(prompt.id);
+  });
+
+  // senpi's text input counts down in its title
+  test("keeps a timed input's card through its countdown, which ticks after its title", () => {
+    const input = (seconds: number, title = "Branch name?") => piScreen(` ${title} (${seconds}s)\n\n>\n enter submit  esc/ctrl+c cancel`);
+    const prompt = parseInteractivePrompt("pi", input(9))!;
+    expect(prompt.custom_option_index).toBe(0);
+    expect(prompt.question).toBe("Branch name? (9s)");
+    expect(parseInteractivePrompt("pi", input(8))!.id).toBe(prompt.id);
+    expect(parseInteractivePrompt("pi", input(9, "Tag name?"))!.id).not.toBe(prompt.id);
+    // as senpi wraps a title at 46 columns: the count alone on the last line, as the count is
+    const narrow = (seconds: number, grace = 30) => piScreen(` Restart with a grace period of (${grace}s)\n before deploying? (${seconds}s)\n\n>\n enter submit  esc/ctrl+c cancel`);
+    const alone = (seconds: number) => piScreen(` What should the new release branch be named?\n (${seconds}s)\n\n>\n enter submit  esc/ctrl+c cancel`);
+    expect(parseInteractivePrompt("pi", alone(8))!.id).toBe(parseInteractivePrompt("pi", alone(9))!.id);
+    expect(parseInteractivePrompt("pi", narrow(8))!.id).toBe(parseInteractivePrompt("pi", narrow(9))!.id);
+    // a count on an earlier line is the question's own words
+    expect(parseInteractivePrompt("pi", narrow(9, 60))!.id).not.toBe(parseInteractivePrompt("pi", narrow(9))!.id);
   });
 
   test("lets the chat type an answer to a dialog that wants text", () => {
@@ -3398,16 +3477,16 @@ ${"─".repeat(120)}
     // the list's text left above later output takes no key any more
     expect(parseInteractivePrompt("claude", `${claudeModelList(1)}Some later output\nand more\n`)).toBeNull();
     // nor does it hold the screen for a message that waits to be typed, while an open list does, wrapped or not
-    expect(modelListWaits("claude", `${claudeModelList(1)}Some later output\nand more\n`)).toBe(false);
-    expect(modelListWaits("claude", claudeModelList(1))).toBe(true);
+    expect(registry.waits("claude", `${claudeModelList(1)}Some later output\nand more\n`)).toBe(false);
+    expect(registry.waits("claude", claudeModelList(1))).toBe(true);
     const wrapped = claudeModelList(1).replace(CLAUDE_MODEL_HINT, "  Enter to set as\n  default · s to use\n  this session\n  only · Esc to\n  cancel");
-    expect(modelListWaits("claude", wrapped)).toBe(true);
+    expect(registry.waits("claude", wrapped)).toBe(true);
     // Claude's own footer under the open list, the session's rule and its task list, is no later output: also under a wrapped hint
-    expect(modelListWaits("claude", `${claudeModelList(1)}──────────── Session name ─\n`)).toBe(true);
-    expect(modelListWaits("claude", `${wrapped}──────────── Session name ─\n`)).toBe(true);
-    expect(modelListWaits("claude", `${wrapped}──────────── Session name ─\n  3 tasks (0 done, 1 in progress, 2 open)\n  ◼ 구현\n    Running tests…\n  ◻ 검증\n  ◻ 정리\n`)).toBe(true);
+    expect(registry.waits("claude", `${claudeModelList(1)}──────────── Session name ─\n`)).toBe(true);
+    expect(registry.waits("claude", `${wrapped}──────────── Session name ─\n`)).toBe(true);
+    expect(registry.waits("claude", `${wrapped}──────────── Session name ─\n  3 tasks (0 done, 1 in progress, 2 open)\n  ◼ 구현\n    Running tests…\n  ◻ 검증\n  ◻ 정리\n`)).toBe(true);
     // the same footer under an answered list's hint and what came after it holds nothing
-    expect(modelListWaits("claude", `${wrapped}⏺ Kept the model.\n──────────── Session name ─\n`)).toBe(false);
+    expect(registry.waits("claude", `${wrapped}⏺ Kept the model.\n──────────── Session name ─\n`)).toBe(false);
     // a list that takes Enter alone would save the pick as the default: not this card's to press
     expect(parseInteractivePrompt("claude", claudeModelList(1, 0, 10, "  Enter to set as default · Esc to cancel"))).toBeNull();
     expect(parseInteractivePrompt("claude", claudeModelList(1, 0, 10, "  Enter to confirm · Esc to cancel"))).toBeNull();
@@ -3576,15 +3655,15 @@ ${rule}
     expect(parseInteractivePrompt("claude", CLAUDE_EFFORT_SET)).toBeNull();
     // the slider's text left above later output takes no key any more, and holds no message back
     expect(parseInteractivePrompt("claude", `${claudeEffort(2)}Some later output\nand more\n`)).toBeNull();
-    expect(modelListWaits("claude", `${claudeEffort(2)}Some later output\nand more\n`)).toBe(false);
-    expect(modelListWaits("claude", claudeEffort(2))).toBe(true);
-    expect(modelListWaits("claude", CLAUDE_EFFORT_SET)).toBe(false);
+    expect(registry.waits("claude", `${claudeEffort(2)}Some later output\nand more\n`)).toBe(false);
+    expect(registry.waits("claude", claudeEffort(2))).toBe(true);
+    expect(registry.waits("claude", CLAUDE_EFFORT_SET)).toBe(false);
     // a slider that takes Enter alone would save the level as the default: not this card's to press
     expect(parseInteractivePrompt("claude", claudeEffort(2, "  ←/→ to adjust · Enter to confirm · Esc to cancel"))).toBeNull();
     // level names a narrow pane wrapped: no card, and the slider still holds the screen
     const wrapped = claudeEffort(2).replace("low     medium     high     xhigh      max      Tab to toggle", "low     medium     high\n  xhigh      max");
     expect(parseInteractivePrompt("claude", wrapped)).toBeNull();
-    expect(modelListWaits("claude", wrapped)).toBe(true);
+    expect(registry.waits("claude", wrapped)).toBe(true);
     // ▲ between two levels stands over neither
     const between = claudeEffort(2).replace(`${"─".repeat(20)}▲${"─".repeat(21)}`, `${"─".repeat(15)}▲${"─".repeat(26)}`);
     expect(between).not.toBe(claudeEffort(2));
@@ -3768,6 +3847,7 @@ describe("an answer and the menu it was made for", () => {
     managed?: { id: string | null; harness: "gjc" | "omo" | "codex" | "claude" | null; generation: number | null; state: "ready" | "identity_pending" | "blocked"; reason: string | null; session_id: string | null };
     /** the pane's folder and its Codex rollout, for a prompt named by the agent's own call */
     cwd?: string; rollout?: string;
+    workspace?: string; terminal?: string;
     /** how long herdr takes over each screen read from now on */
     readDelay?: number;
     onRead?: () => void;
@@ -3804,7 +3884,7 @@ describe("an answer and the menu it was made for", () => {
         const answer = (result: unknown) => socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
         const snapshotDelay = request.method === "session.snapshot" ? pane.nextSnapshotDelay : undefined;
         if (snapshotDelay !== undefined) pane.nextSnapshotDelay = undefined;
-        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.managed ? { managed_session: pane.managed } : {}), ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}) })), layouts: [] } }), snapshotDelay ?? 0);
+        if (request.method === "session.snapshot") return void setTimeout(() => answer({ snapshot: { panes: Array.from({ length: 1 + (pane.more ?? 0) }, (_, index) => ({ pane_id: `p_${index + 1}`, workspace_id: pane.workspace, terminal_id: pane.terminal, agent: pane.agent, agent_status: pane.status, cwd: pane.cwd, ...(pane.managed ? { managed_session: pane.managed } : {}), ...(pane.omo ? { agent_session: { agent: "omo", kind: "path", value: pane.omo.path } } : {}) })), layouts: [] } }), snapshotDelay ?? 0);
         if (request.method === "pane.read") {
           pane.onRead?.();
           const once = pane.nextRead;
@@ -3884,6 +3964,42 @@ describe("an answer and the menu it was made for", () => {
     });
   });
 
+  test.each(["generation", "nonce", "session", "workspace", "terminal", "cwd"] as const)("withholds a managed GET card when %s changes during its screen read", async change => {
+    await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
+      pane.managed = readyManaged();
+      pane.onRead = () => {
+        if (change === "generation") pane.managed = { ...pane.managed!, generation: 2 };
+        if (change === "nonce") pane.managed = { ...pane.managed!, id: "b".repeat(32) };
+        if (change === "session") pane.managed = { ...pane.managed!, session_id: "another-session" };
+        if (change === "workspace") pane.workspace = "another-workspace";
+        if (change === "terminal") pane.terminal = "another-terminal";
+        if (change === "cwd") pane.cwd = "/another-directory";
+      };
+      const url = new URL("http://127.0.0.1/api/pane/prompt?pane_id=p_1");
+      const response = (await handlePromptRequest(new Request(url), url))!;
+      expect(response.status).toBe(409);
+      const body = await response.json() as { error?: { code: string }; prompt?: InteractivePrompt };
+      expect(body.error?.code).toBe("prompt_changed");
+      expect(body.prompt).toBeUndefined();
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test("a managed Codex collapsed queue uses the protected question reader, never agent.get discovery", async () => {
+    const screen = "• WAITING\n• Queued follow-up inputs\n  ? 1 question\n    alt+↑ to answer\n› Ask Codex to do anything\n";
+    const reader = spyOn(conversation, "managedQuestionsForPane").mockResolvedValue({ identity: "managed-generation-one", codex: [{ key: "manager-call:0", title: "Verified manager question?", options: ["First", "Second"] }], omo: [] });
+    try {
+      await withPane("codex", "working", screen, async pane => {
+        pane.managed = { ...readyManaged(), harness: "codex" };
+        pane.cwd = pane.root;
+        pane.agentUnanswered = true;
+        expect(await card()).toMatchObject({ question: "Verified manager question?", queued: "collapsed", options: [{ label: "First" }, { label: "Second" }] });
+        expect(reader).toHaveBeenCalledTimes(1);
+        expect(pane.sent).toEqual([]);
+      });
+    } finally { reader.mockRestore(); }
+  });
+
   test("stops later managed answer keys when the generation changes after menu reads", async () => {
     await withPane("claude", "blocked", claudeBackgroundApproval(0), async (pane) => {
       pane.managed = readyManaged();
@@ -3923,6 +4039,19 @@ ${omoRule}
 (😺 OmO Native)
 `;
   const omoCall = (id: string, options: { label: string }[] | undefined = [{ label: "First" }, { label: "Second" }]) => JSON.stringify({ type: "message", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id, name: "ask_user_question", arguments: { waitForAnswer: false, questions: [{ header: "QA", question: "Which one?", ...(options ? { options } : {}) }] } }] } }) + "\n";
+
+  test("a managed OMO form enriches questions only through the protected manager reader", async () => {
+    const reader = spyOn(conversation, "managedQuestionsForPane").mockResolvedValue({ identity: "managed-omo-one", codex: [], omo: [{ id: "manager-call", wait: false, args: { questions: [{ header: "QA", question: "Which one?", options: [{ label: "First" }, { label: "Second" }] }] } }] });
+    try {
+      await withPane("omo", "blocked", omoWidget(), async pane => {
+        pane.managed = { ...readyManaged(), harness: "omo" };
+        pane.cwd = pane.root;
+        expect(await card()).toMatchObject({ question: "Which one?", options: [{ label: "First" }, { label: "Second" }] });
+        expect(reader).toHaveBeenCalledTimes(1);
+        expect(pane.sent).toEqual([]);
+      });
+    } finally { reader.mockRestore(); }
+  });
 
   // These route fixtures use /proc to read an inert child's isolated agent directory.
   async function withOmo(run: (pane: Pane) => Promise<void>, options?: { label: string }[]): Promise<void> {
@@ -4693,6 +4822,19 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
   });
 
+  /** omp's session-only model picker, a rule between its recent model and the rest, which ↑/↓ step over */
+  const ompPicker = (at: number) => {
+    const box = (text: string) => `│ ${text.padEnd(86)} │`;
+    const row = (index: number, name: string) => box(`${at === index ? "❯" : " "} ${name}`);
+    return [
+      `\n╭─ Switch Model ${"─".repeat(73)}╮`, box(" Session-only switch — role models stay unchanged"), box(" 🔍 >"), box(""),
+      row(0, "litellm/claude-opus-5-5 ●          1m ◫  $4/20"), box(`  ${"─".repeat(80)}`),
+      row(1, "litellm/gpt-6-sol                1.1m ◫  $2/10"), row(2, "litellm/gpt-5.6-sol              1.1m ◫  $4/20"), box(""),
+      box("  GPT 6 Sol (LiteLLM) · 1.1m ctx · 128k out"), box(""),
+      box("↑/↓ models · ⏎ use for this session · type to search · @ quick roles · ⎋ close"), `╰${"─".repeat(88)}╯\n`,
+    ].join("\n");
+  };
+
   // An ordinary answer that needs a move, on a screen drawn again the way each agent draws it
   // with the cursor on another row: every reader must still know its own menu there.
   describe("moves to a row that is not the cursor's and answers it", () => {
@@ -4747,6 +4889,11 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       {
         name: "OmO's model list", agent: "omo", status: "idle", rows: 3, choice: { option_index: 2 }, sent: ["down", "down", "enter"],
         draw: (at) => `Only showing models from configured providers. Use /login to add providers.\nenter select  ctrl+s select as default  ctrl+f favorite\n>\n${["claude-opus-4-8 [anthropic] ✓", "claude-fable-5 [anthropic]", "gpt-5.5 [chatgpt-subscription]"].map((row, index) => `${at === index ? "→" : " "}   ${row}`).join("\n")}\n  Model Name: Claude Opus 4.8\n${"─".repeat(40)}\n/tmp/app • $0.000 (sub) • 0/1M (0.0%) (auto)  (anthropic) claude-opus-4-8 • effort medium\n(😺 OmO Native)\n`,
+      },
+      {
+        name: "omp's model picker, over the rule between its recent model and the rest", agent: "omp", status: "idle", rows: 3, choice: { option_index: 2 },
+        sent: ["down", "down", "enter"],
+        draw: (at) => ompPicker(at),
       },
       {
         // the last row drawn carries the cursor where it carried `↓`, under another effort line
@@ -4847,6 +4994,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       { id: "claude-model", agent: "claude", move: "down", rereadMoves: true, draw: claudeModelList },
       { id: "claude-effort", agent: "claude", move: "right", rereadMoves: true, draw: claudeEffort },
       { id: "codex-model", agent: "codex", move: "down", rereadMoves: true, draw: codexModels },
+      { id: "omp-model", agent: "omp", move: "down", rereadMoves: true, draw: ompPicker },
     ];
     for (const fixture of cases) for (const during of ["first move", "next read", "commit read", "asking ended"]) {
       test(`${fixture.id} preserves parent navigation when cancelled during ${during}`, async () => {
@@ -4872,6 +5020,18 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         });
       });
     }
+  });
+
+  // a refusal waits out the answer's own 1.5 s for the picker to show the row
+  test("sends no further arrow into omp's input once its model picker closes under the moves", async () => {
+    await withPane("omp", "idle", ompPicker(0), async (pane) => {
+      const prompt = (await card())!;
+      // Esc in the terminal right after the first ↓: omp's input box takes ↑/↓ as its history
+      pane.onSent = (sent) => { if (sent === "down") pane.screen = "\n> \n"; };
+      const result = await answer(prompt.id, { option_index: 2 });
+      expect(pane.sent, "a closed picker must not receive the remaining arrows").toEqual(["down"]);
+      expect(result).toEqual({ status: 409, code: "prompt_changed" });
+    });
   });
 
   test("an interaction plan sends no commit when Claude's highlight moves past the requested model", async () => {
@@ -4905,6 +5065,24 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       expect(pane.sent).toEqual(["right"]);
     });
   }, 20_000);
+
+  test("sends no Esc to Claude's goal dialog once it shows another goal than the card's", async () => {
+    const goal = (name: string) => readFileSync(new URL("./fixtures/claude-goal-2.1.304-active-120.txt", import.meta.url), "utf8").replaceAll("hello.txt", name);
+    await withPane("claude", "idle", goal("hello.txt"), async (pane) => {
+      // the card's read, the answer's own read of the card, then its look before the key
+      let reads = 0;
+      pane.onRead = () => { reads += 1; if (reads === 3) pane.screen = goal("other.txt"); };
+      const prompt = (await card())!;
+      expect(prompt.title).toBe("Goal active");
+      expect(await answer(prompt.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
+    await withPane("claude", "idle", goal("hello.txt"), async (pane) => {
+      const prompt = (await card())!;
+      expect(await answer(prompt.id, { option_index: 0 })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["esc"]);
+    });
+  });
 
   // each refusal waits out the answer's own 1.5 s for the list to show the row
   test("types no s, and no further arrow, once Claude's model list is not the one that was tapped", async () => {
@@ -5150,13 +5328,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     for (const screen of unread) {
       expect(parseInteractivePrompt("claude", screen)).toBeNull();
       expect(parseFallbackPrompt("claude", screen).options.map((option) => option.label)).toContain("Enter");
-      expect(modelListWaits("claude", screen)).toBe(true);
+      expect(registry.waits("claude", screen)).toBe(true);
       await withPane("claude", "blocked", screen, async () => {
         expect(await card()).toBeNull();
       });
     }
     // the same hint above later output belongs to an answered slider
-    expect(modelListWaits("claude", `${unread[1]}Some later output\n`)).toBe(false);
+    expect(registry.waits("claude", `${unread[1]}Some later output\n`)).toBe(false);
   });
 
   test("a screen read that comes back after the wait authorises no key", async () => {
@@ -5819,23 +5997,23 @@ describe("Claude Code's model list under a hint wrapped anywhere", () => {
 
   test("holds the screen and reads the list with the hint split inside a word", () => {
     const split = list("  Enter to set as default · s to use this ses\n  sion only · Esc to cancel");
-    expect(modelListWaits("claude", split)).toBe(true);
-    expect(modelListWaits("claude", `${split}──────────── Session name ─\n`)).toBe(true);
+    expect(registry.waits("claude", split)).toBe(true);
+    expect(registry.waits("claude", `${split}──────────── Session name ─\n`)).toBe(true);
     expect(parseInteractivePrompt("claude", split)?.options.map((option) => option.label)).toEqual(CLAUDE_MODELS.slice(0, 10).map(([name]) => name));
     // the same list's text above later output still holds nothing
-    expect(modelListWaits("claude", `${split}Some later output\nand more\n`)).toBe(false);
+    expect(registry.waits("claude", `${split}Some later output\nand more\n`)).toBe(false);
   });
 
   test("holds the screen and reads the list with the hint over seven lines", () => {
     const tall = list("  Enter to\n  set as\n  default ·\n  s to use\n  this\n  session\n  only · Esc to cancel");
-    expect(modelListWaits("claude", tall)).toBe(true);
+    expect(registry.waits("claude", tall)).toBe(true);
     expect(parseInteractivePrompt("claude", tall)?.options).toHaveLength(10);
   });
 
   test("does not take the hint quoted in Claude's output for an open list", () => {
     const quoted = `${CLAUDE_MODEL_CLOSED}⏺ Example: Enter to set as default · s to use this session only · Esc to\n  cancel\n──────────── Summary ─\n`;
-    expect(modelListWaits("claude", quoted)).toBe(false);
-    expect(modelListWaits("claude", `⏺ Enter to set as default · s to use this session only · Esc to cancel\n`)).toBe(false);
+    expect(registry.waits("claude", quoted)).toBe(false);
+    expect(registry.waits("claude", `⏺ Enter to set as default · s to use this session only · Esc to cancel\n`)).toBe(false);
   });
 });
 
@@ -6037,5 +6215,80 @@ favorite
     const rule = wide.lastIndexOf("─");
     expect(parseInteractivePrompt("omo", `${wide.slice(0, wide.indexOf("Model Name"))}some other output\n${wide.slice(wide.indexOf("Model Name"))}`)).toBeNull();
     expect(rule).toBeGreaterThan(0);
+  });
+});
+
+// Captured from omp 18.11.1 running /switch in an isolated herdr session at 120 columns by 40: the
+// picker as it opens, after ↓ was pressed eight times, and after `sol` was typed and ↓ pressed
+// once; and as it opened from the chat's `/model` in a browser that left the pane 94 columns by
+// 18. Provider names and the pane's folder are renamed in the files.
+describe("omp's model picker", () => {
+  const capture = (name: string) => readFileSync(new URL(`./fixtures/omp-switch-18.11.1-${name}.txt`, import.meta.url), "utf8");
+  const wide = capture("wide");
+  const scrolled = capture("scrolled");
+  const filtered = capture("filtered");
+  const short = capture("short");
+  const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
+
+  test("reads the picker /switch opens, naming the model in use and the models under its window", () => {
+    const prompt = parseInteractivePrompt("omp", wide)!;
+    expect(prompt.kind).toBe("question");
+    expect(prompt.question).toBe("Select model for this session (currently litellm/claude-opus-5-5). More models are listed in the terminal.");
+    // the name alone: neither the mark on the model in use, its figures nor the scrollbar after them
+    expect(labels(prompt)).toEqual([
+      "litellm/claude-opus-5-5", "litellm/gpt-5.6-sol", "litellm/deepseek-v4-flash", "litellm/gpt-6.1-sol",
+      "litellm-anthropic/gemini-3.8-flash-high", "litellm/gpt-6-astra", "litellm/claude-opus-4-6-thinking",
+    ]);
+    expect(prompt.options.every((option) => option.description === null)).toBe(true);
+    expect(prompt.custom_option_index).toBeNull();
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  test("reads a window scrolled past the rule between recent models and the rest, from where the cursor stands", () => {
+    const prompt = parseInteractivePrompt("omp", scrolled)!;
+    // the model in use has scrolled out of the window
+    expect(prompt.question).toBe("Select model for this session. More models are listed in the terminal.");
+    expect(labels(prompt)).toEqual([
+      "litellm/gpt-6.1-sol", "litellm-anthropic/gemini-3.8-flash-high", "litellm/gpt-6-astra",
+      "litellm/claude-opus-4-6-thinking", "litellm/gpt-oss-120b", "litellm/gpt-oss-120b-medium",
+    ]);
+    // ↑/↓ step over the rule: one key per model
+    expect(answerKeys(prompt, { option_index: 3 })).toEqual([{ keys: ["up"] }, { keys: ["up"] }, { keys: ["enter"] }]);
+  });
+
+  test("reads what a search left, which fits the window", () => {
+    const prompt = parseInteractivePrompt("omp", filtered)!;
+    expect(prompt.question).toBe("Select model for this session");
+    expect(labels(prompt)).toEqual(["litellm/gpt-6.1-sol", "litellm/gpt-6-sol", "litellm/gpt-5.6-sol"]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
+  });
+
+  test("reads a short pane's five rows under a footer cut at its edge", () => {
+    expect(short).toContain("⌥P task …");
+    const prompt = parseInteractivePrompt("omp", short)!;
+    expect(prompt.question).toBe("Select model for this session (currently litellm/claude-opus-5-5). More models are listed in the terminal.");
+    expect(labels(prompt)).toEqual([
+      "litellm/claude-opus-5-5", "litellm/gpt-5.6-sol", "litellm/deepseek-v4-flash", "litellm/gpt-6.1-sol", "litellm-anthropic/gemini-3.8-flash-high",
+    ]);
+  });
+
+  test("says on a model the conversation overflows that omp compacts it first", () => {
+    const over = scrolled.replace("litellm/gpt-oss-120b   ", "litellm/gpt-oss-120b ⦸ context>131k");
+    expect(over).not.toBe(scrolled);
+    const prompt = parseInteractivePrompt("omp", over)!;
+    expect(prompt.options[4]).toEqual({ label: "litellm/gpt-oss-120b", description: "The conversation is over its 131k context: omp compacts it first" });
+  });
+
+  test("is gone once the picker is, and reads neither its quick roles nor its task models", () => {
+    // Esc: the picker leaves the screen, which ends in omp's input box again
+    expect(parseInteractivePrompt("omp", wide.slice(0, wide.indexOf("╭─ Switch Model")))).toBeNull();
+    // anything under it is not omp's picker, which is drawn over the bottom of the screen
+    expect(parseInteractivePrompt("omp", `${wide}some later output\n`)).toBeNull();
+    // a leading `@` lists quick roles, and Alt+P the model for task subagents: not the session's model
+    expect(parseInteractivePrompt("omp", wide.replace("Session-only switch — role models stay unchanged", "Quick role switch — applies its model and thinking for this session"))).toBeNull();
+    expect(parseInteractivePrompt("omp", wide.replace("╭─ Switch Model ─", "╭─ Switch Task Model ─"))).toBeNull();
+    expect(parseInteractivePrompt("omp", wide.replace("use for this session", "use for Task subagents"))).toBeNull();
+    // another agent's pane draws no such picker
+    expect(parseInteractivePrompt("pi", wide)).toBeNull();
   });
 });
