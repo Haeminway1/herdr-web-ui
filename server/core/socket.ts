@@ -11,7 +11,7 @@ import { OUTPUT_HARD_BYTES } from "../output-window.ts";
 import { type Client, connectionOf, presenceOf, send, type SocketData } from "./connections.ts";
 import { type AttachmentView, validGeometry } from "./terminals.ts";
 
-const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping"];
+const SERVER_FEATURES: ServerFeature[] = ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "take-over", "watch", "conversation-watch", "ping", "terminal-insert"];
 
 type Frame<K extends ClientMessage["type"]> = Extract<ClientMessage, { type: K }>;
 
@@ -101,7 +101,7 @@ export function createSocket({ clients, present, stopped, admit, setRole, watchP
       const snapshot = clientSnapshot();
       countVisit(snapshot);
       try {
-        send(client, { type: "snapshot", snapshot: await snapshot, features: SERVER_FEATURES });
+        send(client, { type: "snapshot", snapshot: await snapshot, features: SERVER_FEATURES, connection: client.data.connectionId });
       } catch (error) {
         const code = error instanceof HerdrError ? error.code : "snapshot_failed";
         send(client, { type: "error", code, message: error instanceof Error ? error.message : String(error) });
