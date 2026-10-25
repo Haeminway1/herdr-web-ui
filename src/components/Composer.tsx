@@ -379,7 +379,11 @@ export function Composer({
       return;
     }
     if (filledFrom.current === null) return;
-    if (textRef.current === filledFrom.current) {
+    // The terminal can stop reporting restored text as soon as a send starts, before its
+    // receipt arrives. From then on the send owns this draft: only its acknowledgement may
+    // clear it. Automatic cleanup would otherwise count as an in-flight edit, show a false
+    // warning on success, and lose the draft on a failed or unconfirmed send.
+    if (!composerDrafts.read(draftKey).sending && textRef.current === filledFrom.current) {
       setText("");
       textRef.current = "";
       caretRef.current = 0;

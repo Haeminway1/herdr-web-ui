@@ -1379,6 +1379,10 @@ const MANAGED_SOURCES = {
   claude: "claude-transcript",
 } as const;
 
+function managedIdentityReadable(identity: ManagedSessionIdentity): boolean {
+  return identity.state === "ready" || identity.readable === true;
+}
+
 async function managedTranscript(pane: HerdrPane, deps: ManagedSessionDeps): Promise<ManagedResolvedTranscript | null> {
   const lookup = managedLookupPane(pane);
   if (!lookup.declared) return null;
@@ -1389,7 +1393,7 @@ async function managedTranscript(pane: HerdrPane, deps: ManagedSessionDeps): Pro
   }
   if (resolution.lookupError) throw resolution.lookupError;
   const { identity, sessionFile } = resolution;
-  if (identity.state !== "ready" || identity.harness === null || identity.id === null || identity.generation === null
+  if (!managedIdentityReadable(identity) || identity.harness === null || identity.id === null || identity.generation === null
     || identity.session_id === null || sessionFile === null) {
     throw new ConversationUnavailable(identity.reason ?? identity.state, identity);
   }
@@ -1405,7 +1409,7 @@ async function managedTranscript(pane: HerdrPane, deps: ManagedSessionDeps): Pro
 
 function sameManagedIdentity(a: ManagedSessionIdentity, b: ManagedSessionIdentity): boolean {
   return a.id === b.id && a.harness === b.harness && a.generation === b.generation
-    && a.state === "ready" && b.state === "ready" && a.session_id === b.session_id;
+    && managedIdentityReadable(a) && managedIdentityReadable(b) && a.session_id === b.session_id;
 }
 
 async function assertManagedTranscriptCurrent(pane: HerdrPane, resolved: ManagedResolvedTranscript, deps: ManagedSessionDeps): Promise<void> {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import * as fs from "node:fs";
@@ -2205,7 +2205,8 @@ describe("managed conversation identity", () => {
     const kept = header({ id: thread })
       + line("response_item", { type: "function_call", name: "exec_command", call_id: "inherited", arguments: "{}" })
       + line("response_item", { type: "function_call_output", call_id: "inherited", output: "original inherited bytes" });
-    writeFileSync(parent, kept);
+    // Managed segments must not be group/other writable, even under umask 0002.
+    writeFileSync(parent, kept, { mode: 0o600 });
     writeFileSync(sessionFile, header({ history_base: { thread_id: thread, end_ordinal_exclusive: 3, end_byte_offset: Buffer.byteLength(kept) } }) + line("event_msg", { type: "user_message", message: "current" }));
     const info = statSync(sessionFile);
     record.file_identity = { dev: info.dev, ino: info.ino };
@@ -2213,7 +2214,7 @@ describe("managed conversation identity", () => {
     const replacement = join(root, "replacement.jsonl");
     writeFileSync(replacement, header({ id: thread })
       + line("response_item", { type: "function_call", name: "exec_command", call_id: "inherited", arguments: "{}" })
-      + line("response_item", { type: "function_call_output", call_id: "inherited", output: "injected inherited bytes" }));
+      + line("response_item", { type: "function_call_output", call_id: "inherited", output: "injected inherited bytes" }), { mode: 0o600 });
     const original = join(root, "original-parent.jsonl");
     const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
     const open = fs.openSync;
@@ -2234,6 +2235,31 @@ describe("managed conversation identity", () => {
     const fresh = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
     try { expect(await toolOutput(pane.pane_id, `managed-${nonce}-1:inherited`, undefined, undefined, undefined, undefined, managedDeps)).toBe("original inherited bytes"); }
     finally { fresh.mockRestore(); }
+  });
+
+  it.each([0o664, 0o666])("rejects an inherited Codex segment with mode %i, then recovers when secured", async (mode) => {
+    writeHarness("codex");
+    const thread = "11111111-1111-4111-8111-111111111111";
+    const directory = join(root, "codex", "sessions", "2026", "09", "30");
+    mkdirSync(directory, { recursive: true });
+    const parent = join(directory, `rollout-2026-09-30T01-00-00-${thread}.jsonl`);
+    const line = (type: string, payload: unknown): string => JSON.stringify({ type, payload }) + "\n";
+    const kept = line("session_meta", { id: thread, cwd: root })
+      + line("response_item", { type: "function_call", name: "exec_command", call_id: "inherited", arguments: "{}" })
+      + line("response_item", { type: "function_call_output", call_id: "inherited", output: "secured inherited bytes" });
+    writeFileSync(parent, kept, { mode: 0o600 });
+    writeFileSync(sessionFile, line("session_meta", { id: sessionId, cwd: root, history_base: { thread_id: thread, end_ordinal_exclusive: 3, end_byte_offset: Buffer.byteLength(kept) } }));
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    const output = () => toolOutput(pane.pane_id, `managed-${nonce}-1:inherited`, undefined, undefined, undefined, undefined, managedDeps);
+    try {
+      expect(await output()).toBe("secured inherited bytes");
+      chmodSync(parent, mode);
+      await expect(conversationForPane(pane, undefined, {}, managedDeps)).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      await expect(output()).rejects.toMatchObject({ name: "GjcSdkLookupError", reason: "unavailable" });
+      chmodSync(parent, 0o600);
+      expect(await conversationForPane(pane, undefined, {}, managedDeps)).toMatchObject({ source: "codex-transcript" });
+      expect(await output()).toBe("secured inherited bytes");
+    } finally { snapshot.mockRestore(); }
   });
 
   it("routes a tagged pane without managed label metadata", async () => {
@@ -2306,16 +2332,27 @@ describe("managed conversation identity", () => {
     expect(nativeLookupCalls).toBe(0);
   });
 
-  it.each([
-    ["identity_pending", "starting", "identity_pending"],
-    ["blocked", "blocked", "blocked_runtime_changed"],
-  ] as const)("does not guess a transcript from a tagged %s pane", async (_name, state, reason) => {
+  it("does not guess a transcript from a tagged identity-pending pane", async () => {
     writeHarness("gjc");
-    record.state = state;
-    record.error = reason;
+    record.state = "starting";
+    record.error = "identity_pending";
     save();
     await expect(resolveTranscript(pane, root, undefined, undefined, undefined, undefined, undefined, managedDeps))
-      .rejects.toMatchObject({ name: "ConversationUnavailable", message: reason, managedSession: { state: _name } });
+      .rejects.toMatchObject({ name: "ConversationUnavailable", message: "identity_pending", managedSession: { state: "identity_pending" } });
+  });
+
+  it("serves saved GJC turns read-only across a Manager runtime-change block, keeping the reason", async () => {
+    writeHarness("gjc", [message("user", "parent prompt"), message("assistant", "parent answer")]);
+    record.state = "blocked"; record.error = "blocked_runtime_changed"; save();
+    const kept = readFileSync(recordFile, "utf8");
+    const answer = await conversationForPane(pane, undefined, {}, managedDeps);
+    expect(answer).toMatchObject({
+      source: "gjc-transcript",
+      managed_session: { state: "blocked", reason: "blocked_runtime_changed", readable: true, session_id: sessionId },
+    });
+    expect(answer.turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "parent answer" });
+    expect(nativeLookupCalls).toBe(0);
+    expect(readFileSync(recordFile, "utf8")).toBe(kept);
   });
 
   it("rejects a generation change observed during GJC identity validation", async () => {

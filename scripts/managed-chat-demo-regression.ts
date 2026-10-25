@@ -17,20 +17,32 @@ try {
   const index = join(app, "index.html");
   const transport = `<script src="./demo-transport.js"></script><script>(() => {
     const fixtureFetch = window.fetch;
+    const managed = { id: "0123456789abcdef0123456789abcdef", harness: "gjc", generation: 1, session_id: "00000000-0000-4000-8000-000000000001" };
+    const ready = { ...managed, state: "ready", reason: null };
+    const readOnly = { ...managed, state: "blocked", reason: "blocked_runtime_changed", readable: true };
     window.refusedTranscriptReads = 0;
+    let conversationReads = 0;
     window.fetch = async (input, init) => {
       const path = new URL(typeof input === "string" ? input : input.url, location.href).pathname;
-      if (path === "/api/pane/read" && ["identity_pending", "blocked"].includes(new URL(location.href).searchParams.get("managed"))) window.refusedTranscriptReads++;
+      const state = new URL(location.href).searchParams.get("managed");
+      if (path === "/api/pane/read" && ["identity_pending", "blocked"].includes(state)) window.refusedTranscriptReads++;
       const response = await fixtureFetch(input, init);
       if (path !== "/api/pane/conversation" || !response.ok) return response;
       const conversation = await response.json();
-      const state = new URL(location.href).searchParams.get("managed");
-      if (state === "identity_pending" || state === "blocked" || state === "ready") {
-        if (state !== "ready") {
+      if (state === "identity_pending" || state === "blocked" || state === "ready" || state === "read-only") {
+        if (state === "identity_pending" || state === "blocked") {
           conversation.turns = [];
           conversation.source = "scrollback";
         }
-        conversation.managed_session = { id: null, harness: "gjc", generation: null, state, reason: state === "blocked" ? "${reason}" : null, session_id: null };
+        conversation.managed_session = state === "ready" ? ready
+          : state === "read-only" ? readOnly
+            : { id: null, harness: "gjc", generation: null, state, reason: state === "blocked" ? "${reason}" : null, session_id: null };
+      }
+      if (state === "transient" && conversationReads++ === 0) conversation.managed_session = ready;
+      else if (state === "transient") {
+        conversation.turns = [];
+        conversation.source = "scrollback";
+        conversation.managed_session = readOnly;
       }
       return new Response(JSON.stringify(conversation), { status: response.status, headers: { "content-type": "application/json" } });
     };
@@ -78,6 +90,22 @@ try {
           assert.match(await blocked.innerText(), new RegExp(reason));
           assert.equal(await page.locator(".pane-frame.is-current .chat-turn, .pane-frame.is-current .chat-terminal-fallback").count(), 0);
           assert.equal(await page.evaluate(() => (window as typeof window & { refusedTranscriptReads: number }).refusedTranscriptReads), 0);
+          await page.goto(`${base}&managed=read-only`);
+          const readOnly = page.locator('.pane-frame.is-current .chat-frame [data-managed-readable="true"]');
+          await readOnly.waitFor();
+          assert.match(await readOnly.innerText(), /Conversation available/);
+          assert.match(await readOnly.innerText(), /restarting the managed session is restricted/);
+          assert.ok(await page.locator(".pane-frame.is-current .chat-turn").count() > 0);
+          assert.equal(await page.locator(".pane-frame.is-current .chat-terminal-fallback").count(), 0);
+          await page.screenshot({ path: join(shots, `${name}-read-only.png`) });
+          await page.goto(`${base}&managed=transient`);
+          await page.locator(".pane-frame.is-current .chat-turn").first().waitFor();
+          const turnsBeforeTransient = await page.locator(".pane-frame.is-current .chat-turn").count();
+          const transient = page.locator('.pane-frame.is-current .chat-frame [data-managed-readable="true"]');
+          await transient.waitFor({ timeout: 15000 });
+          assert.equal(await page.locator(".pane-frame.is-current .chat-turn").count(), turnsBeforeTransient);
+          assert.equal(await page.locator(".pane-frame.is-current .chat-terminal-fallback").count(), 0);
+          await page.screenshot({ path: join(shots, `${name}-read-only-transient.png`) });
           await page.goto(`${base}&managed=ready`);
           await page.locator(".pane-frame.is-current .chat-turn").first().waitFor();
           assert.equal(await page.locator(".pane-frame.is-current .chat-frame [data-managed-state]").count(), 0);
@@ -85,7 +113,7 @@ try {
           await page.locator(".pane-frame.is-current .chat-turn").first().waitFor();
           assert.equal(await page.locator(".pane-frame.is-current .chat-frame [data-managed-state]").count(), 0);
           assert.deepEqual(errors, []);
-          console.log(`PASS ${name}: pending, blocked, ready and unmanaged chat`);
+          console.log(`PASS ${name}: pending, blocked, read-only, transient, ready and unmanaged chat`);
         } finally { await context.close(); }
       }
     } finally { await browser.close(); }

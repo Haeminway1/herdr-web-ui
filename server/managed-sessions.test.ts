@@ -28,10 +28,41 @@ const message = (role: string, text: string) => JSON.stringify({ type: "message"
 const save = () => writeFileSync(recordFile, JSON.stringify(record), { mode: 0o600 });
 const useOmo = () => { record.harness = "omo"; record.launcher_harness = "omo"; save(); };
 const pinCurrentFile = () => { const info = statSync(sessionFile); record.file_identity = { dev: info.dev, ino: info.ino }; save(); };
-const resolve = async () => (await resolveManagedSession(pane, namespace, deps))!;
+const holdOmoSession = (id = sessionId, pid = 42, startedAt = 1_000, cwd = root): void => {
+  const holders = join(String(record.session_dir), "session-holders", encodeURIComponent(id));
+  mkdirSync(holders, { recursive: true, mode: 0o700 });
+  writeFileSync(join(holders, `${pid}.json`), JSON.stringify({ pid, processStartedAtMs: startedAt, cwd }), { mode: 0o600 });
+};
+const omoDeps = (override: ManagedSessionDeps = {}): ManagedSessionDeps => ({
+  ...deps,
+  processStartedAt: pid => pid === 42 ? 1_000 : null,
+  ...override,
+});
+const blockRuntime = (): void => { record.state = "blocked"; record.error = "blocked_runtime_changed"; save(); };
+const nativeReadOnly = (harness: "claude" | "codex"): void => {
+  record.harness = harness; record.launcher_harness = harness;
+  const base = join(root, harness);
+  const store = join(base, harness === "codex" ? "sessions" : "projects");
+  mkdirSync(store, { recursive: true, mode: 0o700 });
+  sessionFile = join(store, "exact.jsonl");
+  record.env = { [harness === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]: base };
+  const meta = harness === "codex"
+    ? { type: "session_meta", payload: { id: sessionId, cwd: root } }
+    : { type: "user", sessionId, cwd: root, message: { role: "user", content: "parent prompt" } };
+  writeFileSync(sessionFile, JSON.stringify(meta) + "\n", { mode: 0o600 });
+  const info = statSync(sessionFile);
+  record.session_id = sessionId; record.session_file = sessionFile;
+  record.file_identity = { dev: info.dev, ino: info.ino };
+  record.child = { ...observed };
+  pane = { ...pane, agent: harness, agent_session: { agent: harness, kind: "id", source: "herdr", value: sessionId } };
+  blockRuntime();
+};
+const readOnlyDeps = (harness: "omo" | "claude" | "codex"): ManagedSessionDeps => harness === "omo" ? omoDeps() : deps;
+const resolveWith = async (override: ManagedSessionDeps = deps) => (await resolveManagedSession(pane, namespace, override))!;
+const resolve = async () => resolveWith();
 const labelManagedPanes = (snapshot: SessionSnapshot) => projectPanes(snapshot, namespace, deps);
 const resolveTranscript = (target: HerdrPane, cwd: string) => readTranscript(target, cwd, undefined, undefined, undefined, undefined, undefined, deps);
-const conversationForPane = (target: HerdrPane, home?: string, page?: Parameters<typeof readConversation>[2]) => readConversation(target, home, page, deps);
+const conversationForPane = (target: HerdrPane, home?: string, page?: Parameters<typeof readConversation>[2], override: ManagedSessionDeps = deps) => readConversation(target, home, page, override);
 const gjcPanes = (panes: HerdrPane[], options: Parameters<typeof discoverGjc>[1] = {}) => discoverGjc(panes, { ...options, managedSession: target => resolveManagedSession(target, namespace, deps) });
 
 beforeEach(() => {
@@ -68,6 +99,46 @@ it("routes a managed GJC ahead of a misleading Codex child and unrelated newer f
   expect(answer.managed_session?.session_id).toBe(sessionId);
   expect(answer.turns.flatMap(t => t.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
   expect(answer.history_id).toStartWith(`managed-${nonce}-1:`);
+});
+
+it("recovers Claude chat after directory-trust startup only when Manager publishes the exact native binding", async () => {
+  const base = join(root, "claude");
+  const store = join(base, "projects", "fixture-project");
+  mkdirSync(store, { recursive: true, mode: 0o700 });
+  sessionFile = join(store, `${sessionId}.jsonl`);
+  writeFileSync(sessionFile, [
+    JSON.stringify({ type: "file-history-snapshot", snapshot: {} }),
+    JSON.stringify({ type: "user", uuid: "fixture-user", sessionId, cwd: root, message: { role: "user", content: "synthetic post-trust request" } }),
+    JSON.stringify({ type: "assistant", uuid: "fixture-assistant", parentUuid: "fixture-user", sessionId, cwd: root, message: { role: "assistant", content: [{ type: "text", text: "synthetic post-trust answer" }] } }),
+  ].join("\n") + "\n", { mode: 0o600 });
+  pane = { ...pane, agent: "claude", agent_status: "done", agent_session: { agent: "claude", kind: "id", source: "herdr", value: sessionId }, tokens: { ...pane.tokens, hm_create_failed: "agent_not_ready" } };
+  record.harness = "claude"; record.launcher_harness = "claude";
+  record.env = { CLAUDE_CONFIG_DIR: base };
+  record.session_id = null; record.session_file = null; delete record.file_identity;
+  // Answering native directory trust can produce a transcript after Manager's launch wait
+  // expired. A herdr session ID alone cannot authorize bypassing the managed nonce/generation.
+  for (const state of ["starting", "identity_pending", "blocked"]) {
+    record.state = state;
+    record.error = state === "blocked" ? "blocked_agent_not_ready" : "identity_pending";
+    save();
+    const original = readFileSync(recordFile, "utf8");
+    expect(await resolve()).toMatchObject({ identity: { state: state === "blocked" ? "blocked" : "identity_pending", session_id: null }, sessionFile: null });
+    await expect(conversationForPane(pane)).rejects.toThrow(String(record.error));
+    expect(readFileSync(recordFile, "utf8")).toBe(original);
+  }
+  // A valid persisted Manager recovery is picked up without changing pane identity, clearing
+  // failure tokens, answering trust, guessing by cwd/recency or restarting the Web UI.
+  record.state = "ready"; record.error = null;
+  record.session_id = sessionId; record.session_file = sessionFile; pinCurrentFile();
+  const answer = await conversationForPane(pane);
+  expect(answer.source).toBe("claude-transcript");
+  expect(answer.managed_session).toMatchObject({ state: "ready", session_id: sessionId, generation: 1 });
+  expect(answer.turns).toHaveLength(2);
+  expect(answer.turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "synthetic post-trust answer" });
+  expect(await resolveManagedSession({ ...pane, pane_id: "another-pane" }, namespace, deps)).toMatchObject({ identity: { reason: "blocked_pane_identity" }, sessionFile: null });
+  writeFileSync(sessionFile, JSON.stringify({ type: "user", sessionId: "wrong-session", cwd: root }) + "\n");
+  expect((await resolve()).identity.reason).toBe("blocked_session_header");
+  await expect(conversationForPane(pane)).rejects.toThrow("blocked_session_header");
 });
 
 it("projects both panes and agents without converting identity ready into engine idle", async () => {
@@ -406,6 +477,129 @@ it("reports only fixed blocked codes, never arbitrary process output from a reco
   record.error = "private output\nnot a reason code"; save();
   expect((await resolve()).identity.reason).toBe("blocked_record_state");
   await expect(conversationForPane(pane)).rejects.toThrow("blocked_record_state");
+});
+
+it("serves a read-only GJC conversation across a Manager runtime-change block after exact live proof", async () => {
+  record.state = "blocked"; record.error = "blocked_runtime_changed"; save();
+  const kept = readFileSync(recordFile, "utf8");
+  expect(await resolve()).toMatchObject({
+    identity: { state: "blocked", reason: "blocked_runtime_changed", readable: true, session_id: sessionId },
+    sessionFile,
+  });
+  const answer = await conversationForPane(pane);
+  expect(answer).toMatchObject({
+    source: "gjc-transcript",
+    managed_session: { state: "blocked", reason: "blocked_runtime_changed", readable: true, session_id: sessionId },
+  });
+  expect(answer.turns.flatMap(turn => turn.parts)).toContainEqual({ kind: "text", text: "exact managed answer" });
+  const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  expect((await labelManagedPanes(snapshot)).panes[0]).toMatchObject({
+    agent: "gjc", agent_session: null,
+    managed_session: { state: "blocked", reason: "blocked_runtime_changed", readable: true },
+  });
+  expect(readFileSync(recordFile, "utf8")).toBe(kept);
+});
+
+it("serves a read-only OMO conversation across the same lifecycle block only with proven native holder evidence", async () => {
+  useOmo();
+  holdOmoSession();
+  blockRuntime();
+  expect(await resolveManagedSession(pane, namespace, omoDeps())).toMatchObject({
+    identity: { state: "blocked", harness: "omo", reason: "blocked_runtime_changed", readable: true, session_id: sessionId },
+    sessionFile,
+  });
+  expect((await conversationForPane(pane, undefined, {}, omoDeps())).source).toBe("omo-transcript");
+  delete record.child; save();
+  expect(await resolveManagedSession(pane, namespace, omoDeps())).toMatchObject({ identity: { state: "blocked", reason: "blocked_runtime_identity" }, sessionFile: null });
+  await expect(conversationForPane(pane, undefined, {}, omoDeps())).rejects.toThrow("blocked_runtime_identity");
+});
+
+it.each(["claude", "codex"] as const)("serves a read-only %s conversation only while the pane's native session matches", async harness => {
+  nativeReadOnly(harness);
+  expect(await resolve()).toMatchObject({
+    identity: { state: "blocked", harness, reason: "blocked_runtime_changed", readable: true, session_id: sessionId },
+    sessionFile,
+  });
+  const answer = await conversationForPane(pane);
+  expect(answer.source).toBe(`${harness}-transcript`);
+  expect(answer.managed_session).toMatchObject({ state: "blocked", reason: "blocked_runtime_changed", readable: true });
+  const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  const once = await labelManagedPanes(snapshot);
+  const twice = await labelManagedPanes(once);
+  for (const projected of [once, twice]) {
+    expect(projected.panes[0]).toMatchObject({ managed_session: { state: "blocked", reason: "blocked_runtime_changed", readable: true } });
+    expect(projected.panes[0]?.agent_session).toEqual(pane.agent_session);
+  }
+  expect((await conversationForPane(twice.panes[0]!)).source).toBe(`${harness}-transcript`);
+});
+
+it("rejects a read-only OMO record when the same process now holds another or ambiguous session", async () => {
+  useOmo();
+  holdOmoSession();
+  blockRuntime();
+  expect((await resolveWith(omoDeps())).identity.readable).toBe(true);
+
+  const removed = join(String(record.session_dir), "session-holders", encodeURIComponent(sessionId), "42.json");
+  rmSync(removed);
+  expect(await resolveManagedSession(pane, namespace, omoDeps())).toMatchObject({ identity: { state: "blocked", reason: "blocked_runtime_identity" }, sessionFile: null });
+
+  holdOmoSession("another-session");
+  expect(await resolveManagedSession(pane, namespace, omoDeps())).toMatchObject({ identity: { state: "blocked", reason: "blocked_runtime_identity" }, sessionFile: null });
+  expect((await resolveWith(omoDeps())).identity.readable).not.toBe(true);
+});
+
+it("rejects a read-only OMO record when its native holder is ambiguous, stale or for another cwd", async () => {
+  useOmo();
+  holdOmoSession();
+  blockRuntime();
+  holdOmoSession("second-session", 42, 1_000, root);
+  expect((await resolveWith(omoDeps())).identity.reason).toBe("blocked_runtime_identity");
+  rmSync(join(String(record.session_dir), "session-holders", "second-session"), { recursive: true, force: true });
+  expect((await resolveWith({ ...omoDeps(), processStartedAt: () => 9_000 })).identity.reason).toBe("blocked_runtime_identity");
+  expect((await resolveWith({ ...omoDeps(), processStartedAt: () => null })).identity.reason).toBe("blocked_runtime_identity");
+  expect((await resolveWith(omoDeps({ heldSessionIds: () => [sessionId, "second-session"] }))).identity.reason).toBe("blocked_runtime_identity");
+});
+
+it.each(["claude", "codex"] as const)("rejects a read-only %s record when its native session is missing or different", async harness => {
+  nativeReadOnly(harness);
+  expect((await resolve()).identity.readable).toBe(true);
+  delete pane.agent_session;
+  expect((await resolve()).identity.reason).toBe("blocked_runtime_identity");
+  pane.agent_session = { agent: harness === "claude" ? "codex" : "claude", kind: "id", source: "herdr", value: sessionId };
+  expect((await resolve()).identity.reason).toBe("blocked_runtime_identity");
+  pane.agent_session = { agent: harness, kind: "id", source: "herdr", value: "another-session" };
+  expect((await resolve()).identity.reason).toBe("blocked_runtime_identity");
+  pane.agent_session = { agent: harness, kind: "path", source: "herdr", value: sessionFile };
+  expect((await resolve()).identity.readable).toBe(true);
+  pane.agent_session = { agent: harness, kind: "path", source: "herdr", value: join(root, "another.jsonl") };
+  expect((await resolve()).identity.reason).toBe("blocked_runtime_identity");
+});
+
+it.each(["omo", "claude", "codex"] as const)("does not authorize a read-only %s record changed during its native proof", async harness => {
+  if (harness === "omo") { useOmo(); holdOmoSession(); blockRuntime(); }
+  else nativeReadOnly(harness);
+  const racing: ManagedSessionDeps = {
+    ...readOnlyDeps(harness),
+    processIdentity: pid => { record.generation = 2; save(); return observed?.pid === pid ? { ...observed } : null; },
+  };
+  expect(await resolveManagedSession(pane, namespace, racing)).toMatchObject({ identity: { state: "identity_pending" }, sessionFile: null });
+  expect((await resolveWith(racing)).identity.readable).not.toBe(true);
+});
+
+it.each([
+  ["a stopped intent", () => { record.desired_state = "stopped"; }, "blocked_session_stopped"],
+  ["an unrecognized blocker", () => { record.error = "private output\nnot a reason code"; }, "blocked_record_state"],
+  ["a generation mismatch", () => { record.generation = 2; }, "blocked_managed_generation"],
+  ["a changed header", () => { writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "another-session", cwd: root }) + "\n"); }, "blocked_session_header"],
+  ["PID reuse", () => { observed = { ...observed!, starttime: "other" }; }, "blocked_runtime_identity"],
+  ["a native SDK session mismatch", () => { live = { ...live!, sessionId: "another-session" }; }, "blocked_gjc_session_mismatch"],
+] as const)("never reads a runtime-change record through %s", async (_name, mutate, reason) => {
+  record.state = "blocked"; record.error = "blocked_runtime_changed"; save();
+  mutate(); save();
+  const result = await resolve();
+  expect(result).toMatchObject({ identity: { state: "blocked", reason }, sessionFile: null });
+  expect(result.identity.readable).not.toBe(true);
+  await expect(conversationForPane(pane)).rejects.toThrow(reason);
 });
 
 it("waits for a persisted GJC inode pin without upgrading recovery metadata", async () => {

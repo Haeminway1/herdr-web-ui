@@ -10,11 +10,11 @@ const identity = (state: ManagedSessionIdentity["state"], reason: string | null 
   id: null, harness: "gjc", generation: null, state, reason, session_id: null,
 });
 
-const render = (state: ManagedSessionIdentity["state"], reason?: string): string => {
+const render = (state: ManagedSessionIdentity["state"], reason?: string, readable = false): string => {
   const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
   Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
   try {
-    return renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(ManagedSessionStatus, { identity: identity(state, reason ?? null) }) }));
+    return renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(ManagedSessionStatus, { identity: { ...identity(state, reason ?? null), ...(readable ? { readable: true } : {}) } }) }));
   } finally {
     if (languages) Object.defineProperty(navigator, "languages", languages);
     else Reflect.deleteProperty(navigator, "languages");
@@ -42,5 +42,15 @@ describe("managed session status in chat", () => {
     expect(html).toContain("Session identified");
     expect(html).not.toContain("blocked");
     expect(html).not.toContain("Waiting for");
+  });
+
+  it("explains an available conversation with only the restart restricted", () => {
+    const html = render("blocked", "blocked_runtime_changed", true);
+    expect(html).toContain('data-managed-state="blocked"');
+    expect(html).toContain('data-managed-readable="true"');
+    expect(html).toContain("Conversation available; restarting the managed session is restricted (blocked_runtime_changed)");
+    expect(html).not.toContain("Managed session blocked:");
+    expect(html).not.toContain("read-only");
+    expect(html).not.toContain("recovering");
   });
 });

@@ -1414,4 +1414,6 @@ export const ZH: Record<string, string> = {
   "Change PC": "切换电脑",
   "This is the demo. Go back to the app's list of PCs to open yours.": "这是演示。回到应用的电脑列表即可打开你自己的电脑。",
   "This app shows {address}. Go back to its list of PCs to open another.": "此应用正在显示 {address}。回到电脑列表可打开其他电脑。",
+  "Conversation available; restarting the managed session is restricted ({reason})": "对话可用；受管会话重启受限（{reason}）",
+  "Restart restricted": "重启受限",
 };

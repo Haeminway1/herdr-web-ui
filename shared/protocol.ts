@@ -32,6 +32,8 @@ export interface ManagedSessionIdentity {
   state: "ready" | "identity_pending" | "blocked";
   reason: string | null;
   session_id: string | null;
+  /** The exact saved transcript may be shown read-only even though the lifecycle record blocks new execution. */
+  readable?: boolean;
 }
 
 export interface PaneAttention {
