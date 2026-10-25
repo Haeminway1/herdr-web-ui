@@ -1,3 +1,5 @@
+import { appendQuote } from "./terminalQuote.ts";
+
 /** Drafts and in-flight sends belong to their pane, even while its composer is unmounted. */
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 interface Draft { text: string; sending: boolean }
@@ -8,7 +10,7 @@ interface InFlight { sent: string; at: number }
  * is still legitimately on its way is never seconded by a second tab.
  */
 export const SEND_LEASE_MS = 120_000;
-const SENDING_PREFIX = "herdr-web-ui:composer-sending:";
+const SENDING_PREFIX = "ovis:composer-sending:";
 export class ComposerDraftStore {
   private drafts = new Map<string, Draft>();
   private saved = new Map<string, string | null>();
@@ -88,6 +90,17 @@ export class ComposerDraftStore {
     } catch { this.unsaved.add(key); }
     this.notify();
   }
+  /**
+   * Add a quote after the draft's newest text (another tab's edit included), never in place of it.
+   * False, with the draft untouched, when the result would pass `max` characters.
+   */
+  appendQuote(key: string, block: string, max: number): boolean {
+    this.refresh(key);
+    const next = appendQuote(this.read(key).text, block, max);
+    if (next === null) return false;
+    this.set(key, next);
+    return true;
+  }
   /** `sent`: the draft text this send carries, settled once it is acknowledged */
   begin(key: string, sent?: string): boolean {
     const draft = this.read(key);
@@ -131,7 +144,7 @@ export const composerDrafts = new ComposerDraftStore();
 export function storageEventDraft(key: string | null): string | null {
   if (key === null) return null;
   if (key.startsWith(SENDING_PREFIX)) return key.slice(SENDING_PREFIX.length);
-  return key.startsWith("herdr-web-ui:composer-draft:") ? key : null;
+  return key.startsWith("ovis:composer-draft:") ? key : null;
 }
 if (typeof window !== "undefined") window.addEventListener("storage", (event) => {
   const key = storageEventDraft(event.key);

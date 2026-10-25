@@ -26,6 +26,8 @@ declare global {
       frame(message: ServerMessage): void;
       conversation(paneId: string, response: ConversationResponse): void;
       replay(paneId: string, ready: boolean, data: string, readyAfter?: boolean): void;
+      /** the next attach of a pane joins an attachment that lost its stream: as the server sends it, no readiness, the screen from before */
+      recoveringReplay(paneId: string, data: string): void;
     };
   }
 }
@@ -41,7 +43,7 @@ function installSidebarFixture(): void {
   const sockets = new Set<WebSocket>();
   const conversations = new Map<string, { response: ConversationResponse; etag: string }>();
   let conversationRevision = 0;
-  const replays = new Map<string, { ready: boolean; data: string; readyAfter: boolean }>();
+  const replays = new Map<string, { ready: boolean; data: string; readyAfter: boolean; recovering?: boolean }>();
   const patch = (machines: Machine[]): Machine[] => {
     for (const machine of machines) {
       const snapshot = machine.snapshot;
@@ -137,6 +139,12 @@ function installSidebarFixture(): void {
       this.send = (raw) => {
         const message = JSON.parse(String(raw));
         const replay = replays.get(message.pane_id);
+        if (message.type === "attach" && replay?.recovering) {
+          for (const frame of [{ type: "output-recovering", pane_id: message.pane_id }, { type: "pty-data", pane_id: message.pane_id, data: replay.data }]) {
+            this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+          }
+          return;
+        }
         if (message.type === "attach" && replay) {
           // The corrected registry reports its readiness before a retained replay.
           const frames = [
@@ -204,6 +212,7 @@ function installSidebarFixture(): void {
     },
     conversation(paneId, response) { conversations.set(paneId, { response, etag: `"fixture-${++conversationRevision}"` }); },
     replay(paneId, ready, data, readyAfter = false) { replays.set(paneId, { ready, data, readyAfter }); },
+    recoveringReplay(paneId, data) { replays.set(paneId, { ready: false, data, readyAfter: false, recovering: true }); },
   };
 }
 
@@ -217,7 +226,7 @@ const app = mkdtempSync(join(tmpdir(), "herdr-sidebar-activity-demo-"));
 const API = "Idempotent payments";        // claude, working, finishes by itself
 const WEB = "Guard the export button";    // codex, blocked
 const INFRA = "Why did the backup fail?"; // idle: the agent a message is sent from
-const AGENTS_HERDR_ORDER = [API, WEB, INFRA, "Proofread the guide", "Ship the retry flag"];
+const AGENTS_HERDR_ORDER = [API, WEB, INFRA, "Proofread the guide", "Plan the config file", "Ship the retry flag", "Draft the changelog", "Fix the flaky retry test"];
 
 const agents = (page: Page) => page.locator(".agents-sidebar .agent-item");
 const agentTitles = (page: Page) => agents(page).locator(".agent-title").allTextContents();
@@ -233,7 +242,7 @@ async function withPage(browser: Browser, settings: object, run: (page: Page) =>
   });
   try {
     await context.addInitScript((stored) => {
-      localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", defaultView: "chat", ...stored, sidebarLayout: "upstream" }));
+      localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "chat", ...stored, sidebarLayout: "upstream" }));
     }, settings);
     const page = await context.newPage();
     const errors: string[] = [];
@@ -374,6 +383,35 @@ try {
         });
         console.log("PASS attachment recovery needs fresh output for owners and observers");
       }
+      if (!finishCase || finishCase === "recovering-joiner") {
+        await withPage(browser, {}, async (page) => {
+          // a page that first opens the pane while its attachment is recovering gets only the screen from before
+          await page.evaluate((id) => {
+            window.sidebarFixture.recoveringReplay(id, "previous answer\r\n");
+            window.sidebarFixture.block(id, "loading");
+            return window.sidebarFixture.finish(id, "done", 101);
+          }, panes.infra);
+          await waitStatus(page, INFRA, "done");
+          await agent(page, INFRA).locator(".agent-select").click();
+          await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+          const content = page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]");
+          await page.locator(".pane-frame.is-current .terminal-stack:not(.is-chat)").waitFor();
+          await page.waitForFunction(() => {
+            const host = document.querySelector(".pane-frame.is-current .pane-terminal");
+            if (!host || !("outputProbe" in host) || typeof host.outputProbe !== "function") return false;
+            const probe = host.outputProbe();
+            return probe.written.includes("previous answer\r\n") && probe.inFlight === 0 && probe.queued === 0;
+          });
+          assert.equal(await content.count(), 0, "a recovering joiner's replay is not the current screen");
+          await waitStatus(page, INFRA, "done");
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "input-ready", pane_id: id }), panes.infra);
+          assert.equal(await content.count(), 0, "the attach taking again still waits for new output");
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "current screen\r\n" }), panes.infra);
+          await waitStatus(page, INFRA, "idle");
+          await content.waitFor();
+        });
+        console.log("PASS a page joining a recovering attachment acknowledges only output after recovery");
+      }
       if (!finishCase || finishCase === "transcript-finish") {
         for (const source of ["claude-transcript", "codex-transcript"] as const) await withPage(browser, {}, async (page) => {
           await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
@@ -464,7 +502,7 @@ try {
           await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
           await waitStatus(page, INFRA, "done");
           assert.equal(await page.evaluate((id) => Object.keys(localStorage).some((key) =>
-            key.startsWith("herdr-web-ui:finish:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.infra), false,
+            key.startsWith("ovis:finish:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.infra), false,
           `${kind}: content not presented must leave no seen record`);
           const evidence = process.env["UI_EVIDENCE_DIR"];
           if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `finish-${kind}.png`) }); }
@@ -494,7 +532,7 @@ try {
           }), panes.infra);
           await agent(page, INFRA).locator('.sidebar-status[data-status="done"]').waitFor({ state: "attached" });
           assert.equal(await page.evaluate((id) => Object.keys(localStorage).some((key) =>
-            key.startsWith("herdr-web-ui:finish:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.infra), false);
+            key.startsWith("ovis:finish:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.infra), false);
           const evidence = process.env["UI_EVIDENCE_DIR"];
           if (evidence) { mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, `finish-${kind}-phone.png`) }); }
           await input.fill("");
@@ -564,11 +602,11 @@ try {
           }, { hidden: panes.infra, focused: panes.api });
           await page.goto(`${url}?pane=${encodeURIComponent(panes.infra)}`);
           await page.locator(`[data-layout-pane="${panes.api}"]:not(.is-hidden)`).waitFor();
-          await page.waitForFunction((id) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === id, panes.api);
+          await page.waitForFunction((id) => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "{}").pane_id === id, panes.api);
           assert.equal(await page.locator(`[data-layout-pane="${panes.infra}"].is-hidden`).count(), 1);
           await waitStatus(page, INFRA, "done");
           const recorded = await page.evaluate((id) => Object.keys(localStorage).some((key) =>
-            key.startsWith("herdr-web-ui:finish:local:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.infra);
+            key.startsWith("ovis:finish:local:") && key.endsWith(`:${encodeURIComponent(id)}`)), panes.infra);
           assert.equal(recorded, false, "a redirected deep link never acknowledges the hidden pane");
         });
         console.log("PASS a deep link into a zoomed tab acknowledges only the presented pane");
@@ -583,7 +621,7 @@ try {
           await agent(page, INFRA).locator(".agent-select").click();
           await waitStatus(page, INFRA, "idle");
           await page.locator(`.workspace-select[data-pane="${panes.docs}"]`).click();
-          await page.waitForFunction((id) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === id, panes.docs);
+          await page.waitForFunction((id) => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "{}").pane_id === id, panes.docs);
           await waitStatus(page, INFRA, "idle");
           await waitStatus(page, API, "done");
           await page.reload();
@@ -601,7 +639,7 @@ try {
             "reload does not reopen the finish to acknowledge it again");
           // A storage-loss control proves READY above came from the record, not the demo or selection.
           await page.evaluate(() => {
-            for (const key of Object.keys(localStorage)) if (key.startsWith("herdr-web-ui:finish:")) localStorage.removeItem(key);
+            for (const key of Object.keys(localStorage)) if (key.startsWith("ovis:finish:")) localStorage.removeItem(key);
           });
           await page.reload();
           await waitStatus(page, INFRA, "done");
@@ -620,7 +658,7 @@ try {
           await page.locator(".file-viewer").waitFor();
           await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 101), panes.infra);
           await agent(page, INFRA).locator('.sidebar-status[data-status="done"]').waitFor({ state: "attached" });
-          const key = `herdr-web-ui:finish:local:${encodeURIComponent("sidebar-fixture:local:1")}:${encodeURIComponent(panes.infra)}`;
+          const key = `ovis:finish:local:${encodeURIComponent("sidebar-fixture:local:1")}:${encodeURIComponent(panes.infra)}`;
           assert.equal(await page.evaluate((key) => localStorage.getItem(key), key), null,
             "a phone file viewer does not acknowledge the finish underneath");
           const evidence = process.env["UI_EVIDENCE_DIR"];
@@ -676,7 +714,7 @@ try {
           // reading-position gate, the finish would be recorded by now.
           await page.waitForFunction(([id, count]) => (window.sidebarFixture.reads[id as string] ?? 0) > (count as number), [panes.infra, before] as const);
           await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-          const key = `herdr-web-ui:finish:local:${encodeURIComponent("sidebar-fixture:local:1")}:${encodeURIComponent(panes.infra)}`;
+          const key = `ovis:finish:local:${encodeURIComponent("sidebar-fixture:local:1")}:${encodeURIComponent(panes.infra)}`;
           assert.equal(await page.evaluate((key) => localStorage.getItem(key), key), null,
             "a finish whose end is scrolled out of view is not recorded as seen");
           assert.equal(await agent(page, INFRA).locator(".sidebar-status").getAttribute("data-status"), "done");
@@ -851,25 +889,25 @@ try {
 
       // herdr's order before and after a finish; a right-click pins an agent; an opened DONE reads as ready (#1279)
       await withPage(browser, {}, async (page) => {
-        const selected = await page.evaluate(() => sessionStorage.getItem("herdr-web-ui:selection"));
+        const selected = await page.evaluate(() => sessionStorage.getItem("ovis:selection"));
         await page.locator(".header-more-button").focus();
         const workspace = page.locator(`.workspace-select[data-pane="${panes.api}"]`);
         const bounds = (await workspace.boundingBox())!;
         await workspace.click({ button: "right", position: { x: 32, y: bounds.height / 2 } });
         const menu = page.getByRole("menu", { name: "checkout-api", exact: true });
         await menu.waitFor();
-        assert.deepEqual(await menu.getByRole("menuitem").allTextContents(), ["Pin workspace", "Rename workspace", "Close workspace", "New worktree", "Open worktree…"], "right-click uses native workspace scope");
+        assert.deepEqual(await menu.getByRole("menuitem").allTextContents(), ["Pin workspace", "Rename workspace", "Earlier sessions…", "Close workspace", "New worktree", "Open worktree…"], "right-click uses native workspace scope and keeps the session-history entry");
         const opened = (await menu.boundingBox())!;
         assert.ok(Math.abs(opened.x - bounds.x - 32) <= 1 && Math.abs(opened.y - bounds.y - bounds.height / 2) <= 1, "the menu opens at the pointer");
-        assert.equal(await page.evaluate(() => sessionStorage.getItem("herdr-web-ui:selection")), selected, "right-click leaves the selected pane alone");
+        assert.equal(await page.evaluate(() => sessionStorage.getItem("ovis:selection")), selected, "right-click leaves the selected pane alone");
         await page.keyboard.press("Escape");
         assert.equal(await page.locator(".header-more-button").evaluate((button) => document.activeElement === button), true, "dismissal returns the prior keyboard focus");
         await workspace.focus();
         await contextMenuKey(page);
         await menu.waitFor();
-        assert.deepEqual(await menu.getByRole("menuitem").allTextContents(), ["Pin workspace", "Rename workspace", "Close workspace", "New worktree", "Open worktree…"], "the context-menu key and right-click have identical items");
+        assert.deepEqual(await menu.getByRole("menuitem").allTextContents(), ["Pin workspace", "Rename workspace", "Earlier sessions…", "Close workspace", "New worktree", "Open worktree…"], "the context-menu key and right-click have identical items");
         await page.keyboard.press("Escape");
-        const pins = () => page.evaluate(() => JSON.parse(localStorage.getItem("herdr-web-ui:sidebar-agent-pins") ?? "[]") as string[]);
+        const pins = () => page.evaluate(() => JSON.parse(localStorage.getItem("ovis:sidebar-agent-pins") ?? "[]") as string[]);
         // a pinned workspace leaves its place for a card at the top of its PC's list, and returns unpinned
         const workspaceTitles = () => page.locator(".machine-workspaces .workspace-name").allTextContents();
         const herdrOrder = await workspaceTitles();
@@ -899,9 +937,9 @@ try {
         await agentMenu.waitFor();
         assert.deepEqual(await agentMenu.getByRole("menuitem").allTextContents(), ["Pin agent"], "an agent's right-click menu offers its pin");
         await agentMenu.getByRole("menuitem", { name: "Pin agent" }).click();
-        await page.waitForFunction((key) => JSON.parse(localStorage.getItem("herdr-web-ui:sidebar-agent-pins") ?? "[]").includes(key), `local:${panes.infra}`);
+        await page.waitForFunction((key) => JSON.parse(localStorage.getItem("ovis:sidebar-agent-pins") ?? "[]").includes(key), `local:${panes.infra}`);
         assert.deepEqual(await agentTitles(page), [INFRA, ...AGENTS_HERDR_ORDER.filter((title) => title !== INFRA)], "a pinned agent moves to the top, the rest keep herdr's order");
-        assert.equal(await page.evaluate(() => sessionStorage.getItem("herdr-web-ui:selection")), selected, "pinning does not select the agent");
+        assert.equal(await page.evaluate(() => sessionStorage.getItem("ovis:selection")), selected, "pinning does not select the agent");
         assert.equal(await page.locator(".header-more-button").evaluate((button) => document.activeElement === button), true, "the menu hands focus back where it was");
         await page.reload();
         await page.locator(".conn-live").waitFor({ state: "attached" });
@@ -915,7 +953,7 @@ try {
         // the menu focuses its first item on the next frame: Enter goes to it once it has the focus
         await page.waitForFunction(() => document.activeElement?.textContent === "Unpin agent", undefined, { timeout: 5_000 });
         await page.keyboard.press("Enter");
-        await page.waitForFunction(() => JSON.parse(localStorage.getItem("herdr-web-ui:sidebar-agent-pins") ?? "[]").length === 0);
+        await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:sidebar-agent-pins") ?? "[]").length === 0);
         assert.deepEqual(await pins(), []);
         assert.deepEqual(await agentTitles(page), AGENTS_HERDR_ORDER, "unpin restores the source order");
         assert.equal(await infraSelect.evaluate((button) => document.activeElement === button), true, "focus returns to the row as it moves back");
@@ -925,19 +963,19 @@ try {
         const apiMenu = page.getByRole("menu", { name: API, exact: true });
         await apiMenu.waitFor();
         await apiMenu.getByRole("menuitem", { name: "Pin agent" }).click();
-        await page.waitForFunction((key) => JSON.parse(localStorage.getItem("herdr-web-ui:sidebar-agent-pins") ?? "[]").includes(key), `local:${panes.api}`);
+        await page.waitForFunction((key) => JSON.parse(localStorage.getItem("ovis:sidebar-agent-pins") ?? "[]").includes(key), `local:${panes.api}`);
         assert.equal(await page.getByRole("list", { name: "Pinned", exact: true }).count(), 1, "the pinned list is named Pinned");
         assert.deepEqual(await page.locator(".agents-sidebar .agent-list-pinned .agent-title").allTextContents(), [API], "the pinned list holds the pinned agent");
         await agentSelect.click({ button: "right" });
         await apiMenu.getByRole("menuitem", { name: "Unpin agent" }).click();
-        await page.waitForFunction(() => JSON.parse(localStorage.getItem("herdr-web-ui:sidebar-agent-pins") ?? "[]").length === 0);
+        await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:sidebar-agent-pins") ?? "[]").length === 0);
         assert.equal(await page.locator(".agents-sidebar .agent-list-pinned").count(), 0, "the pinned list goes with the last pin");
         assert.deepEqual(await agentTitles(page), AGENTS_HERDR_ORDER);
         console.log("PASS workspace right-click scope, pointer anchor and focus; the context-menu key opens the same menu; a workspace pins into a card and returns to herdr's order; an agent pins and unpins from its right-click menu and the key");
         await waitStatus(page, API, "done");
         assert.deepEqual(await agentTitles(page), AGENTS_HERDR_ORDER, "a finish does not move an agent");
         await agentSelect.click();
-        await page.waitForFunction((paneId) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === paneId, panes.api, { timeout: 5_000 });
+        await page.waitForFunction((paneId) => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "{}").pane_id === paneId, panes.api, { timeout: 5_000 });
         assert.equal(await agentSelect.getAttribute("aria-current"), "true", "ordinary click still selects the agent");
         assert.equal(await page.locator(".row-menu, .row-sheet").count(), 0, "selecting the agent does not open a menu");
         await waitStatus(page, API, "idle");
@@ -963,11 +1001,11 @@ try {
         const sheet = page.getByRole("dialog", { name: API, exact: true });
         await sheet.waitFor();
         await sheet.getByRole("button", { name: "Pin agent" }).tap();
-        await page.waitForFunction((key) => JSON.parse(localStorage.getItem("herdr-web-ui:sidebar-agent-pins") ?? "[]").includes(key), `local:${panes.api}`);
+        await page.waitForFunction((key) => JSON.parse(localStorage.getItem("ovis:sidebar-agent-pins") ?? "[]").includes(key), `local:${panes.api}`);
         await sheet.waitFor({ state: "detached" });
         assert.deepEqual(await page.locator(".agents-sidebar .agent-list-pinned .agent-title").allTextContents(), [API], "the pinned row stands in the pinned list");
         await agentSelect.tap();
-        await page.waitForFunction((paneId) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === paneId, panes.api, { timeout: 5_000 });
+        await page.waitForFunction((paneId) => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "{}").pane_id === paneId, panes.api, { timeout: 5_000 });
         assert.equal(await agentSelect.getAttribute("aria-current"), "true", "a tap still selects the agent");
         assert.equal(await page.locator(".row-menu, .row-sheet").count(), 0, "a tap opens no agent action sheet");
         assert.equal(await drawerToggle.getAttribute("aria-expanded"), "false", "selecting an agent closes the phone drawer");
@@ -996,7 +1034,7 @@ try {
         // opening it here reads it: its DONE draws as ready, and stays so once another pane is open
         // and after a reload (the record is this browser's)
         await agent(page, INFRA).locator(".agent-select").click();
-        await page.waitForFunction((paneId) => JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "{}").pane_id === paneId, panes.infra, { timeout: 5_000 });
+        await page.waitForFunction((paneId) => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "{}").pane_id === paneId, panes.infra, { timeout: 5_000 });
         await waitStatus(page, INFRA, "idle");
         assert.equal((await agentTitles(page))[1], INFRA, "reading a finish does not move it");
         await page.locator(`.machine-workspaces .workspace-select[data-pane="${panes.shell}"]`).click();
