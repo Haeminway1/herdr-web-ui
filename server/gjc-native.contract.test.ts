@@ -181,6 +181,9 @@ async function apiConversation(paneId: string): Promise<{ status: number; body: 
   const stateDir = mkdtempSync(join(home, "api-state-"));
   const app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir });
   try {
+    // Drain initial discovery before teardown: an unfinished snapshot can otherwise
+    // discover the next test's GJC before that test has published its native binding.
+    await app.statusReady;
     const response = await fetch(`http://127.0.0.1:${app.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   } finally {

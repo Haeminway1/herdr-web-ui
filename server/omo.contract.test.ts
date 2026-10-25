@@ -26,9 +26,11 @@ async function waitForProcess(paneId: string, marker: string) {
   for (;;) {
     const info = await herdrRpc<NonNullable<ProcessInfo>>("pane.process_info", { pane_id: paneId });
     const processes = info.process_info?.foreground_processes ?? [];
-    // the stand-in itself, by its path: the shell's own startup processes come and go before it
-    const process = processes.find((process) => process.argv?.includes(marker));
-    if (process) return { process, processes };
+    // A startup shell can carry the script as an argument before exec. Wait for
+    // our actual Bun program and its readable birth identity, not that argv mention.
+    const matched = processes.find((candidate) => candidate.argv?.[0] === process.execPath
+      && candidate.argv[1] === marker && processStartedAt(candidate.pid) !== null);
+    if (matched) return { process: matched, processes };
     if (Date.now() >= deadline) {
       throw new Error(`test process ${marker} did not appear in pane ${paneId}; last process info: ${JSON.stringify(info)}`);
     }
@@ -93,6 +95,13 @@ it("leaves a shell labelled OmO DAG without an agent kind", async () => {
     await workspaceClose(created.workspace.workspace_id);
   }
 });
+
+it("does not accept a script argument as the fixture's running program", async () => {
+  const launcher = join(root, "not-omo");
+  writeFileSync(launcher, "setInterval(() => {}, 1000);\n");
+  await expect(launch(`${process.execPath} ${launcher} ${script}`, script))
+    .rejects.toThrow(`test process ${script} did not appear`);
+}, 10_000);
 
 it("uses live process evidence and stops cwd inference as soon as a second omo shares it", async () => {
   const first = await pane();
