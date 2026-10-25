@@ -1,9 +1,9 @@
 /**
  * The fictional session behind the README media (scripts/readme-media/stage.ts) and the browser
- * demo (site/demo/transport.ts): five panes, their curated chats and one Codex approval. Nothing
+ * demo (site/demo/transport.ts): their panes, curated chats and one Codex approval. Nothing
  * here comes from a real machine. It imports no server code, so the browser bundle can take it.
  */
-import type { ConversationTurn, InteractivePrompt } from "../../shared/protocol.ts";
+import type { ConversationTurn, InteractivePrompt, SessionHistoryAgent, SessionHistoryRow, SlashCommand } from "../../shared/protocol.ts";
 
 export interface DemoSpec {
   key: string;
@@ -20,11 +20,55 @@ export const SPECS: DemoSpec[] = [
   { key: "web", label: "web-dashboard", title: "Guard the export button", agent: "codex", state: "blocked" },
   { key: "infra", label: "infra", title: "Why did the backup fail?", agent: "gjc", state: "idle" },
   { key: "docs", label: "docs-site", title: "Proofread the guide", agent: "omo", state: "idle" },
+  { key: "omp", label: "config-tools", title: "Plan the config file", agent: "omp", state: "idle" },
   { key: "cli", label: "cli-tools", title: "Ship the retry flag", agent: "pi", state: "idle" },
+  { key: "hermes", label: "changelog", title: "Draft the changelog", agent: "hermes", state: "idle" },
   { key: "shell", label: "release", title: "Tag v1.4.0", agent: null },
+  { key: "flaky", label: "flaky-retry-test", title: "Fix the flaky retry test", agent: "claude", state: "idle" },
 ];
 
 export const t = (min: number, sec = 0) => `2026-09-25T09:${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}.000Z`;
+
+/** The flags each agent resumes a session by, as server/session-history.ts cites them. */
+const RESUME_FLAGS: Record<SessionHistoryAgent, string[]> = {
+  claude: ["--resume"], codex: ["resume"], pi: ["--session"], omp: ["--resume"], gjc: ["--resume"], cmd: ["--session"],
+  omo: ["--session-id"], opencode: ["--session"], hermes: ["--resume"], grok: ["--resume"], agy: ["--conversation"], devin: ["--resume"],
+};
+export const SESSION_HISTORY_AGENTS = Object.keys(RESUME_FLAGS) as SessionHistoryAgent[];
+
+/** Two earlier, fictional sessions of an agent in a demo folder, newest first. */
+export function sessionHistoryRows(agent: SessionHistoryAgent): SessionHistoryRow[] {
+  const row = (id: string, title: string, firstMessage: string, started: number, updated: number): SessionHistoryRow =>
+    ({ id, title, firstMessage, startedAt: t(started), updatedAt: t(updated), resume: { argv: [agent, ...RESUME_FLAGS[agent], id] } });
+  return [
+    row(`demo-${agent}-0002`, "Retry budget for the payment client", "Cap the payment client's retries at three and log each one.", 4, 9),
+    row(`demo-${agent}-0001`, "Flaky export test", "Why does the export test fail one run in ten?", 0, 3),
+  ];
+}
+/**
+ * The skills an agent would offer in a demo folder before any pane runs it (GET /api/agent/commands):
+ * Codex types its skills as `$name`, the others as `/name`; a project skill and one of the user's own
+ * for each, so the new workspace and tab dialogs show both. Agents not listed here offer none.
+ */
+export function agentSkillRows(agent: string): SlashCommand[] {
+  const skill = (name: string, description: string, origin: "user" | "project"): SlashCommand => ({
+    name, description, source: "skill", origin, ...(agent === "codex" ? { trigger: "$" as const } : {}),
+    forms: [{ match: "bare", interaction: "unknown" }, { match: "other", interaction: "unknown" }],
+    visibility: "offered", provenance: { transport: "scan", verified: false }, id: `/home/demo/${origin === "project" ? "checkout-api/.agents" : ".agents"}/skills/${name}/SKILL.md`,
+  });
+  switch (agent) {
+    case "codex":
+      return [skill("review-pr", "Review the branch against main and list the findings", "project"), skill("release-notes", "Draft release notes from the merged pull requests", "user"), skill("flaky-tests", "Find and fix a flaky test by its history", "user")];
+    case "claude":
+      return [skill("review-pr", "Review the branch against main and list the findings", "project"), skill("changelog", "Write the changelog fragment for a change", "user")];
+    case "omp":
+    case "pi":
+      return [skill("plan-config", "Plan a config file's keys before writing it", "project")];
+    default:
+      return [];
+  }
+}
+
 const tool = (name: string, summary: string, input: unknown, output: string): ConversationTurn["parts"][number] => ({ kind: "tool", name, summary, input: typeof input === "string" ? input : JSON.stringify(input, null, 2), output });
 
 export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { model: string; reasoning_effort: string } }> = {
@@ -54,6 +98,8 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
     turns: [
       { role: "user" as const, ts: t(1), parts: [{ kind: "text" as const, text: "Rate-limit the export button so a double click can't start two exports, then push the branch." }] },
       { role: "assistant" as const, ts: t(1, 4), end_ts: t(3, 20), parts: [
+        tool("update_plan", "update_plan", { plan: [{ step: "Find where the export starts", status: "in_progress" }, { step: "Guard the button while an export runs", status: "pending" }, { step: "Push the branch", status: "pending" }] }, "Plan updated"),
+        tool("update_plan", "update_plan", { plan: [{ step: "Find where the export starts", status: "completed" }, { step: "Guard the button while an export runs", status: "in_progress" }, { step: "Push the branch", status: "pending" }] }, "Plan updated"),
         tool("exec", "rg -n \"startExport\" src", { cmd: "rg -n \"startExport\" src" }, "src/pages/Reports.tsx:88:  onClick={() => startExport(filters)}"),
         tool("apply_patch", "src/pages/Reports.tsx", "*** Begin Patch\n*** Update File: src/pages/Reports.tsx\n@@\n-  onClick={() => startExport(filters)}\n+  disabled={exporting}\n+  onClick={() => { if (!exporting) startExport(filters); }}\n*** End Patch", "Success. Updated the following files:\nM src/pages/Reports.tsx"),
         tool("exec", "pnpm test --filter reports", { cmd: "pnpm test --filter reports" }, "✓ 9 tests passed"),
@@ -68,6 +114,21 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
       { role: "assistant" as const, ts: t(0, 6), end_ts: t(1, 2), parts: [
         tool("bash", "journalctl -u backup --since yesterday", { command: "journalctl -u backup --since yesterday" }, "backup.sh: disk quota exceeded on /mnt/archive"),
         { kind: "text" as const, text: "The archive volume hit its quota at 02:14. Old snapshots were never pruned because the retention flag was dropped in the last config change. I restored `--keep-daily 14`; tonight's run will prune and succeed." },
+      ] },
+    ],
+  },
+  flaky: {
+    metadata: { model: "claude-opus-5-5", reasoning_effort: "high" },
+    turns: [
+      { role: "user" as const, ts: t(7), parts: [{ kind: "text" as const, text: "`retries a timed-out upload` fails about one run in ten. Find out why and fix it." }] },
+      { role: "assistant" as const, ts: t(7, 4), end_ts: t(9, 30), parts: [
+        tool("TodoWrite", "TodoWrite", { todos: [{ content: "Reproduce the failure", status: "in_progress", activeForm: "Reproducing the failure" }, { content: "Find what the timing depends on", status: "pending", activeForm: "Finding what the timing depends on" }, { content: "Fix the test and rerun it 50 times", status: "pending", activeForm: "Fixing the test" }] }, "Todos have been modified successfully."),
+        tool("TodoWrite", "TodoWrite", { todos: [{ content: "Reproduce the failure", status: "completed", activeForm: "Reproducing the failure" }, { content: "Find what the timing depends on", status: "in_progress", activeForm: "Finding what the timing depends on" }, { content: "Fix the test and rerun it 50 times", status: "pending", activeForm: "Fixing the test" }] }, "Todos have been modified successfully."),
+        tool("Read", "src/lib/retry.test.ts", { file_path: "src/lib/retry.test.ts" }, "test(\"retries a timed-out upload\", async () => { … })"),
+        tool("Bash", "bun test retry --rerun-each 50", { command: "bun test retry --rerun-each 50" }, " 46 pass\n 4 fail\nexpected 3 attempts, received 2"),
+        tool("Edit", "src/lib/retry.test.ts", { file_path: "src/lib/retry.test.ts" }, "Updated src/lib/retry.test.ts"),
+        tool("Bash", "bun test retry --rerun-each 50", { command: "bun test retry --rerun-each 50" }, " 50 pass\n 0 fail"),
+        { kind: "text" as const, text: "The test waited on the real clock, so a slow run let the backoff timer fire before the second attempt was counted. It now drives the timer with a fake clock: 50 runs out of 50 pass." },
       ] },
     ],
   },
@@ -90,6 +151,28 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
           result: "The glossary `docs/i18n/glossary.ko.json` is missing, so the terms could not be kept consistent. Nothing was written." },
       ] }] },
       { role: "assistant" as const, ts: t(4, 3), parts: [{ kind: "text" as const, text: "Fixed 6 typos and one broken link, and moved the three v0.2 pages to v0.3. The Korean FAQ needs a glossary first: shall I start `docs/i18n/glossary.ko.json` from the English one?" }] },
+    ],
+  },
+  omp: {
+    metadata: { model: "anthropic/claude-opus-5-5", reasoning_effort: "high" },
+    turns: [
+      { role: "user" as const, ts: t(3), parts: [{ kind: "text" as const, text: "Plan a `cli-tools.toml` so the flags people repeat can live in a file." }] },
+      { role: "assistant" as const, ts: t(3, 4), end_ts: t(5, 10), parts: [
+        tool("todo", "todo", { op: "init", list: [{ phase: "Plan", items: ["Read the flags people repeat", "Pick where the file is read from", "Write the plan"] }] }, "Overall: 0/3 done, 3 open.\n  Plan:\n    - [ ] Read the flags people repeat (in progress)\n    - [ ] Pick where the file is read from\n    - [ ] Write the plan"),
+        tool("todo", "todo", { op: "done", task: "Read the flags people repeat" }, "Overall: 1/3 done, 2 open.\n  Plan:\n    - [X] Read the flags people repeat\n    - [ ] Pick where the file is read from (in progress)\n    - [ ] Write the plan"),
+        tool("bash", "rg -n \"option\\(\" src/cli.ts", { command: "rg -n \"option\\(\" src/cli.ts" }, "src/cli.ts:12:  .option(\"--retries <n>\")\nsrc/cli.ts:13:  .option(\"--registry <url>\")\nsrc/cli.ts:14:  .option(\"--dry-run\")"),
+        { kind: "text" as const, text: "Three steps:\n\n1. Read `cli-tools.toml` from the project root, then `~/.config/cli-tools.toml`.\n2. A flag on the command line wins over the file, the file over the defaults.\n3. `cli-tools config` prints the merged values and where each one came from.\n\n`--retries` and `--registry` move over as they are; `--dry-run` stays a flag only." },
+      ] },
+    ],
+  },
+  hermes: {
+    metadata: { model: "hermes-4-405b", reasoning_effort: "medium" },
+    turns: [
+      { role: "user" as const, ts: t(14), parts: [{ kind: "text" as const, text: "Draft the changelog for 2.0 from the merged pull requests." }] },
+      { role: "assistant" as const, ts: t(14, 3), end_ts: t(15, 20), parts: [
+        tool("terminal", "gh pr list --state merged --base main", { command: "gh pr list --state merged --base main" }, "#48  feat: retry flaky uploads\n#51  feat: read cli-tools.toml\n#53  fix: exit 2 on a bad flag"),
+        { kind: "text" as const, text: "## 2.0\n\n### Added\n- `--retries` retries a failed upload, never a rejected one (#48).\n- Flags can live in `cli-tools.toml` (#51).\n\n### Fixed\n- A bad flag exits with code 2 instead of 1 (#53)." },
+      ] },
     ],
   },
   // pi reads its own session file, which is an entry tree rather than a log: a `/tree` move
@@ -116,6 +199,21 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
     ],
   },
 };
+
+/**
+ * Claude Code and Codex record each call's own id (shared/protocol.ts `call_id`); every call in
+ * these chats was answered. Claude's unflagged tool_result makes it `ok`; Codex records no outcome,
+ * so its answered calls carry no state. Other agents' chats carry neither.
+ */
+for (const [key, agent] of [["api", "claude"], ["flaky", "claude"], ["web", "codex"]] as const) {
+  let n = 0;
+  for (const turn of CHATS[key]!.turns) for (const part of turn.parts) {
+    if (part.kind !== "tool") continue;
+    n += 1;
+    part.call_id = agent === "claude" ? `toolu_demo_${key}_${n}` : `call_demo_${key}_${n}`;
+    if (agent === "claude") part.state = "ok";
+  }
+}
 
 export const PROMPT: InteractivePrompt = {
   id: "demo-approval",
