@@ -38,7 +38,8 @@ function store(session = "ses_test1") {
   const path = join(root, `opencode-${++stores}.db`);
   const db = new Database(path, { create: true });
   opened.push(db);
-  db.exec("PRAGMA journal_mode = WAL");
+  // These stores test committed visibility and locking, not crash durability.
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = OFF");
   db.exec(SCHEMA);
   db.query("INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, 'global', 'slug', ?, 'Test', '2.0.24', ?, ?)").run(session, root, T0, T0);
   let seq = 3;
@@ -82,7 +83,8 @@ function storeV1(session = "ses_old1") {
   const path = join(root, `opencode-v1-${++stores}.db`);
   const db = new Database(path, { create: true });
   opened.push(db);
-  db.exec("PRAGMA journal_mode = WAL");
+  // These stores test committed visibility and locking, not crash durability.
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = OFF");
   db.exec(SCHEMA_V1);
   db.query("INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, 'global', 'slug', ?, 'Old', '1.18.32', ?, ?)").run(session, root, T0, T0);
   let clock = T0;
@@ -207,7 +209,7 @@ describe("OpenCode's rows as a conversation", () => {
         tool("webfetch", { status: "error", input: { url: "https://example.com/" }, error: { type: "unknown", message: "401 GET https://example.com/" } }),
         tool("shell", { status: "completed", input: { command: "false" }, content: [{ type: "text", text: "" }], metadata: { exit: 1 } }),
         tool("skill", { status: "completed", input: { id: "opencode" }, content: [{ type: "text", text: "<skill_content name=\"OpenCode\">…" }] }),
-        tool("websearch", { status: "completed", input: { query: "herdr web ui" }, content: [{ type: "text", text: "results" }] }),
+        tool("websearch", { status: "completed", input: { query: "Ovis" }, content: [{ type: "text", text: "results" }] }),
         tool("read", { status: "completed", input: { path: "big.log" }, content: [{ type: "text", text: "x".repeat(5000) }] }),
       ],
     }, "msg_step1");
@@ -216,7 +218,7 @@ describe("OpenCode's rows as a conversation", () => {
       ["webfetch", "https://example.com/", true],
       ["shell", "false", true],
       ["skill", "opencode", false],
-      ["websearch", "herdr web ui", false],
+      ["websearch", "Ovis", false],
       ["read", "big.log", false],
     ]);
     expect(parts[0]!.output).toBe("401 GET https://example.com/");

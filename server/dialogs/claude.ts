@@ -1,7 +1,7 @@
 import type { DialogReader } from "./registry.ts";
 import { pickerPlan } from "./interaction-plan.ts";
 import { type InteractivePromptAnswer } from "../../shared/protocol.ts";
-import { ANSI_RE, KEY, NUMBERED_OPTION_RE, type ParsedPrompt, SELECTED_RE, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, joinWrapped, keySteps, listNames, listRows, menuRows, navigationKeys, nearestQuestion, normalizeText, parseNumberedRows, screenWidth, sequentialRows, sliderKeys, wrapped } from "./shared.ts";
+import { ANSI_RE, onePerPass, KEY, NUMBERED_OPTION_RE, type ParsedPrompt, SELECTED_RE, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, joinWrapped, keySteps, listNames, listRows, menuRows, navigationKeys, nearestQuestion, normalizeText, parseNumberedRows, screenWidth, sequentialRows, sliderKeys, wrapped } from "./shared.ts";
 
 // several questions navigate between tabs: "Tab/Arrow keys to navigate"
 export const CLAUDE_ASK_HINT_RE = /enter to select.*(?:↑\/↓|tab\/arrow keys) to navigate.*esc to cancel/i;
@@ -400,6 +400,84 @@ function parseClaudeHeld(screen: string, sent: string | null, working: boolean):
   });
 }
 
+/**
+ * Claude Code's bare `/goal`, as 2.1.304 draws it under the session's labelled rule, with a goal
+ * and without one (the condition wraps at the pane's edge, under its `Goal:` at that column):
+ *
+ *   ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔
+ *      ◎ Goal active
+ *      running 25s · 0 tokens
+ *
+ *      Goal: the file hello.txt exists in
+ *            the project directory
+ *
+ *      /goal clear to stop early · Esc to dismiss
+ *
+ * The dialog's one key is Esc (dismiss); clearing is a command typed after it, which the card
+ * never sends. Another header or row (a paused or achieved goal) is not read: the terminal shows it.
+ */
+/** the status row as recorded: `running 25s · 0 tokens` (a longer run adds units, a count may carry a separator or k/M) */
+const CLAUDE_GOAL_STATUS_RE = /^running \d+[dhms](?: \d+[dhms])* · \d[\d,.]*[kKmM]? tokens$/;
+
+function parseClaudeGoal(screen: string): ParsedPrompt | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  // the panel is what follows the session's rule and runs to the end of the screen
+  const rule = findLastIndex(lines, (line) => cleanLine(line).startsWith("▔"));
+  if (rule < 0) return null;
+  const blocks: string[][] = [[]];
+  for (const line of lines.slice(rule + 1).map(cleanLine)) {
+    if (line === "") { if (blocks.at(-1)!.length > 0) blocks.push([]); } else blocks.at(-1)!.push(line);
+  }
+  if (blocks.at(-1)!.length === 0) blocks.pop();
+  if (blocks.length !== 3) return null;
+  const [head, middle, hint] = blocks as [string[], string[], string[]];
+  const hinted = normalizeText(hint.join(" "));
+  if (head.length === 1 && head[0] === "Goal") {
+    if (normalizeText(middle.join(" ")) !== "No goal set /goal <condition> to set one" || hinted !== "Esc to dismiss") return null;
+    return goalCard("Goal", "No goal set", null);
+  }
+  if (head.length === 2 && head[0] === "◎ Goal active" && CLAUDE_GOAL_STATUS_RE.test(head[1]!) && /^Goal:\s*\S/.test(middle[0]!)
+    && hinted === "/goal clear to stop early · Esc to dismiss") {
+    return goalCard("Goal active", joinWrapped(middle, screenWidth(lines), /^Goal:\s*/), head[1]!);
+  }
+  return null;
+}
+
+/** The card for the goal dialog: its one key is Esc, shown as Close; the elapsed time ticks, so it stays out of the card's id. */
+function goalCard(title: string, question: string, status: string | null): ParsedPrompt {
+  return finishPrompt("claude", {
+    kind: "menu", title, question, body: status,
+    options: [{ label: "Close", description: null }], multi_select: false, custom_option_index: null,
+  }, {
+    responder: "claude-goal", menuLabels: ["Close"], selectedIndex: -1,
+    checkedOptionIndices: [], customMenuIndex: null, rejectWithEscapeIndex: null,
+    optionSteps: [keySteps([KEY.escape])],
+  }, { body: null });
+}
+
+/** The rewind panel the screen ends in: its blocks of lines from its `Rewind` title down, and all that is drawn under its rule; null when there is none. */
+function claudeRewindPanelAt(screen: string): { blocks: string[][]; below: string } | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/).map((line) => line.trimEnd());
+  // the session's rule, or the end of it where a tip takes its start (" tmux detected · scroll… ▔", recorded at 40 columns)
+  const rule = findLastIndex(lines, (line) => cleanLine(line).startsWith("▔") || cleanLine(line).endsWith("▔"));
+  if (rule < 0) return null;
+  const below = lines.slice(rule + 1);
+  const blocks: string[][] = [[]];
+  for (const line of below) {
+    if (line.trim() === "") { if (blocks.at(-1)!.length > 0) blocks.push([]); } else blocks.at(-1)!.push(line);
+  }
+  if (blocks.at(-1)!.length === 0) blocks.pop();
+  return blocks.length >= 3 && blocks[0]!.length === 1 && cleanLine(blocks[0]![0]!) === "Rewind" ? { blocks: blocks.slice(1), below: below.join("\n") } : null;
+}
+
+/** What is drawn under the rule of the rewind panel the screen ends in (the panel, and anything under it); null when it ends in none. */
+export function claudeRewindPanelBelow(screen: string): string | null {
+  return claudeRewindPanelAt(screen)?.below ?? null;
+}
+
+/** A send refused while Claude Code's rewind dialog is on screen (any of its states). */
+export const CLAUDE_REWIND_OPEN_MESSAGE = "Claude Code's rewind dialog is open; finish or close it in the terminal (Esc), then send";
+
 /** Characters no one sees: format controls (zero-width spaces and joiners, bidi marks, tags), combining marks, Hangul fillers. */
 export const INVISIBLE_CHAR_RE = /[\p{Cf}\p{Mn}\p{Me}\u115F\u1160\u3164\uFFA0]/u;
 
@@ -702,7 +780,18 @@ export function withoutClaudeTasks(shown: string[], hintEnds: (lines: string[], 
   return end < shown.length && hintEnds(shown, end) ? shown.slice(0, end) : shown;
 }
 
+const approvalRead = onePerPass((screen) => parseClaudeApproval(screen));
+
 export const readers: readonly DialogReader[] = [
+  {
+    id: "claude-goal", agents: ["claude"], priority: 5,
+    // looked at again before Esc: the dialog may show another goal by then
+    reread: "before-commit", list: "none",
+    parse: (screen) => {
+      const parsed = parseClaudeGoal(screen);
+      return parsed?.responder === "claude-goal" ? parsed : null;
+    },
+  },
   {
     id: "claude-question", agents: ["claude"], priority: 10,
     reread: "none", list: "none",
@@ -722,16 +811,16 @@ export const readers: readonly DialogReader[] = [
   {
     id: "claude-approval", agents: ["claude"], priority: 30,
     reread: "none", list: "none",
-    parse: (screen) => {
-      const parsed = parseClaudeApproval(screen);
+    parse: (screen, ctx) => {
+      const parsed = approvalRead(screen, ctx);
       return parsed?.responder === "claude-approval" ? parsed : null;
     },
   },
   {
     id: "claude-plan", agents: ["claude"], priority: 30,
     reread: "none", list: "none",
-    parse: (screen) => {
-      const parsed = parseClaudeApproval(screen);
+    parse: (screen, ctx) => {
+      const parsed = approvalRead(screen, ctx);
       return parsed?.responder === "claude-plan" ? parsed : null;
     },
   },

@@ -11,7 +11,8 @@ type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" ? value as RecordValue : {};
 const TYPES: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" };
 const DATA_IMAGE = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]*={0,2})$/;
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+/** The largest picture the image endpoint serves, from any agent's transcript. */
+export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const CODEX_IMAGE_REF = /^codex-[a-f0-9]{64}$/;
 
 /** Only native user records name attachments; tool output and remote URLs never do. */
@@ -45,11 +46,17 @@ export function codexImageParts(entry: RecordValue): ImagePart[] {
   });
 }
 
-function imageType(bytes: Buffer): string | null {
-  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
-  if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "image/jpeg";
-  if (/^GIF8[79]a$/.test(bytes.subarray(0, 6).toString("ascii"))) return "image/gif";
-  if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+/** Whether `bytes` holds exactly `signature` at `offset`; bytes, not text, so no high bit is dropped. */
+function hasBytes(bytes: Buffer, offset: number, signature: string): boolean {
+  return bytes.subarray(offset, offset + signature.length).equals(Buffer.from(signature, "latin1"));
+}
+
+/** The raster type its leading bytes announce: a signature check, not a decode. */
+export function imageType(bytes: Buffer): string | null {
+  if (hasBytes(bytes, 0, "\x89PNG\r\n\x1a\n")) return "image/png";
+  if (hasBytes(bytes, 0, "\xff\xd8\xff")) return "image/jpeg";
+  if (hasBytes(bytes, 0, "GIF87a") || hasBytes(bytes, 0, "GIF89a")) return "image/gif";
+  if (hasBytes(bytes, 0, "RIFF") && hasBytes(bytes, 8, "WEBP")) return "image/webp";
   return null;
 }
 

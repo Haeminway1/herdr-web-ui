@@ -9,11 +9,12 @@ import { posixHost } from "./remote-host.ts";
 import { SshConnection } from "./ssh.ts";
 import { CompletionTracker } from "./completion.ts";
 import type { PushService } from "./push.ts";
+import { RemoteResponseTooLarge } from "./remote-json.ts";
 
 // Real setup/approval/verification with a loopback identity endpoint and a fake SSH host.
 // No bundle is downloaded and no real process or user's herdr is touched.
 describe("approved bridge replacement", () => {
-  async function scenario(options: { identity?: Record<string, unknown>; unauthorized?: boolean; replacementProtocol?: number; initialBundle?: string; replacementBundle?: string; reconnect?: boolean; updateAgain?: boolean; repeatBundle?: string; repeatIdentity?: Record<string, unknown>; initialProtocol?: number; onlyFirst?: boolean } = {}) {
+  async function scenario(options: { identity?: Record<string, unknown>; unauthorized?: boolean; replacementProtocol?: number; initialBundle?: string; replacementBundle?: string; reconnect?: boolean; updateAgain?: boolean; repeatBundle?: string; repeatIdentity?: Record<string, unknown>; initialProtocol?: number; onlyFirst?: boolean; oversizedIdentity?: boolean } = {}) {
     const dir = mkdtempSync(join(tmpdir(), "herdr-bridge-replacement-"));
     const socket = "/home/fixture/.config/herdr/herdr.sock";
     const token = "a".repeat(64);
@@ -68,6 +69,8 @@ describe("approved bridge replacement", () => {
             if (path === "/api/bridge") {
               operations.push(`verify:${descriptor.pid}`);
               if (descriptor.pid === 4243) replacementChecks++;
+              // a valid identity behind more whitespace than an identity may take
+              if (options.oversizedIdentity && descriptor.pid === 4242) return new Response(`{${" ".repeat(64 * 1024)}${JSON.stringify({ ...descriptor, socket_id: "fixture:1", herdr: { version: "0.9.3", protocol: 22 } }).slice(1)}`);
               return Response.json({ ...descriptor, socket_id: "fixture:1", herdr: { version: "0.9.3", protocol: 22 }, ...(descriptor.pid === 4242 ? options.identity : replacementChecks > 1 ? { ...(options.repeatBundle ? { bundle_version: options.repeatBundle } : {}), ...options.repeatIdentity } : {}) });
             }
             if (path === "/api/session") return Response.json({ snapshot: { panes: [], workspaces: [] } });
@@ -132,6 +135,14 @@ describe("approved bridge replacement", () => {
       expect(registered).toBe(0);
     });
   }
+  it("never stops the old process for an oversized identity, and names none of it", async () => {
+    const { result, operations, registered } = await scenario({ oversizedIdentity: true });
+    expect(result.phase).toBe("failed");
+    expect(result.error).toContain(new RemoteResponseTooLarge().message);
+    expect(result.error).not.toContain("a".repeat(64));
+    expect(operations).toEqual(["install", "verify:4242"]);
+    expect(registered).toBe(0);
+  });
   it("does not connect if the replacement still speaks another protocol", async () => {
     const { result, operations, registered } = await scenario({ replacementProtocol: BRIDGE_PROTOCOL + 1 });
     expect(result).toMatchObject({ phase: "failed", action_required: "update_bridge" });
@@ -195,6 +206,13 @@ describe("approved bridge replacement", () => {
     const { result, operations } = await scenario({ onlyFirst: true, initialProtocol: BRIDGE_PROTOCOL, initialBundle: REMOTE_BUNDLE_VERSION, identity: { bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1) } });
     expect(result).toMatchObject({ phase: "failed", action_required: "bridge_conflict" });
     expect(result.error).toContain("Update this app");
+    expect(operations).toEqual(["verify:4242"]);
+  });
+  it("sends a newer independently managed bridge to this app's own update, not to that server", async () => {
+    const { result, operations } = await scenario({ onlyFirst: true, initialProtocol: BRIDGE_PROTOCOL, initialBundle: REMOTE_BUNDLE_VERSION, identity: { bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1), managed_remote: false } });
+    expect(result).toMatchObject({ phase: "failed", action_required: "setup" });
+    expect(result.error).toContain("Update this app");
+    expect(result.error).not.toContain("its own Settings");
     expect(operations).toEqual(["verify:4242"]);
   });
   it("sends an incompatible independently managed bridge to its own Settings, not to an update", async () => {

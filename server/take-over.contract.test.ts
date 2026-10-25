@@ -7,7 +7,7 @@ import { herdrRpc, sessionSnapshot } from "./herdr/client.ts";
 import { PtySession } from "./pty/session.ts";
 import type { ClientMessage, ServerMessage } from "../shared/protocol.ts";
 
-const realHerdr = process.env.HERDR_WEB_HERDR_BIN || Bun.which("herdr")!;
+const realHerdr = process.env.OVIS_HERDR_BIN || Bun.which("herdr")!;
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
@@ -35,11 +35,11 @@ async function fixture(steps: Step[], attachHoldMs?: number) {
   writeFileSync(join(root, "plan.json"), JSON.stringify({ herdr: realHerdr, steps }));
   const events = (): Event[] => existsSync(join(root, "events.jsonl"))
     ? readFileSync(join(root, "events.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
-  const previous = { binary: process.env.HERDR_WEB_HERDR_BIN, dir: process.env.HERDR_ATTACH_TEST_DIR };
-  process.env.HERDR_WEB_HERDR_BIN = executable;
+  const previous = { binary: process.env.OVIS_HERDR_BIN, dir: process.env.HERDR_ATTACH_TEST_DIR };
+  process.env.OVIS_HERDR_BIN = executable;
   process.env.HERDR_ATTACH_TEST_DIR = root;
   const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>(
-    "workspace.create", { label: "herdr-web-ui-test-takeover-race", cwd: root, focus: false },
+    "workspace.create", { label: "ovis-test-takeover-race", cwd: root, focus: false },
   );
   const paneId = created.root_pane.pane_id;
   const server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), attachHeldRetryMs: 80, attachRelookupForMs: 400, attachHoldMs });
@@ -53,7 +53,7 @@ async function fixture(steps: Step[], attachHoldMs?: number) {
     for (const pid of pids) if (alive(pid)) { try { process.kill(pid, "SIGTERM"); } catch {} }
     await until(() => pids.every((pid) => !alive(pid)), "owned attach processes stopped");
     await herdrRpc("workspace.close", { workspace_id: created.workspace.workspace_id });
-    for (const [key, value] of [["HERDR_WEB_HERDR_BIN", previous.binary], ["HERDR_ATTACH_TEST_DIR", previous.dir]]) {
+    for (const [key, value] of [["OVIS_HERDR_BIN", previous.binary], ["HERDR_ATTACH_TEST_DIR", previous.dir]]) {
       if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
     }
     rmSync(root, { recursive: true, force: true });
@@ -207,7 +207,7 @@ describe("explicit take-over intent", () => {
     }, "no late takeover after detach");
   }, 20_000);
 
-  it("ends a failed attempt without starting a pending click during its terminal lookup, preserving pane text", async () => {
+  it("recovers an ordinary failure without turning a click during its terminal lookup into takeover", async () => {
     const f = await fixture([{ kind: "held" }, { kind: "failed", gate: "fail" }, { kind: "real" }]);
     await until(() => f.starts().length === 2, "retry running");
     f.send({ type: "take-over", pane_id: f.paneId });
@@ -216,8 +216,12 @@ describe("explicit take-over intent", () => {
     await until(() => !alive(f.starts()[1]!.host), "failed sidecar exited");
     await f.barrier();
     f.send({ type: "take-over", pane_id: f.paneId });
-    await until(() => f.frames.some((m) => m.type === "pty-exit"), "ordinary failure ends after its terminal lookup");
-    expect(f.starts()).toHaveLength(2);
+    await until(() => f.frames.some((m) => m.type === "attach-resumed"), "ordinary recovery attaches again");
+    expect(f.starts()).toHaveLength(3);
+    expect(f.starts()[2]!.args).not.toContain("--takeover");
+    expect(f.frames.some((m) => m.type === "pty-exit")).toBe(false);
     expect(f.frames.filter((m) => m.type === "pty-data").map((m) => m.data).join("")).toContain("terminal attach taken over");
+    f.send({ type: "detach", pane_id: f.paneId });
+    await until(() => f.events().filter((e) => e.type === "child").every((e) => !alive(e.pid)), "detach releases recovered attach");
   }, 20_000);
 });
