@@ -262,6 +262,7 @@ test("publishes the unchanged HEAD and tag atomically when all hosted checks pas
   expect(readFileSync(fx.gitCalls, "utf8")).not.toContain("--force");
   expect(readFileSync(fx.ghCalls, "utf8")).not.toContain("dispatches");
   expect(readFileSync(fx.bunCalls, "utf8")).not.toContain("run check full");
+  expect(readFileSync(fx.bunCalls, "utf8")).toContain("run check integration browser");
   expect(cmd(fx.work, "git", "rev-parse", "HEAD")).toBe(fx.head);
 });
 
@@ -307,6 +308,8 @@ for (const dispatch of ["disabled", "disabled-punctuated"] as const) {
     expect(reportPath.startsWith(`${fx.work}/`)).toBe(false);
     expect(existsSync(reportPath)).toBe(true);
     expect(readFileSync(fx.bunCalls, "utf8")).toContain(`ARGS=run check full\nCHECK_REPORT=${reportPath}`);
+    expect(readFileSync(fx.bunCalls, "utf8")).not.toContain("run check integration browser");
+    expect(readFileSync(fx.bunCalls, "utf8").match(/^ARGS=run check full$/gm)?.length).toBe(1);
     expect(readFileSync(fx.ghCalls, "utf8")).toContain(`ref=release/candidate-1.2.3-${fx.head}`);
     expect(readFileSync(fx.ghCalls, "utf8")).not.toContain(`ref=${fx.head}\n`);
     expect(refSha(fx.origin, candidateRef)).toBe(fx.head);

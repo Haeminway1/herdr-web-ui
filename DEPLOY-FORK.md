@@ -24,4 +24,6 @@ The release script must pass locked install, Fast checks, Integration and browse
 
 Install only the admitted release through the fork updater's manual install API. Verify installed revision, shared health/session, machine connectivity and the existing classic sidebar/scroll behavior. Keep the preceding installed release for rollback. A rollback must also withdraw the faulty release tag from origin and the updater's cached local tags so manual updates do not offer it again; preserve its commit/branch and recovery evidence.
 
+After Fast checks, query the exact candidate's hosted checks before running the long local browser lane. When Actions is disabled, the validated local full report supplies the required integration/browser evidence once; do not run that same lane separately first. When hosted checks pass, the standalone local integration/browser gate remains required. No required assertion or report validation is skipped.
+
 Never restart Herdr itself, phase1, native panes or agents. The canonical service :7317 and its config remain independent. Discover fork config with `herdr plugin config-dir haeminway1.herdr-web-ui`; never print or copy credentials.

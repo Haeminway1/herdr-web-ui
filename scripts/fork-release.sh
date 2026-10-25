@@ -163,7 +163,6 @@ existing_tag="$(git ls-remote --tags --refs origin "refs/tags/v$version" 2>"$log
 cd "$root" || fail 'could not enter the repository'
 run_checked_command 'locked dependency install' "$logs/install.log" 'locked dependency install failed' bun install --frozen-lockfile
 run_checked_command 'Fast checks' "$logs/fast.log" 'Fast checks failed' bun run check fast
-run_checked_command 'Integration and browser checks' "$logs/integration-browser.log" 'Integration and browser checks failed' bun run check integration browser
 
 # GitHub answers check-runs only for commits it has; publish the exact-HEAD ref first.
 choose_dispatch_ref
@@ -207,6 +206,10 @@ case "$check_state" in
     fail 'check-runs response had an unknown state'
     ;;
 esac
+
+if [ -z "$local_gate_report" ]; then
+  run_checked_command 'Integration and browser checks' "$logs/integration-browser.log" 'Integration and browser checks failed' bun run check integration browser
+fi
 
 assert_source_state 'release gates'
 tag="v$version"
