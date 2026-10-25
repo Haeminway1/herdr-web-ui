@@ -404,8 +404,17 @@ try {
             await page.locator("[data-todo-group] > .work-row-head").hover();
             await shoot(page, config, "hover");
           }
-          const box = (await page.locator("[data-todo-group] > .work-row-head").boundingBox())!;
+          const disclosure = page.locator("[data-todo-group] > .work-row-head");
+          // Raw mouse input skips Playwright's layout/scroll actionability checks.
+          // Enter pointer modality before settling the previously keyboard-focused row.
+          await disclosure.hover();
+          await disclosure.click({ trial: true });
+          const box = (await disclosure.boundingBox())!;
           if (config.phone) assert.ok(box.height >= 44 && box.width >= 44, `${label}: disclosure target ${box.width}x${box.height}`);
+          assert.equal(await disclosure.evaluate((node) => {
+            const rect = node.getBoundingClientRect();
+            return node.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+          }), true, `${label}: the disclosure receives the pointer`);
           await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
           await page.mouse.down();
           await shoot(page, config, "pressed");
