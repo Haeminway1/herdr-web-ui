@@ -67,7 +67,7 @@ function connect(port: number, paneId: string) {
 
 async function pane(): Promise<string> {
   const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>(
-    "workspace.create", { label: "herdr-web-ui-test-held", cwd: rootA, focus: false },
+    "workspace.create", { label: "ovis-test-held", cwd: rootA, focus: false },
   );
   workspaces.push(created.workspace.workspace_id);
   return created.root_pane.pane_id;
@@ -78,7 +78,7 @@ async function pane(): Promise<string> {
  * repeats); `real` runs the real attach.
  */
 function scriptedHerdr(attempts: string[]): { path: string; attempts: () => number } {
-  const real = process.env["HERDR_WEB_HERDR_BIN"] || Bun.which("herdr") || "herdr";
+  const real = process.env["OVIS_HERDR_BIN"] || Bun.which("herdr") || "herdr";
   const dir = mkdtempSync(join(rootB, "scripted-herdr-"));
   const count = join(dir, "count");
   const path = join(dir, "herdr");
@@ -100,11 +100,11 @@ function scriptedHerdr(attempts: string[]): { path: string; attempts: () => numb
 }
 
 async function withHerdr<T>(path: string, run: () => Promise<T>): Promise<T> {
-  const previous = process.env["HERDR_WEB_HERDR_BIN"];
-  process.env["HERDR_WEB_HERDR_BIN"] = path;
+  const previous = process.env["OVIS_HERDR_BIN"];
+  process.env["OVIS_HERDR_BIN"] = path;
   try { return await run(); } finally {
-    if (previous === undefined) delete process.env["HERDR_WEB_HERDR_BIN"];
-    else process.env["HERDR_WEB_HERDR_BIN"] = previous;
+    if (previous === undefined) delete process.env["OVIS_HERDR_BIN"];
+    else process.env["OVIS_HERDR_BIN"] = previous;
   }
 }
 
@@ -209,7 +209,7 @@ describe("a terminal another web bridge holds", () => {
 });
 
 describe("an attach classified as held", () => {
-  it("is only herdr's own refusal: an attach that ends on other output ends the terminal", async () => {
+  it("is only herdr's own refusal: other output gets bounded live-terminal recovery", async () => {
     const paneId = await pane();
     // the pane itself prints herdr's refusal (a log, say), then the attach fails for another reason
     const herdr = scriptedHerdr([`${HELD.replace("; exit 1", "")}; printf 'more pane output\\r\\n'; sleep 0.5; exit 1`]);
@@ -218,12 +218,15 @@ describe("an attach classified as held", () => {
       try {
         await client.open;
         client.send({ type: "attach", pane_id: paneId, cols: 100, rows: 30 });
-        await until(() => client.state.exits === 1, "the failed attach ends the terminal");
+        await until(() => client.state.exits === 1, "the repeatedly failed attach reaches its one recovery deadline");
         expect(client.state.exitCodes).toEqual([1]);
         expect(client.state.errors).not.toContain("attach_held");
         expect(client.state.tail).toContain("already has an attached client");
+        const attempts = herdr.attempts();
+        expect(attempts).toBeGreaterThan(1);
+        expect(attempts).toBeLessThan(16);
         await Bun.sleep(400);
-        expect(herdr.attempts()).toBe(1);
+        expect(herdr.attempts()).toBe(attempts);
       } finally { client.ws.close(); }
     });
   }, 30_000);

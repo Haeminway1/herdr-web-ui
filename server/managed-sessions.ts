@@ -129,7 +129,7 @@ function transcriptPermission(
 }
 
 /** A Claude/Codex record is readable only while herdr's current native session binds to the same harness and file or id. */
-function nativeSessionBound(pane: HerdrPane, harness: Harness, sessionId: string, sessionFile: string): boolean {
+export function managedNativeSessionBound(pane: HerdrPane, harness: Harness, sessionId: string, sessionFile: string): boolean {
   if (harness !== "codex" && harness !== "claude") return false;
   const binding = pane.agent_session;
   if (!binding || binding.agent !== harness || typeof binding.value !== "string" || binding.value === "") return false;
@@ -161,7 +161,7 @@ function header(path: string, harness: Harness, expected: FileIdentityPin): { id
     const limit = harness === "codex" ? 1024 * 1024 : 16384;
     let buffer = Buffer.alloc(16385);
     let offset = 0;
-    for (let row = 0; row < (harness === "claude" ? 32 : 1); row++) {
+    for (let row = 0; row < (harness === "claude" ? 32 : harness === "omo" ? 2 : 1); row++) {
       let count = 0;
       let newline = -1;
       while (newline < 0) {
@@ -182,6 +182,7 @@ function header(path: string, harness: Harness, expected: FileIdentityPin): { id
       const entry = object(JSON.parse(buffer.subarray(0, newline).toString("utf8")));
       if (!entry) return null;
       offset += newline + 1;
+      if (harness === "omo" && row === 0 && entry.type === "title") continue;
       if (harness === "codex") {
         const payload = entry.type === "session_meta" ? object(entry.payload) : null;
         return payload ? { id: payload.id, cwd: payload.cwd } : null;
@@ -196,11 +197,13 @@ function header(path: string, harness: Harness, expected: FileIdentityPin): { id
 
 /** A declared managed pane is never allowed to fall through to process/cwd/recency guesses. */
 export async function resolveManagedSession(pane: HerdrPane, namespace = managedNamespace(), deps: ManagedSessionDeps = {}): Promise<ManagedSessionResolution | null> {
-  const tokens = pane.tokens ?? {};
-  if (!("hm_managed_session" in tokens) && !("hm_managed_generation" in tokens)) return null;
   const identity: ManagedSessionIdentity = { id: null, harness: null, generation: null, state: "blocked", reason: null, session_id: null };
   const blocked = (reason: string): ManagedSessionResolution => ({ identity: { ...identity, state: "blocked", reason }, sessionFile: null });
   const pending = (reason: string): ManagedSessionResolution => ({ identity: { ...identity, state: "identity_pending", reason }, sessionFile: null });
+  const tokens = pane.tokens;
+  if (tokens == null) return null;
+  if (typeof tokens !== "object" || Array.isArray(tokens)) return blocked("blocked_managed_token");
+  if (!("hm_managed_session" in tokens) && !("hm_managed_generation" in tokens)) return null;
   const nonce = tokens.hm_managed_session;
   const generation = tokens.hm_managed_generation;
   if (typeof nonce !== "string" || !/^[0-9a-f]{32}$/.test(nonce)) return blocked("blocked_managed_token");
@@ -296,7 +299,7 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
           const held = startedAt === null ? [] : [...new Set([dirname(sessionFile), store].flatMap((dir) =>
             (deps.heldSessionIds ?? heldSessionIds)(dir, before.pid, startedAt, recordCwd)))];
           if (held.length !== 1 || held[0] !== sessionId) return blocked("blocked_runtime_identity");
-        } else if (!nativeSessionBound(pane, identity.harness, sessionId, sessionFile)) {
+        } else if (!managedNativeSessionBound(pane, identity.harness, sessionId, sessionFile)) {
           return blocked("blocked_runtime_identity");
         }
         const rootAfter = lstatSync(namespace);
