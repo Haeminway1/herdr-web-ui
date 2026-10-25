@@ -209,15 +209,23 @@ try {
           await check("upward gesture yields before mobile viewport resize", page, async () => {
             // Only mobile viewport geometry is controlled: the App and its ResizeObserver stay real.
             await bottom(page);
-            const before = await geometry(page);
-            await page.evaluate(() => {
+            // A stream may finish following between driver calls. Measure at the input boundary,
+            // not in an earlier task whose still-valid follow can move before the gesture starts.
+            await update(page, "stream");
+            await bottom(page);
+            const before = await page.evaluate(() => {
               const node = document.querySelector<HTMLElement>(".pane-frame.is-current .chat-view")!;
+              const measured = { top: node.scrollTop, height: node.scrollHeight, viewport: node.clientHeight };
               node.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, touches: [new Touch({ identifier: 1, target: node, clientX: 100, clientY: 200 })] }));
               node.dispatchEvent(new TouchEvent("touchmove", { bubbles: true, touches: [new Touch({ identifier: 1, target: node, clientX: 100, clientY: 225 })] }));
               document.documentElement.style.setProperty("--app-height", "600px");
+              return measured;
             });
             await settled(page);
-            assert.ok((await geometry(page)).top <= before.top + 1, "a viewport resize must yield to the upward gesture before the scroll callback");
+            const after = await geometry(page);
+            assert.ok(after.viewport < before.viewport, `the fixture must shrink the mobile viewport: ${JSON.stringify({ before, after })}`);
+            assert.ok(after.top <= before.top + 1, `a viewport resize must yield to the upward gesture before the scroll callback: ${JSON.stringify({ before, after })}`);
+            assert.ok(after.gap > 1, `the resized viewport must not resume following: ${JSON.stringify({ before, after })}`);
             await page.evaluate(() => {
               document.documentElement.style.removeProperty("--app-height");
               document.querySelector(".pane-frame.is-current .chat-view")!.dispatchEvent(new TouchEvent("touchend", { bubbles: true }));
