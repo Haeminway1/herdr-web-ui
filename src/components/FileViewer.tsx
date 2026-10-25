@@ -251,6 +251,14 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen, keyboardActiv
     if (document.activeElement === bodyRef.current) mediaRef.current?.focus({ preventScroll: true });
   }, [mediaKind, page, docked]);
 
+  // the reader's page (FileReader) has no trap, but it opens with the focus on the document as the
+  // popup does: its body is the one scroll box at every width, so Space, Page Down, the arrows, Home
+  // and End scroll it before any click. A focus already inside the page stays where it is.
+  useLayoutEffect(() => {
+    if (!page || surface.current?.contains(document.activeElement)) return;
+    bodyRef.current?.focus({ preventScroll: true });
+  }, [page]);
+
   useEffect(() => {
     if (!keyboardActive || page) return;
     // the FilesDialog beneath listens on window too (and stands down while this is open); this
@@ -392,7 +400,7 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen, keyboardActiv
       case "image":
         return info.size > MAX_INLINE_IMAGE_BYTES
           ? <p className="file-viewer-note">{t("This image is {size}; download it to view.", { size: formatBytes(info.size) })}</p>
-          : <img className="file-viewer-media" src={url} alt={info.name} />;
+          : <img className="file-viewer-media" src={`${url}&revision=${encodeURIComponent(`${info.modified}:${info.size}`)}`} alt={info.name} />;
       case "video":
         return <video ref={(node) => { mediaRef.current = node; }} className="file-viewer-media" src={url} controls playsInline preload="metadata" />;
       case "audio":
@@ -506,7 +514,8 @@ export function FileViewer({ path: asked, paneId, onClose, onOpen, keyboardActiv
   if (page) return (
     <main ref={surface} className="file-reader">
       {header}
-      <div className={`${bodyClass} file-reader-body`}>{body}{openingNote}</div>
+      {/* the focus starts here, as in the popup: a scroll box takes Space and the arrows */}
+      <div ref={bodyRef} className={`${bodyClass} file-reader-body`} tabIndex={-1}>{body}{openingNote}</div>
     </main>
   );
 

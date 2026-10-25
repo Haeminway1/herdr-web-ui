@@ -61,6 +61,7 @@ export const ATTACH_HELD_MESSAGE = "Another web bridge has this pane open. It co
  */
 export const ATTACH_RELOOKUP_FOR_MS = 5_000;
 const ATTACH_RELOOKUP_MS = 100;
+const ATTACH_RELOOKUP_MAX_MS = 500;
 /** what a pane lookup answers for a pane that has no terminal to attach any more */
 const PANE_GONE_CODES = new Set(["pane_not_found", "pane_not_restored", "no_terminal"]);
 
@@ -81,10 +82,14 @@ interface AttachmentState {
   stalled: Map<Client, number>;
   /** another web bridge holds herdr's one attach slot for this terminal: waiting for it to let go */
   held?: boolean;
+  /** the stream ended after it was ready: until an attach takes again, the replay is the screen from before */
+  recovering?: boolean;
   /** the next held or read-race retry; takeover and close both cancel it */
   retry?: ReturnType<typeof setTimeout>;
   /** the next look for the terminal a pane lives on after herdr ended its attach; a closed attachment cancels it */
   relookup?: ReturnType<typeof setTimeout>;
+  /** clears one recovery budget only after its replacement attach stays alive to the budget's end */
+  recovery?: ReturnType<typeof setTimeout>;
   /** a repaint asked of herdr for clients that joined with only the replay tail; a closed attachment cancels it */
   repaint?: ReturnType<typeof setTimeout>;
   /** when herdr was last asked to repaint (or redrew for a resize), for REPAINT_MIN_INTERVAL_MS */
@@ -113,6 +118,8 @@ export interface PtyAttachment extends AttachmentState {
 export interface MirrorAttachment extends AttachmentState {
   readonly kind: "mirror";
   process: MirrorSession;
+  /** clients that attached before any screen went out: the first screen they get is their replay */
+  unscreened: Set<Client>;
 }
 
 export type PaneAttachment = PtyAttachment | MirrorAttachment;
@@ -121,7 +128,7 @@ export type PaneAttachment = PtyAttachment | MirrorAttachment;
  * The attach the server's clients share for each pane. `attachments` stays the server's: a callback
  * of an attachment that is no longer the pane's record does nothing.
  */
-export function createSpawnAttachment({ attachments, retiringAttachments, terminalAttach, isStopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, holdFor, heldRetry, retryFor, relookupFor }: {
+export function createSpawnAttachment({ attachments, retiringAttachments, terminalAttach, isStopped, closeAttachment, broadcast, sendOutput, reconcileOutput, holdPendingPane, inputReady, holdFor, heldRetry, retryFor, relookupFor }: {
   attachments: Map<string, PaneAttachment>;
   retiringAttachments: Map<string, Promise<void>>;
   terminalAttach: () => Promise<boolean>;
@@ -129,9 +136,11 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
   isStopped: () => boolean;
   closeAttachment: (paneId: string) => void;
   broadcast: (paneId: string, message: ServerMessage) => void;
-  sendOutput: (client: Client, paneId: string, data: string) => void;
+  sendOutput: (client: Client, paneId: string, data: string, replay?: boolean) => void;
   reconcileOutput: (paneId: string) => void;
   holdPendingPane: (paneId: string, fault: { code: string; message: string }) => void;
+  /** the attach took and input flows: a pending message waiting for a typist may go now */
+  inputReady: (paneId: string) => void;
   holdFor: number;
   heldRetry: number;
   retryFor: number;
@@ -172,7 +181,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
     };
 
     if (mirrored) {
-      const attachment: MirrorAttachment = { kind: "mirror", ready: true, process: undefined as unknown as MirrorSession, ...state };
+      const attachment: MirrorAttachment = { kind: "mirror", ready: true, process: undefined as unknown as MirrorSession, unscreened: new Set(), ...state };
       attachments.set(paneId, attachment);
       const mirror = new MirrorSession({
         cols: spawnCols,
@@ -192,7 +201,7 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         write: (data) => paneSendText(paneId, data),
         onData: (frame) => {
           if (attachments.get(paneId) !== attachment) return;
-          for (const client of attachment.clients) sendOutput(client, paneId, frame);
+          for (const client of attachment.clients) sendOutput(client, paneId, frame, attachment.unscreened.delete(client));
           reconcileOutput(paneId);
         },
         onExit: (code) => {
@@ -252,6 +261,9 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
     };
     /** the terminal attached to: a pane keeps its id across a server handoff, its terminal does not */
     let attachedTerminal = terminalId;
+    /** One budget persists across consecutive exits during recovery. Starting an attach never renews it. */
+    let recoveryDeadline: number | null = null;
+    let recoveryRetries = 0;
     const start = (): PtySession => {
       let takingOver = mayTakeOver(takeover) ? takeover : null;
       takeover = null;
@@ -280,6 +292,8 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       };
       /** ended before its exit came: what it still prints is no attach's */
       let retired = false;
+      /** a synthetic retirement calls ended before killing; the process's later onExit is the same end */
+      let endedOnce = false;
       const release = (): void => {
         clearTimeout(holdTimer);
         if (held === null) return;
@@ -316,30 +330,70 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
           broadcast(paneId, { type: "attach-resumed", pane_id: paneId });
         }
         attachment.ready = true;
+        attachment.recovering = false;
         broadcast(paneId, { type: "input-ready", pane_id: paneId });
+        inputReady(paneId);
         release();
+        // A replacement that only flashes ready before exiting must not create an endless series
+        // of fresh recovery windows. Even one started near the deadline proves stable only by
+        // remaining attached for a whole recovery window.
+        if (recoveryDeadline !== null) {
+          clearTimeout(attachment.recovery);
+          const recovered = session;
+          attachment.recovery = setTimeout(() => {
+            attachment.recovery = undefined;
+            if (attachments.get(paneId) !== attachment || attachment.process !== recovered || !attachment.ready) return;
+            recoveryDeadline = null;
+            recoveryRetries = 0;
+          }, relookupFor);
+        }
       };
       const ended = (code: number | null): void => {
+        if (endedOnce) return;
+        endedOnce = true;
         trying = false;
         clearTimeout(holdTimer);
         clearTimeout(tailTimer);
+        clearTimeout(attachment.recovery);
+        attachment.recovery = undefined;
         if (attachments.get(paneId) !== attachment) return;
         if (attachment.ready) {
+          attachment.recovering = true;
           broadcast(paneId, { type: "input-ready", pane_id: paneId, ready: false });
           holdPendingPane(paneId, { code: "input_not_ready", message: "The pane's attachment is restarting; review pending messages before sending them" });
         }
         attachment.ready = false;
+        const finish = (): void => {
+          broadcast(paneId, { type: "pty-exit", pane_id: paneId, code });
+          closeAttachment(paneId);
+        };
         const now = Date.now();
         // displaced after attaching (herdr's last words): the read-race words may still be on its screen
         const displaced = code !== 0 && isTakeoverExit(output);
-        if (!displaced && code !== 0 && ATTACH_READ_RACE_RE.test(output) && now - (refusedSince ??= now) < retryFor) {
-          held = null;
-          retries += 1;
-          // An explicit request survives a read race only until an attach succeeds.
-          takeover = mayTakeOver(takingOver) ? takingOver : takeoverWanted;
-          takeoverWanted = null;
-          attachment.retry = setTimeout(again, Math.min(ATTACH_RETRY_MS * 2 ** (retries - 1), ATTACH_RETRY_MAX_MS));
-          return;
+        const readRace = !displaced && code !== 0 && ATTACH_READ_RACE_RE.test(output);
+        if (readRace) {
+          if (recoveryDeadline !== null && now >= recoveryDeadline) {
+            held = null;
+            return finish();
+          }
+          const refusedDeadline = (refusedSince ??= now) + retryFor;
+          const retryDeadline = recoveryDeadline ?? refusedDeadline;
+          if (now < Math.min(refusedDeadline, retryDeadline)) {
+            held = null;
+            retries += 1;
+            // An explicit request survives a read race only until an attach succeeds.
+            takeover = mayTakeOver(takingOver) ? takingOver : takeoverWanted;
+            takeoverWanted = null;
+            const delay = Math.min(ATTACH_RETRY_MS * 2 ** (retries - 1), ATTACH_RETRY_MAX_MS, retryDeadline - now);
+            attachment.retry = setTimeout(() => {
+              attachment.retry = undefined;
+              // The timer can run after its deadline. Do not start one more attach then wait for
+              // that process to exit before applying the recovery limit.
+              if (recoveryDeadline !== null && Date.now() >= recoveryDeadline) return finish();
+              again();
+            }, delay);
+            return;
+          }
         }
         if (displaced || (code !== 0 && ATTACH_HELD_RE.test(output))) {
           flushTail(displaced);
@@ -369,34 +423,41 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         trying = true; // a live-handoff lookup owns the next start until it finishes
         release();
         flushTail();
-        const finish = (): void => {
-          broadcast(paneId, { type: "pty-exit", pane_id: paneId, code });
-          closeAttachment(paneId);
-        };
-        // a refusal whose exit never came ended this try itself, on a terminal that is still there
-        if (retired) return finish();
         // herdr ended the attach, maybe not the pane: after a live handoff the pane lives on under
-        // a new terminal, and the same clients attach to that one. A pane that is gone, or still
-        // on this terminal once the lookups run out, ended.
-        const deadline = Date.now() + relookupFor;
+        // a new terminal, and a transient attach EOF may leave the same terminal live. One deadline
+        // and exponential backoff span every replacement that also exits, so a broken attach command
+        // cannot reset itself into an unbounded spawn loop.
+        const firstRecovery = recoveryDeadline === null;
+        const deadline = recoveryDeadline ??= Date.now() + relookupFor;
         const retryLookup = (): void => {
-          if (Date.now() >= deadline) return finish();
-          attachment.relookup = setTimeout(relookup, ATTACH_RELOOKUP_MS);
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) return finish();
+          const delay = Math.min(ATTACH_RELOOKUP_MS * 2 ** Math.min(recoveryRetries++, 8), ATTACH_RELOOKUP_MAX_MS, remaining);
+          attachment.relookup = setTimeout(relookup, delay);
         };
         const relookup = (): void => {
+          if (attachment.clients.size === 0) {
+            closeAttachment(paneId);
+            return;
+          }
+          if (Date.now() >= deadline) return finish();
           // a herdr that takes the request and never answers must not hold the terminal past the
           // deadline: the lookup gets what is left of it, not the RPC's own 10 s
           terminalInfoFor(paneId, Math.max(1, deadline - Date.now())).then(({ terminalId: now }) => {
             if (attachments.get(paneId) !== attachment) return;
-            if (now === attachedTerminal) return retryLookup();
+            if (Date.now() >= deadline) return finish();
             if (attachment.clients.size === 0) {
               closeAttachment(paneId);
               return;
             }
-            attachedTerminal = now;
-            // a new terminal gets the whole read-race budget
-            refusedSince = null;
-            retries = 0;
+            if (now !== attachedTerminal) {
+              attachedTerminal = now;
+              // a new terminal gets the whole read-race budget
+              refusedSince = null;
+              retries = 0;
+            }
+            // The exact same terminal id is positive liveness too: the attach process, not the pane,
+            // ended. Restart its stream rather than waiting out the window and claiming the pane died.
             try {
               attachment.process = start();
             } catch (error) {
@@ -411,13 +472,14 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
             retryLookup();
           });
         };
-        relookup();
+        if (firstRecovery) relookup();
+        else retryLookup();
       };
-      const command = process.env["HERDR_WEB_HERDR_BIN"] || "herdr";
+      const command = process.env["OVIS_HERDR_BIN"] || "herdr";
       // node-pty reports a command it cannot exec only as a silent exit 1, which reads as an
       // ended attach (#925): look it up on the PATH and from the home directory the sidecar uses.
       if (!Bun.which(command, { PATH: process.env["PATH"] ?? "", cwd: process.env["HOME"] ?? "/" })) {
-        throw new HerdrError("attach_failed", `herdr could not be started: ${command} is not an executable on the server's PATH (set HERDR_WEB_HERDR_BIN to herdr's full path)`);
+        throw new HerdrError("attach_failed", `herdr could not be started: ${command} is not an executable on the server's PATH (set OVIS_HERDR_BIN to herdr's full path)`);
       }
       const session = new PtySession({
         command,

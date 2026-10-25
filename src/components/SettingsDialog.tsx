@@ -20,7 +20,7 @@ import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useLocale, useT } from "../lib/i18n.
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { KeyBarSettings } from "./KeyBarSettings.tsx";
 import { onSettingsHistory, recordSettings, settingsEntry, settingsLevels, type SettingsLevel } from "../lib/settingsHistory.ts";
-import { Segmented, SettingsGroup, SettingsRow, Stepper, Toggle } from "./SettingsControls.tsx";
+import { Segmented, SettingsGroup, SettingsRow, SettingsSelect, Stepper, Toggle } from "./SettingsControls.tsx";
 import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts";
 import { UI_FONT_MAX, UI_FONT_MIN } from "../lib/typography.ts";
 import { canListInstalledFonts, filterFamilies, isMonospaceFamily, queryInstalledFonts } from "../lib/installedFonts.ts";
@@ -72,6 +72,11 @@ export interface SettingsDialogProps {
   onEnableNotifications: () => Promise<boolean>;
   /** the last change the server refused to save (lib/preferencesSync.ts); null once a save lands */
   saveError: UserError | null;
+  /** three saves failed in a row: nothing is sent until Retry, a reconnect or a longer wait */
+  savePaused: boolean;
+  /** a Retry of that save is waiting for its answer */
+  saveRetrying: boolean;
+  onRetrySave: () => void;
   /** a file preview is open beneath: the dialog is drawn above it */
   overPreview?: boolean;
 }
@@ -248,6 +253,7 @@ const THEME_NAMES: Record<ThemeId, string> = {
   report: "Report",
   amber: "Amber",
   charcoal: "Charcoal",
+  codex: "Codex",
   catppuccin: "Catppuccin",
   "catppuccin-latte": "Catppuccin Latte",
   "tokyo-night": "Tokyo Night",
@@ -282,13 +288,13 @@ function ThemeSelect({ side }: { side: Mode }) {
   const { settings, update } = useSettings();
   const t = useT();
   return (
-    <select id={`settings-theme-${side}`} className="select settings-select" value={side === "dark" ? settings.darkTheme : settings.lightTheme} onChange={(event) => update(pickTheme(settings, side, event.target.value as ThemeId))}>
+    <SettingsSelect id={`settings-theme-${side}`} value={side === "dark" ? settings.darkTheme : settings.lightTheme} onChange={(event) => update(pickTheme(settings, side, event.target.value as ThemeId))}>
       {themeGroups(side).map(({ kind, ids }) => (
         <optgroup key={kind} label={kind === "dark" ? t("Dark") : t("Light")}>
           {ids.map((id) => <option key={id} value={id}>{t(THEME_NAMES[id])}</option>)}
         </optgroup>
       ))}
-    </select>
+    </SettingsSelect>
   );
 }
 
@@ -311,9 +317,9 @@ function AppearancePage() {
         <Segmented label={t("Density")} value={settings.density} onChange={(density) => update({ density })} options={[{ value: "comfortable", label: t("Comfortable") }, { value: "compact", label: t("Compact") }]} />
       </SettingsRow>
       <SettingsRow label={t("Language")} description={t("Follows the browser unless you choose one")} htmlFor="settings-language">
-        <select id="settings-language" className="select settings-select" value={settings.language} onChange={(event) => update({ language: event.target.value as typeof settings.language })}>
+        <SettingsSelect id="settings-language" value={settings.language} onChange={(event) => update({ language: event.target.value as typeof settings.language })}>
           {LANGUAGE_SETTINGS.map((language) => <option key={language} value={language}>{language === "system" ? t("System") : LANGUAGE_NAMES[language]}</option>)}
-        </select>
+        </SettingsSelect>
       </SettingsRow>
       <SettingsRow label={t("Sidebar rows")} description={t("Name each workspace on one line, or show what its agent is doing with the workspace under it")} wide>
         <Segmented label={t("Sidebar rows")} value={settings.sidebarRows} onChange={(sidebarRows) => update({ sidebarRows })} options={[{ value: "one", label: t("One line") }, { value: "two", label: t("Two lines") }]} />
@@ -381,6 +387,8 @@ function ChatPage() {
   const { settings, update } = useSettings();
   const t = useT();
   const touch = useMediaQuery("(pointer: coarse)");
+  // the same query Composer.tsx hides the New tab button by
+  const compactComposer = useMediaQuery("(max-width: 640px), (pointer: coarse)");
   return (
     <>
       <SettingsGroup>
@@ -413,6 +421,12 @@ function ChatPage() {
         <SettingsRow label={t("Send queued messages automatically")} description={t("A message sent while the agent works goes by itself when the turn ends. When off, it waits until you press Send now.")}>
           <Toggle label={t("Send queued messages automatically")} checked={settings.autoSendQueued} onChange={(autoSendQueued) => update({ autoSendQueued })} />
         </SettingsRow>
+        {/* the button is drawn in a wide, mouse-driven window only (Composer.tsx), so it is offered only there */}
+        {!compactComposer && (
+          <SettingsRow label={t("New tab button")} description={t("A button in the message box opens New tab with an agent… on the pane's workspace. The tab menu offers it either way.")}>
+            <Toggle label={t("New tab button")} checked={settings.composerNewTabButton} onChange={(composerNewTabButton) => update({ composerNewTabButton })} />
+          </SettingsRow>
+        )}
         {touch && (
           <SettingsRow label={t("Suggestion chip")} description={t("A chip above the message box puts the prompt Claude Code suggests next into the box. With a keyboard, Tab does it.")}>
             <Toggle label={t("Suggestion chip")} checked={settings.suggestionChip} onChange={(suggestionChip) => update({ suggestionChip })} />
@@ -489,9 +503,9 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
       </SettingsRow>
       <SettingsRow label={t("Terminal input mode")} htmlFor="terminal-input-mode">
         {/* "auto", the stored default, types straight into the grid on every device: it reads as Direct typing */}
-        <select id="terminal-input-mode" className="select settings-select" value={settings.terminalInputMode === "line" ? "line" : "direct"} onChange={(event) => update({ terminalInputMode: event.target.value as "line" | "direct" })}>
+        <SettingsSelect id="terminal-input-mode" value={settings.terminalInputMode === "line" ? "line" : "direct"} onChange={(event) => update({ terminalInputMode: event.target.value as "line" | "direct" })}>
           <option value="direct">{t("Direct typing")}</option><option value="line">{t("Input line")}</option>
-        </select>
+        </SettingsSelect>
       </SettingsRow>
       <SettingsRow label={t("Key bar")} description={t("Keys, order and custom combinations for the terminal.")}>
         <button type="button" ref={keyBarButtonRef} className="btn" onClick={onEditKeyBar}>{t("Edit key bar")}</button>
@@ -501,6 +515,9 @@ function TerminalPage({ keyBarButtonRef, onEditKeyBar }: { keyBarButtonRef: RefO
       </SettingsRow>
       <SettingsRow label={t("Use alongside herdr's own window")} description={t("Turn this on if this PC also shows herdr in a terminal window. A second after you switch to another window, this tab only watches the pane, so herdr's window keeps the pane at its own size instead of this window's. Click the tab to type again. While it watches, the pane is drawn at herdr's size and may not fill this window.")}>
         <Toggle label={t("Use alongside herdr's own window")} checked={settings.releasePaneAway} onChange={(releasePaneAway) => update({ releasePaneAway })} />
+      </SettingsRow>
+      <SettingsRow label={t("Follow herdr's focus")} description={t("When herdr moves to another pane, by a click in its window, a herdr command or a script, this device opens that pane too. Only on the PC open here, and only on this device. A PC on Ovis older than 0.4.13 does not report herdr's focus: update it first.")}>
+        <Toggle label={t("Follow herdr's focus")} checked={settings.followHerdrFocus} onChange={(followHerdrFocus) => update({ followHerdrFocus })} />
       </SettingsRow>
     </SettingsGroup>
   );
@@ -549,10 +566,10 @@ function DictationLanguageSelect() {
   const auto = languageName(names, dictationLocale("auto", settings.language, resolvedLanguage, navigator.languages));
   const choices = useMemo(() => DICTATION_LANGUAGES.map((tag) => ({ tag, name: languageName(names, tag) })).sort((a, b) => a.name.localeCompare(b.name, locale)), [names, locale]);
   return (
-    <select id="settings-voice-language" className="select settings-select" value={settings.voiceLanguage} onChange={(event) => update({ voiceLanguage: event.target.value as DictationLanguage })}>
+    <SettingsSelect id="settings-voice-language" value={settings.voiceLanguage} onChange={(event) => update({ voiceLanguage: event.target.value as DictationLanguage })}>
       <option value="auto">{t("Auto ({language})", { language: auto })}</option>
       {choices.map(({ tag, name }) => <option key={tag} value={tag}>{name}</option>)}
-    </select>
+    </SettingsSelect>
   );
 }
 
@@ -615,7 +632,7 @@ function VoicePage() {
         <div className="settings-item">
           {voice && (
             <p className="settings-label voice-status">
-              {voice.configured ? t(voice.source === "env" ? "OpenAI key set by HERDR_WEB_OPENAI_API_KEY" : "OpenAI key saved on this PC") : t("No OpenAI key: the browser's speech recognition is used")}
+              {voice.configured ? t(voice.source === "env" ? "OpenAI key set by OVIS_OPENAI_API_KEY" : "OpenAI key saved on this PC") : t("No OpenAI key: the browser's speech recognition is used")}
             </p>
           )}
           {voice && voice.source !== "env" && (
@@ -671,20 +688,20 @@ function LaunchModesGroup() {
   return (
     <SettingsGroup title={t("New agents")} section="launch-modes" note={t("Applies to agents started from New workspace, New tab and New worktree. Agent default adds no flag, so the agent's own configuration decides.")}>
       <SettingsRow label="Claude Code" description={t("Permission mode")} htmlFor="settings-claude-launch-mode">
-        <select id="settings-claude-launch-mode" className="select settings-select" value={settings.claudeLaunchMode} onChange={(event) => {
+        <SettingsSelect id="settings-claude-launch-mode" value={settings.claudeLaunchMode} onChange={(event) => {
           const mode = CLAUDE_LAUNCH_MODES.find((candidate) => candidate === event.target.value);
           if (mode !== undefined) update({ claudeLaunchMode: mode });
         }}>
           {CLAUDE_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{claudeModeName(mode, t)}</option>)}
-        </select>
+        </SettingsSelect>
       </SettingsRow>
       <SettingsRow label="Codex" description={t("Sandbox and approvals")} htmlFor="settings-codex-launch-mode">
-        <select id="settings-codex-launch-mode" className="select settings-select" value={settings.codexLaunchMode} onChange={(event) => {
+        <SettingsSelect id="settings-codex-launch-mode" value={settings.codexLaunchMode} onChange={(event) => {
           const mode = CODEX_LAUNCH_MODES.find((candidate) => candidate === event.target.value);
           if (mode !== undefined) update({ codexLaunchMode: mode });
         }}>
           {CODEX_LAUNCH_MODES.map((mode) => <option key={mode} value={mode}>{codexModeName(mode, t)}</option>)}
-        </select>
+        </SettingsSelect>
       </SettingsRow>
     </SettingsGroup>
   );
@@ -841,7 +858,7 @@ function ShortcutsPage() {
                     update({ shortcutOverrides: { ...settings.shortcutOverrides, [confirming.id]: confirming.value } });
                   }}>{t("Save anyway")}</button>
                   <button type="button" className="btn" onClick={() => settlePending(confirming.id)}>{t("Cancel")}</button>
-                </> : <select className="select settings-select settings-shortcut-select" aria-label={t(shortcut.label)} value={Object.hasOwn(settings.shortcutOverrides, shortcut.id) ? settings.shortcutOverrides[shortcut.id] ?? (unbound ? "default" : "off") : "default"} onChange={(event) => {
+                </> : <SettingsSelect className="settings-shortcut-select" aria-label={t(shortcut.label)} value={Object.hasOwn(settings.shortcutOverrides, shortcut.id) ? settings.shortcutOverrides[shortcut.id] ?? (unbound ? "default" : "off") : "default"} onChange={(event) => {
                   const next = { ...settings.shortcutOverrides };
                   if (event.target.value === "default") delete next[shortcut.id];
                   else next[shortcut.id] = event.target.value === "off" ? null : event.target.value;
@@ -856,7 +873,7 @@ function ShortcutsPage() {
                     const reserved = isReservedShortcutKey(key, platformIsMac);
                     return <option key={key} value={key} disabled={conflict}>{compactKeys(["Mod", "Shift", key])}{reserved ? ` — ${t("Reserved")}` : ""}{conflict ? " — " + t("Already assigned") : ""}</option>;
                   })}
-                </select>}
+                </SettingsSelect>}
                 </span>
               )}
             </SettingsRow>
@@ -983,10 +1000,10 @@ function AboutPage({ updates, herdrVersion, bridgesFollow }: { updates: UpdatesM
       <SettingsGroup title={t("About")} className="settings-about" section="about">
         <div className="settings-row">
           <div className="settings-row-text">
-            <span className="settings-label">herdr web ui</span>
-            <a className="settings-link" href="https://herdrweb.dev/" target="_blank" rel="noreferrer">herdrweb.dev</a>
+            <span className="settings-label">Ovis</span>
+            <a className="settings-link" href="https://ovis.sh/" target="_blank" rel="noreferrer">ovis.sh</a>
           </div>
-          <a className="btn" href="https://github.com/devswha/herdr-web-ui" target="_blank" rel="noreferrer"><Star aria-hidden="true" />{t("Star on GitHub")}</a>
+          <a className="btn" href="https://github.com/devswha/ovis" target="_blank" rel="noreferrer"><Star aria-hidden="true" />{t("Star on GitHub")}</a>
         </div>
       </SettingsGroup>
     </>
@@ -1034,20 +1051,26 @@ function SettingsCrash({ onClose, overPreview }: { onClose: () => void; overPrev
 
 /**
  * A change the server refused to save, on whichever page is open: the plain sentence (lib/userError.ts),
- * the server's own words behind Details. It stays until a save lands; the change is sent again
- * every few seconds meanwhile (lib/preferencesSync.ts).
+ * the server's own words behind Details, and where the change is now with the Retry that sends it.
+ * It stays until a save lands; the change is sent again every few seconds meanwhile, and after three
+ * failures on Retry, a reconnect or once a longer wait ends (lib/preferencesSync.ts). Only this page
+ * holds the change until then: a reload takes the server's values again.
  */
-function SaveFailure({ error }: { error: UserError }) {
+function SaveFailure({ error, paused, retrying, onRetry }: { error: UserError; paused: boolean; retrying: boolean; onRetry: () => void }) {
   const t = useT();
-  return <div className="settings-save-error" role="alert">
+  return <div className="settings-save-error" role="alert" data-paused={paused || undefined}>
     {error.detail === null ? <p>{error.message}</p> : <details className="settings-details">
       <summary>{error.message}<span className="settings-details-toggle">{t("Details")}</span></summary>
       <code>{error.detail}</code>
     </details>}
+    <div className="settings-save-local">
+      <p>{retrying ? t("Sending the change to the server…") : t("Not saved on the server yet; reloading or closing this page can undo the change.")}</p>
+      <button type="button" className="btn" disabled={retrying} aria-busy={retrying} onClick={onRetry}>{t("Retry")}</button>
+    </div>
   </div>;
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, saveError, overPreview = false }: SettingsDialogProps) {
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   // opened by Forward, the dialog shows what that entry of the history showed
@@ -1055,10 +1078,11 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
   // a phone opens on the list of pages; a wider dialog shows the list beside the first page. A
   // button that points at Updates opens on About whatever an entry still landing would restore
   const linked = PAGES.find((candidate) => candidate.id === linkPage)?.id ?? null;
-  // a page the command palette named opens first; the request is read, not taken, so a remount in development finds it again
+  // a page the command palette named opens first, on the group it named; the request is read, not
+  // taken, so a remount in development finds it again
   const [asked] = useState(requestedSettingsPage);
   useEffect(() => requestSettingsPage(null), []);
-  const [chosen, setChosen] = useState<SettingsPage | null>(section === "updates" ? "about" : asked ?? (restored ? restored.page : linked));
+  const [chosen, setChosen] = useState<SettingsPage | null>(section === "updates" ? "about" : asked?.page ?? (restored ? restored.page : linked));
   const page = chosen ?? (narrow ? null : PAGES[0]!.id);
   const [keyBarOpen, setKeyBarOpen] = useState(section === "updates" ? false : restored?.keyBar ?? false);
   // every step in is an entry of the history, so the system Back button takes one step out
@@ -1080,6 +1104,8 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
   const surface = useFocusTrap<HTMLElement>(true, { initialFocus: backRef });
   useSheetSwipe(surface, onClose);
   const shown = useRef<{ page: SettingsPage | null; keyBar: boolean } | null>(null);
+  // the group a landing named, followed into view until the reader moves the page
+  const following = useRef<{ group: HTMLElement; page: SettingsPage | null } | null>(null);
   const label = (id: SettingsPage): string => t(id === "appearance" ? "Appearance" : id === "chat" ? "Chat" : id === "terminal" ? "Terminal" : id === "alerts" ? "Alerts" : id === "voice" ? "Voice input"
     : id === "usage" ? "Subscription usage" : id === "shortcuts" ? "Shortcuts" : id === "devices" ? "Phone & devices" : id === "remote" ? "Remote PCs" : id === "integrations" ? "Agent integrations" : "About");
   const openPage = (id: SettingsPage): void => { setKeyBarOpen(false); setChosen(id); };
@@ -1100,16 +1126,37 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       if (settingsBodyRef.current) settingsBodyRef.current.scrollTop = settingsScrollRef.current;
       keyBarButtonRef.current?.focus({ preventScroll: true });
     } else if (before === null) {
-      // a button that points at Updates opens on it, and the focus goes there too; so does a link to a group
-      const named = section === "updates" ? "updates" : linked && linkSection ? linkSection : null;
+      // a button that points at Updates opens on it, and the focus goes there too; so does a link
+      // to a group, and a group the palette named
+      const named = section === "updates" ? "updates" : asked?.section ?? (linked && linkSection ? linkSection : null);
       const pointed = named ? settingsBodyRef.current?.querySelector<HTMLElement>(`[data-section="${CSS.escape(named)}"]`) : null;
-      if (pointed) { pointed.focus({ preventScroll: true }); pointed.scrollIntoView(); }
-      else tab(page)?.focus();
+      if (pointed) {
+        pointed.focus({ preventScroll: true });
+        pointed.scrollIntoView();
+        following.current = { group: pointed, page };
+      } else tab(page)?.focus();
     } else if (before.page !== page && narrow) {
       // a phone shows one of the two: the focus follows into the page, and back onto its row
       if (page !== null) backRef.current?.focus();
       else tab(before.page)?.focus();
     }
+    // a group filled in after it opens (the OpenAI key's form waits for the server's answer) grows
+    // past the fold: it is brought back into view until the reader moves the page or leaves it.
+    // The subscription is made again whenever this runs, so development's replay of the effect
+    // keeps following; the reader's move or another page ends it for good
+    const follow = following.current;
+    if (follow === null || follow.page !== page || keyBarOpen) { following.current = null; return; }
+    const body = settingsBodyRef.current;
+    const observer = new ResizeObserver(() => follow.group.scrollIntoView());
+    const moves = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    const unsubscribe = (): void => {
+      observer.disconnect();
+      for (const move of moves) body?.removeEventListener(move, stop);
+    };
+    const stop = (): void => { following.current = null; unsubscribe(); };
+    observer.observe(follow.group);
+    for (const move of moves) body?.addEventListener(move, stop, { passive: true });
+    return unsubscribe;
   }, [page, keyBarOpen, narrow, section]);
   // server-side: the web server updates PC bridges, so it keeps this choice
   const [pcSettings, setPcSettings] = useState<MachineSettings | null>(null);
@@ -1191,7 +1238,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
             </div>
           </nav>
         )}
-        {page !== null && <div key={page} ref={settingsBodyRef} id="settings-panel" className="modal-body settings-body" role="tabpanel" aria-label={label(page)} hidden={keyBarOpen}>{saveError !== null && <SaveFailure error={saveError} />}{body()}</div>}
+        {page !== null && <div key={page} ref={settingsBodyRef} id="settings-panel" className="modal-body settings-body" role="tabpanel" aria-label={label(page)} hidden={keyBarOpen}>{saveError !== null && <SaveFailure error={saveError} paused={savePaused} retrying={saveRetrying} onRetry={onRetrySave} />}{body()}</div>}
         {keyBarOpen && <div className="modal-body settings-key-bar-body"><KeyBarSettings /></div>}
       </section>
     </div>
