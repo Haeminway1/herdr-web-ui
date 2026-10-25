@@ -83,7 +83,10 @@ function cacheControlFor(pathname: string): string {
  *   an explicit `new WebSocket("ws://<same host>/ws")` and the machines event stream both
  *   connect under the enforcing header).
  * - `media-src 'self'`: the file viewer's <video>/<audio>, same-origin.
- * - `frame-src 'self'`: the PDF viewer frames /api/fs/file, same-origin.
+ * - `frame-src 'self'`: the PDF viewer frames /api/fs/file, same-origin. With the request's
+ *   origin known, also any port of the host the browser used for the app: the web panel
+ *   (src/lib/webPanel.ts) frames a page served by this PC, a dev server's localhost:5173 named
+ *   under that host. No other host is framed.
  * - `worker-src 'self'`: the service worker is /sw.js, same-origin.
  * - `object-src 'none'`: no <object>/<embed> in the app, and none may appear.
  * - `base-uri 'self'`: no <base>, and a tag that adds one changes what every relative URL
@@ -114,26 +117,42 @@ const CSP_DIRECTIVES = [
  */
 export const CONTENT_SECURITY_POLICY = CSP_DIRECTIVES.join("; ");
 
-/**
- * HERDR_WEB_CSP=report-only measures the policy above without enforcing it: the browser
- *   logs what the policy would have blocked and the app keeps working. `report-only` is the
- *   measurement mode; anything else enforces.
- */
-function cspHeader(): Record<string, string> {
-  const mode = process.env["HERDR_WEB_CSP"];
-  return mode === "report-only"
-    ? { "content-security-policy-report-only": CONTENT_SECURITY_POLICY }
-    : { "content-security-policy": CONTENT_SECURITY_POLICY };
+/** A host name or bracketed IPv6 address, nothing that could end or add a directive. */
+const FRAMEABLE_HOST = /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*|\[[0-9a-f:.]+\])$/i;
+
+/** The policy for a request from `origin` (requestOrigin): its host's other ports may be framed. */
+export function contentSecurityPolicy(origin?: string): string {
+  let host: string | null = null;
+  try {
+    host = origin === undefined ? null : new URL(origin).hostname;
+  } catch {
+    host = null;
+  }
+  if (host === null || !FRAMEABLE_HOST.test(host)) return CONTENT_SECURITY_POLICY;
+  return CSP_DIRECTIVES.map((directive) => directive === "frame-src 'self'" ? `frame-src 'self' http://${host}:* https://${host}:*` : directive).join("; ");
 }
 
 /**
- * HERDR_WEB_APP_NAME names the installed app. Each PC is its own origin, so two PCs installed
- * on one phone are two apps, and both would be called "herdr" (#476). Unset or blank, every
- * file is served as built. Read on every request, like HERDR_WEB_CSP; the manifest and the
+ * OVIS_CSP=report-only measures the policy above without enforcing it: the browser
+ *   logs what the policy would have blocked and the app keeps working. `report-only` is the
+ *   measurement mode; anything else enforces.
+ */
+function cspHeader(origin?: string): Record<string, string> {
+  const mode = process.env["OVIS_CSP"];
+  const policy = contentSecurityPolicy(origin);
+  return mode === "report-only"
+    ? { "content-security-policy-report-only": policy }
+    : { "content-security-policy": policy };
+}
+
+/**
+ * OVIS_APP_NAME names the installed app. Each PC is its own origin, so two PCs installed
+ * on one phone are two apps, and both would be called "Ovis" (#476). Unset or blank, every
+ * file is served as built. Read on every request, like OVIS_CSP; the manifest and the
  * shell revalidate on every load, so an installed app learns a new name without a reinstall.
  */
 export function appName(): string | null {
-  const name = process.env["HERDR_WEB_APP_NAME"]?.trim();
+  const name = process.env["OVIS_APP_NAME"]?.trim();
   return name ? name : null;
 }
 
@@ -152,7 +171,7 @@ export function relateManifest(text: string, origin: string): string {
   return JSON.stringify({ ...JSON.parse(text), related_applications: [{ platform: "webapp", id: `${origin}/` }] }, null, 2);
 }
 
-/** What /manifest.webmanifest answers: renamed under HERDR_WEB_APP_NAME, then related to its origin. */
+/** What /manifest.webmanifest answers: renamed under OVIS_APP_NAME, then related to its origin. */
 export function manifestBody(text: string, origin: string): string {
   const name = appName();
   return relateManifest(name ? renameManifest(text, name) : text, origin);
@@ -177,7 +196,7 @@ export function renameShell(html: string, name: string): string {
   return html.replace(APPLE_TITLE, (_, start: string, end: string) => `${start}${content}${end}`);
 }
 
-/** The file as built, or the manifest and the shell under HERDR_WEB_APP_NAME. */
+/** The file as built, or the manifest and the shell under OVIS_APP_NAME. */
 async function body(file: BunFile, kind: "manifest" | "shell" | null, origin?: string): Promise<BunFile | string> {
   if (kind === "manifest" && origin !== undefined) return manifestBody(await file.text(), origin);
   const name = appName();
@@ -204,7 +223,7 @@ export async function serveStatic(pathname: string, acceptEncoding?: string | nu
   const indexPath = join(DIST_DIR, "index.html");
   if (!existsSync(indexPath)) {
     return new Response(
-      "herdr-web-ui server is running, but the browser client has not been built yet.\nRun: bun run build\n",
+      "Ovis server is running, but the browser client has not been built yet.\nRun: bun run build\n",
       { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
     );
   }
@@ -226,7 +245,7 @@ export async function serveStatic(pathname: string, acceptEncoding?: string | nu
       }
       const kind = pathname === "/manifest.webmanifest" ? "manifest" : candidate === indexPath ? "shell" : null;
       return new Response(await body(file, kind, origin), {
-        headers: { "content-type": contentTypeFor(candidate), "cache-control": cacheControlFor(pathname), ...cspHeader() },
+        headers: { "content-type": contentTypeFor(candidate), "cache-control": cacheControlFor(pathname), ...cspHeader(origin) },
       });
     }
   }
@@ -236,6 +255,6 @@ export async function serveStatic(pathname: string, acceptEncoding?: string | nu
     return new Response(null, { status: 404, headers: { "cache-control": REVALIDATE, ...cspHeader() } });
   }
   return new Response(await body(Bun.file(indexPath), "shell"), {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": REVALIDATE, ...cspHeader() },
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": REVALIDATE, ...cspHeader(origin) },
   });
 }
