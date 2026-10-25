@@ -165,6 +165,8 @@ run_checked_command 'locked dependency install' "$logs/install.log" 'locked depe
 run_checked_command 'Fast checks' "$logs/fast.log" 'Fast checks failed' bun run check fast
 run_checked_command 'Integration and browser checks' "$logs/integration-browser.log" 'Integration and browser checks failed' bun run check integration browser
 
+# GitHub answers check-runs only for commits it has; publish the exact-HEAD ref first.
+choose_dispatch_ref
 fetch_check_runs "$logs/check-runs.json" "$logs/check-runs.log" || fail 'could not read required checks for this commit'
 check_state="$(check_runs_state)" || fail 'check-runs response was malformed or incomplete'
 
@@ -172,7 +174,6 @@ case "$check_state" in
   pass)
     ;;
   empty)
-    choose_dispatch_ref
     if gh api -X POST repos/Haeminway1/herdr-web-ui/actions/workflows/ci.yml/dispatches \
       -f "ref=$dispatch_ref" >"$logs/dispatch.out" 2>"$logs/dispatch.log"; then
       fetch_check_runs "$logs/check-runs-after-dispatch.json" "$logs/check-runs-after-dispatch.log" || fail 'could not read checks after successful workflow dispatch'
