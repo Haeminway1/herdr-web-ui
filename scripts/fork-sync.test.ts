@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 const source = resolve(import.meta.dir, "fork-sync.sh");
 const promptSource = resolve(import.meta.dir, "fork-sync-prompt.md");
+const validatorSource = resolve(import.meta.dir, "full-validation-report.sh");
 const roots: string[] = [];
 const childPids: number[] = [];
 afterEach(() => {
@@ -41,6 +42,7 @@ function fixture() {
   cmd(work, "mkdir", "-p", "scripts");
   copyFileSync(source, join(work, "scripts/fork-sync.sh"));
   chmodSync(join(work, "scripts/fork-sync.sh"), 0o755);
+  copyFileSync(validatorSource, join(work, "scripts/full-validation-report.sh"));
   copyFileSync(promptSource, join(work, "scripts/fork-sync-prompt.md"));
   writeFileSync(join(work, "fixture.txt"), "base\n");
   cmd(work, "git", "add", ".");
@@ -724,6 +726,7 @@ test("invoked launcher policy survives deploy refresh through FORK_SYNC_REPO", (
   const launcher = join(artifactScripts, "fork-sync.sh");
   copyFileSync(source, launcher);
   chmodSync(launcher, 0o755);
+  copyFileSync(validatorSource, join(artifactScripts, "full-validation-report.sh"));
   copyFileSync(promptSource, join(artifactScripts, "fork-sync-prompt.md"));
   writeFileSync(join(artifactScripts, "fork-sync-prompt.md"), `${readFileSync(join(artifactScripts, "fork-sync-prompt.md"), "utf8")}\nartifact-policy-marker\n`);
 
