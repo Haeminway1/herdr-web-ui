@@ -52,6 +52,12 @@ up to 32 MiB per poll and resumes on the next poll; individual records are limit
 an incomplete final line waits for its newline. Rebuilding an evicted transcript index
 invalidates its old cursors rather than reusing forgotten history state.
 
+The catalog is read from a private snapshot, never opened by SQLite at its source. A
+snapshot of the database and paired WAL is limited to 512 MiB; larger stores use Terminal.
+Stable versions reuse a bounded cache of active indices (up to 16 databases and 100,000
+indices total). A changed version is copied again, so continuously changing large stores
+can still incur repeated copy costs. Snapshot files are temporary and removed after use.
+
 The database and export are written separately. The reader checks active indices around
 each read and remembers observed removals, but does not claim an atomic database/export
 snapshot or detect a rewind-and-regrow completed entirely before its first observation.

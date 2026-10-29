@@ -1,7 +1,7 @@
 /** Agy's append-only step ledger, reduced in physical order before shared paging. */
 import { constants as sqliteConstants, Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,13 +12,22 @@ import { toolSummary } from "./transcript-records.ts";
 const MAX_ENTRIES = 100_000;
 const MAX_LINE = 16 * 1024 * 1024;
 const SCAN_BYTES = 32 * 1024 * 1024;
+const MAX_CATALOG_SNAPSHOT_BYTES = 512 * 1024 * 1024;
 const hash = (value: string): string => createHash("sha256").update(value).digest("base64url");
 const record = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 export class AgyUnavailable extends Error { constructor() { super("Agy history is unavailable"); } }
 interface Step { index: number; start: number; end: number; type: string; status: string; digest: string; activity?: "working" | "idle" }
 interface Index { identity: string; size: number; changed: string; scanned: number; revision: string; steps: Step[]; visible: Step[]; retired: Set<number> }
 const indexes = new Map<string, Index>();
-export function forgetAgyState(path?: string): void { if (path === undefined) indexes.clear(); else indexes.delete(path); }
+const catalogs = new Map<string, { version: string; indices: Set<number> }>();
+function fileExists(path: string): boolean {
+  try { lstatSync(path); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+}
+export function forgetAgyState(path?: string): void {
+  if (path === undefined) { indexes.clear(); catalogs.clear(); }
+  else { indexes.delete(path); catalogs.delete(agyDatabasePath(path)); }
+}
 
 /** The catalog beside this resolved native ledger; also watched for saved rewinds. */
 export function agyDatabasePath(path: string): string {
@@ -40,32 +49,39 @@ export function agyCatalog(path: string, beforeOpen?: () => void): Set<number> {
     const before = fstatSync(fd, { bigint: true });
     if (!before.isFile()) throw new AgyUnavailable();
     const header = Buffer.alloc(20);
-    const walBefore = existsSync(`${dbPath}-wal`), shmBefore = existsSync(`${dbPath}-shm`);
+    const suffixes = ["-wal", "-shm", "-journal"] as const;
+    const present = suffixes.map((suffix) => fileExists(`${dbPath}${suffix}`));
+    const [walBefore, shmBefore, journalBefore] = present;
     const wal = readSync(fd, header, 0, 20, 0) === 20 && header[18] === 2 && header[19] === 2;
     const files = [{ path: dbPath, fd, stat: before }];
+    for (const [index, suffix] of suffixes.entries()) {
+      if (!present[index]) continue;
+      const sidePath = `${dbPath}${suffix}`;
+      const sideFd = openSync(sidePath, readFlags);
+      sideFds.push(sideFd);
+      const stat = fstatSync(sideFd, { bigint: true });
+      if (!stat.isFile() || realpathSync(sidePath) !== sidePath) throw new AgyUnavailable();
+      files.push({ path: sidePath, fd: sideFd, stat });
+    }
+    if (!wal && journalBefore) throw new AgyUnavailable();
+    const walPair = wal && walBefore && shmBefore;
+    const snapshotFiles = walPair ? files.slice(0, 2) : files.slice(0, 1);
+    if (snapshotFiles.reduce((bytes, file) => bytes + file.stat.size, 0n) > BigInt(MAX_CATALOG_SNAPSHOT_BYTES)) throw new AgyUnavailable();
+    const headers = files.slice(1).map((file) => {
+      const bytes = Buffer.alloc(32);
+      return bytes.subarray(0, readSync(file.fd, bytes, 0, bytes.length, 0)).toString("hex");
+    });
+    const version = JSON.stringify([header.toString("hex"), present, headers, files.map(({ stat }) =>
+      [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String))]);
+    const cached = catalogs.get(dbPath);
+    if (cached && cached.version !== version) catalogs.delete(dbPath);
     beforeOpen?.();
-    // Every source open is immutable, even if a writer switches journal modes
-    // after the header read. Only the private snapshot may create side files.
-    // An incomplete WAL pair therefore exposes checkpointed rows only.
-    let immutable = true;
-    const descriptor = process.platform === "linux" || (process.platform === "darwin" && immutable) ? `/dev/fd/${fd}` : null;
-    let name = descriptor ?? dbPath;
-    if (wal && walBefore && shmBefore) {
-      // A readonly SQLite open can create -wal even with readonly_shm=1. Never open
-      // a live source that way: recover its WAL only beside a bounded private copy.
-      for (const suffix of ["-wal", "-shm"]) {
-        const path = `${dbPath}${suffix}`;
-        const sideFd = openSync(path, readFlags);
-        sideFds.push(sideFd);
-        const stat = fstatSync(sideFd, { bigint: true });
-        if (!stat.isFile()) throw new AgyUnavailable();
-        files.push({ path, fd: sideFd, stat });
-      }
-      const snapshotFiles = files.slice(0, 2);
-      // Match the ledger's 32 MiB byte budget: 100,000 integer indices need
-      // under 1 MiB; larger payload-heavy stores should fall back, not be copied per poll.
-      if (snapshotFiles.reduce((bytes, file) => bytes + file.stat.size, 0n) > BigInt(SCAN_BYTES)) throw new AgyUnavailable();
+    // Only the private snapshot is opened by SQLite. An incomplete WAL pair
+    // exposes checkpointed rows only, with immutable mode preventing recovery.
+    let name = "";
+    if (cached?.version !== version) {
       snapshot = mkdtempSync(join(tmpdir(), "ovis-agy-catalog-"));
+      snapshot = realpathSync(snapshot);
       name = join(snapshot, "catalog.db");
       for (const [index, file] of snapshotFiles.entries()) {
         const target = openSync(index === 0 ? name : `${name}-wal`, "wx", 0o600);
@@ -81,25 +97,37 @@ export function agyCatalog(path: string, beforeOpen?: () => void): Set<number> {
           }
         } finally { closeSync(target); }
       }
-      immutable = false;
     }
-    const flags = sqliteConstants.SQLITE_OPEN_READONLY | sqliteConstants.SQLITE_OPEN_URI;
-    db = new Database(immutable ? `${pathToFileURL(name).href}?immutable=1` : name,
-      descriptor === null || snapshot !== undefined ? flags | sqliteConstants.SQLITE_OPEN_NOFOLLOW : flags);
-    const opened = statSync(dbPath, { bigint: true });
-    if (opened.dev !== before.dev || opened.ino !== before.ino || realpathSync(dbPath) !== dbPath) throw new AgyUnavailable();
-    db.exec("PRAGMA busy_timeout = 100");
-    const rows = db.query<{ idx: number }, []>(`SELECT idx FROM steps ORDER BY idx LIMIT ${MAX_ENTRIES + 1}`).all();
+    let indices: Set<number>;
+    if (cached?.version === version) indices = cached.indices;
+    else {
+      const flags = sqliteConstants.SQLITE_OPEN_READONLY | sqliteConstants.SQLITE_OPEN_URI;
+      db = new Database(walPair ? name : `${pathToFileURL(name).href}?immutable=1`,
+        flags | sqliteConstants.SQLITE_OPEN_NOFOLLOW);
+      db.exec("PRAGMA busy_timeout = 100");
+      const rows = db.query<{ idx: number }, []>(`SELECT idx FROM steps ORDER BY idx LIMIT ${MAX_ENTRIES + 1}`).all();
+      if (rows.length > MAX_ENTRIES || rows.some((row) => !Number.isSafeInteger(row.idx) || row.idx < 0)) throw new AgyUnavailable();
+      indices = new Set(rows.map((row) => row.idx));
+    }
     for (const file of files) {
       const after = statSync(file.path, { bigint: true }), pinned = fstatSync(file.fd, { bigint: true });
       if (after.dev !== file.stat.dev || after.ino !== file.stat.ino || realpathSync(file.path) !== file.path
-        || pinned.size !== file.stat.size || pinned.mtimeNs !== file.stat.mtimeNs || pinned.ctimeNs !== file.stat.ctimeNs) throw new AgyUnavailable();
+        || after.size !== file.stat.size || after.mtimeNs !== file.stat.mtimeNs || after.ctimeNs !== file.stat.ctimeNs
+        || pinned.dev !== file.stat.dev || pinned.ino !== file.stat.ino || pinned.size !== file.stat.size
+        || pinned.mtimeNs !== file.stat.mtimeNs || pinned.ctimeNs !== file.stat.ctimeNs) throw new AgyUnavailable();
     }
-    if (existsSync(`${dbPath}-wal`) !== walBefore || existsSync(`${dbPath}-shm`) !== shmBefore
-      || (!wal && existsSync(`${dbPath}-journal`))) throw new AgyUnavailable();
-    if (rows.length > MAX_ENTRIES || rows.some((row) => !Number.isSafeInteger(row.idx) || row.idx < 0)) throw new AgyUnavailable();
-    return new Set(rows.map((row) => row.idx));
-  } catch { throw new AgyUnavailable(); }
+    if (suffixes.some((suffix, index) => fileExists(`${dbPath}${suffix}`) !== present[index])) throw new AgyUnavailable();
+    catalogs.delete(dbPath);
+    catalogs.set(dbPath, { version, indices });
+    let total = 0;
+    for (const value of catalogs.values()) total += value.indices.size;
+    while (catalogs.size > 16 || total > MAX_ENTRIES) {
+      const oldest = catalogs.keys().next().value!;
+      total -= catalogs.get(oldest)!.indices.size;
+      catalogs.delete(oldest);
+    }
+    return new Set(indices);
+  } catch { catalogs.delete(dbPath); throw new AgyUnavailable(); }
   finally {
     db?.close();
     for (const sideFd of sideFds) closeSync(sideFd);
