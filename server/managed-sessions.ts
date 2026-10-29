@@ -1,4 +1,5 @@
 import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
@@ -46,6 +47,8 @@ export interface ManagedSessionResolution {
   identity: ManagedSessionIdentity;
   sessionFile: string | null;
   fileIdentity?: FileIdentityPin;
+  /** Digest of the authoritative record binding, never its private contents. */
+  bindingDigest?: string;
   /** Internal transient failure: roster stays pending, conversation reads must not claim absence. */
   lookupError?: GjcSdkLookupError;
 }
@@ -150,7 +153,7 @@ function recordAt(path: string): { record: Record<string, unknown> | null; unsaf
 }
 
 function bindingKey(record: Record<string, unknown> | null): string {
-  return JSON.stringify(["nonce", "generation", "harness", "launcher_harness", "cwd", "pane_id", "workspace_id", "terminal_id", "desired_state", "state", "error", "session_id", "session_file", "session_dir", "child", "file_identity"].map(key => record?.[key]));
+  return JSON.stringify(["nonce", "generation", "harness", "launcher_harness", "cwd", "pane_id", "workspace_id", "terminal_id", "desired_state", "state", "error", "session_id", "session_file", "session_dir", "child", "file_identity", "env"].map(key => record?.[key]));
 }
 
 function header(path: string, harness: Harness, expected: FileIdentityPin): { id: unknown; cwd: unknown } | null {
@@ -195,8 +198,10 @@ function header(path: string, harness: Harness, expected: FileIdentityPin): { id
   } finally { closeSync(fd); }
 }
 
-/** A declared managed pane is never allowed to fall through to process/cwd/recency guesses. */
-export async function resolveManagedSession(pane: HerdrPane, namespace = managedNamespace(), deps: ManagedSessionDeps = {}): Promise<ManagedSessionResolution | null> {
+type GjcProof = Awaited<ReturnType<typeof gjcSdkCurrentSession>>;
+
+/** Shared proof; only the GJC SDK step can suspend it. */
+function* managedSessionProof(pane: HerdrPane, namespace: string, deps: ManagedSessionDeps, finalCheck: boolean): Generator<Promise<GjcProof>, ManagedSessionResolution | null, GjcProof> {
   const identity: ManagedSessionIdentity = { id: null, harness: null, generation: null, state: "blocked", reason: null, session_id: null };
   const blocked = (reason: string): ManagedSessionResolution => ({ identity: { ...identity, state: "blocked", reason }, sessionFile: null });
   const pending = (reason: string): ManagedSessionResolution => ({ identity: { ...identity, state: "identity_pending", reason }, sessionFile: null });
@@ -225,8 +230,12 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       || !pane.terminal_id || record.terminal_id !== pane.terminal_id) return blocked("blocked_pane_identity");
     const recordCwd = record.cwd;
     identity.harness = recordHarness;
-    if (record.desired_state !== "running") return blocked("blocked_session_stopped");
     let readOnlyReason: string | null = null;
+    if (record.desired_state !== "running") {
+      if (record.desired_state !== "stopped" || record.state !== "stopped"
+        || (recordHarness !== "claude" && recordHarness !== "codex")) return blocked("blocked_session_stopped");
+      readOnlyReason = "blocked_session_stopped";
+    }
     if (record.state === "blocked") {
       const reason = typeof record.error === "string" && REASON.test(record.error) ? record.error : "blocked_record_state";
       if (!READ_ONLY_LIFECYCLE.has(reason)) return blocked(reason);
@@ -276,10 +285,10 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
       const readIdentity = deps.processIdentity ?? processIdentity;
       const before = readIdentity(child.pid);
       if (!before || before.starttime !== child.starttime || before.boot !== child.boot || before.cwd !== recordCwd) return blocked("blocked_runtime_identity");
-      if (identity.harness === "gjc") {
+      if (identity.harness === "gjc" && !finalCheck) {
         let live: Awaited<ReturnType<typeof gjcSdkCurrentSession>>;
         try {
-          live = await (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
+          live = yield (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
         } catch (error) {
           throw lookupExecutionError(error);
         }
@@ -299,7 +308,7 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
           const held = startedAt === null ? [] : [...new Set([dirname(sessionFile), store].flatMap((dir) =>
             (deps.heldSessionIds ?? heldSessionIds)(dir, before.pid, startedAt, recordCwd)))];
           if (held.length !== 1 || held[0] !== sessionId) return blocked("blocked_runtime_identity");
-        } else if (!managedNativeSessionBound(pane, identity.harness, sessionId, sessionFile)) {
+        } else if (identity.harness !== "gjc" && !managedNativeSessionBound(pane, identity.harness, sessionId, sessionFile)) {
           return blocked("blocked_runtime_identity");
         }
         const rootAfter = lstatSync(namespace);
@@ -326,13 +335,31 @@ export async function resolveManagedSession(pane: HerdrPane, namespace = managed
     identity.reason = readOnlyReason;
     identity.session_id = sessionId;
     if (readOnlyReason !== null) identity.readable = true;
-    return { identity, sessionFile, fileIdentity: { dev: info.dev, ino: info.ino } };
+    return { identity, sessionFile, fileIdentity: { dev: info.dev, ino: info.ino }, bindingDigest: createHash("sha256").update(bindingKey(record)).digest("hex") };
   } catch (error) {
     if (error instanceof GjcSdkLookupError || unavailableRead(error)) {
       return { ...pending("identity_pending"), lookupError: lookupExecutionError(error) };
     }
     return blocked("blocked_managed_record_unavailable");
   }
+}
+
+/** A declared managed pane is never allowed to fall through to process/cwd/recency guesses. */
+export async function resolveManagedSession(pane: HerdrPane, namespace = managedNamespace(), deps: ManagedSessionDeps = {}): Promise<ManagedSessionResolution | null> {
+  const proof = managedSessionProof(pane, namespace, deps, false);
+  let step = proof.next();
+  while (!step.done) {
+    try { step = proof.next(await step.value); }
+    catch (error) { step = proof.throw(error); }
+  }
+  return step.value;
+}
+
+/** Only after a full proof: recheck its synchronous evidence without a second GJC SDK lookup. */
+export function recheckManagedSessionAfterProof(pane: HerdrPane, namespace = managedNamespace(), deps: ManagedSessionDeps = {}): ManagedSessionResolution | null {
+  const step = managedSessionProof(pane, namespace, deps, true).next();
+  if (!step.done) throw new Error("Final managed proof unexpectedly suspended");
+  return step.value;
 }
 
 /** Only the harnesses whose exception is proven by the pane's native binding keep it in the projection. */

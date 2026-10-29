@@ -1036,6 +1036,192 @@ it("serves a read-only OMO conversation across the same lifecycle block only wit
   await expect(conversationForPane(pane, undefined, {}, omoDeps())).rejects.toThrow("blocked_runtime_identity");
 });
 
+it.each(["claude", "codex"] as const)("serves stopped %s native history without changing stopped intent", async harness => {
+  nativeReadOnly(harness);
+  const content = harness === "claude"
+    ? { type: "assistant", uuid: "answer", sessionId, cwd: root, message: { role: "assistant", content: [{ type: "text", text: "stopped native answer" }] } }
+    : { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "stopped native answer" }] } };
+  fs.appendFileSync(sessionFile, JSON.stringify(content) + "\n");
+  record.desired_state = "stopped"; record.state = "stopped"; save();
+  const kept = readFileSync(recordFile, "utf8");
+  const originalPane = structuredClone(pane);
+  expect(await resolve()).toMatchObject({
+    identity: { state: "blocked", harness, reason: "blocked_session_stopped", readable: true, session_id: sessionId }, sessionFile,
+  });
+  const answer = await conversationForPane(pane);
+  expect(answer).toMatchObject({ source: `${harness}-transcript`, managed_session: { state: "blocked", reason: "blocked_session_stopped", readable: true } });
+  expect(JSON.stringify(answer.turns)).toContain("stopped native answer");
+  const snapshot = { panes: [pane], agents: [pane], workspaces: [], tabs: [], layouts: [] } as unknown as SessionSnapshot;
+  const projected = await labelManagedPanes(snapshot);
+  expect(projected.panes[0]?.agent_session).toEqual(pane.agent_session);
+  expect(readFileSync(recordFile, "utf8")).toBe(kept);
+  expect(pane).toEqual(originalPane);
+});
+
+it.each(["claude", "codex"] as const)("denies stopped %s history without exact proof", async harness => {
+  nativeReadOnly(harness);
+  record.desired_state = "stopped"; record.state = "stopped"; save();
+  const originalRecord = structuredClone(record);
+  const originalPane = structuredClone(pane);
+  const originalObserved = structuredClone(observed);
+  const cases: [string, () => void][] = [
+    ["unknown intent", () => { record.desired_state = "unknown"; }],
+    ["inconsistent state", () => { record.state = "blocked"; }],
+    ["dead child", () => { observed = null; }],
+    ["reused pid", () => { observed = { ...observed!, starttime: "reused" }; }],
+    ["different cwd", () => { observed = { ...observed!, cwd: "/" }; }],
+    ["different native id", () => { pane.agent_session = { agent: harness, kind: "id", source: "herdr", value: "other" }; }],
+    ["different native path", () => { pane.agent_session = { agent: harness, kind: "path", source: "herdr", value: join(root, "other.jsonl") }; }],
+    ["different terminal", () => { pane.terminal_id = "other"; }],
+    ["different generation", () => { record.generation = 2; }],
+    ["wrong header", () => { writeFileSync(sessionFile, JSON.stringify({ type: "session_meta", payload: { id: "other", cwd: root } }) + "\n"); }],
+    ["unsafe permissions", () => { chmodSync(sessionFile, 0o666); }],
+    ["replaced file", () => { renameSync(sessionFile, `${sessionFile}.old`); writeFileSync(sessionFile, "replacement\n", { mode: 0o600 }); }],
+  ];
+  const contents = readFileSync(sessionFile, "utf8");
+  for (const [name, mutate] of cases) {
+    record = structuredClone(originalRecord); pane = structuredClone(originalPane); observed = structuredClone(originalObserved);
+    mutate(); save();
+    const result = await resolve();
+    expect(result.identity.readable, name).not.toBe(true);
+    expect(result.sessionFile, name).toBeNull();
+    await expect(conversationForPane(pane), name).rejects.toThrow();
+    if (name === "replaced file") { rmSync(sessionFile); renameSync(`${sessionFile}.old`, sessionFile); }
+    chmodSync(sessionFile, 0o600); writeFileSync(sessionFile, contents);
+  }
+});
+
+it.each(["gjc", "omo"] as const)("keeps stopped %s history blocked even with a native holder", async harness => {
+  if (harness === "omo") { useOmo(); holdOmoSession(); }
+  record.desired_state = "stopped"; record.state = "stopped"; save();
+  const result = await resolveWith(harness === "omo" ? omoDeps() : deps);
+  expect(result).toMatchObject({ identity: { state: "blocked", reason: "blocked_session_stopped" }, sessionFile: null });
+  expect(result.identity.readable).not.toBe(true);
+});
+
+it.each(["claude", "codex"] as const)("revalidates stopped %s record and pane after asynchronous reads", async harness => {
+  nativeReadOnly(harness);
+  record.desired_state = "stopped"; record.state = "stopped"; save();
+  for (const change of ["stop-child", "inconsistent-state", "pane-switch"] as const) {
+    const originalRecord = structuredClone(record);
+    const originalObserved = structuredClone(observed);
+    let reads = 0;
+    const racing: ManagedSessionDeps = { ...deps, paneById: async () => {
+      reads++;
+      if (change === "stop-child" && reads === 1) observed = null;
+      if (change === "inconsistent-state" && reads === 1) { record.state = "blocked"; save(); }
+      return change === "pane-switch" && reads === 2 ? { ...pane, terminal_id: "other" } : pane;
+    } };
+    await expect(conversationForPane(pane, undefined, {}, racing)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "blocked_managed_identity_changed" });
+    record = originalRecord; observed = originalObserved; save();
+  }
+});
+
+it.each(["claude", "codex"] as const)("revalidates a stopped %s record during native proof", async harness => {
+  nativeReadOnly(harness);
+  record.desired_state = "stopped"; record.state = "stopped"; save();
+  const racing: ManagedSessionDeps = { ...deps, processIdentity: pid => {
+    record.generation = 2; save();
+    return observed?.pid === pid ? { ...observed } : null;
+  } };
+  expect(await resolveWith(racing)).toMatchObject({ identity: { state: "identity_pending" }, sessionFile: null });
+});
+
+it.each(["claude", "codex"] as const)("invalidates %s history when a running record stops during the read", async harness => {
+  nativeReadOnly(harness);
+  record.state = "ready"; record.desired_state = "running"; save();
+  const racing: ManagedSessionDeps = { ...deps, paneById: async () => {
+    record.state = "stopped"; record.desired_state = "stopped"; save();
+    return pane;
+  } };
+  await expect(conversationForPane(pane, undefined, {}, racing)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "blocked_managed_identity_changed" });
+});
+
+it.each(["claude", "codex"] as const)("invalidates stopped %s history when the child exits during the final pane lookup", async harness => {
+  nativeReadOnly(harness);
+  record.desired_state = "stopped"; record.state = "stopped"; save();
+  let reads = 0;
+  const racing: ManagedSessionDeps = { ...deps, paneById: async () => {
+    if (++reads === 2) observed = null;
+    return pane;
+  } };
+  await expect(conversationForPane(pane, undefined, {}, racing)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "blocked_managed_identity_changed" });
+});
+
+it.each(["claude", "codex"] as const)("rejects late stopped %s proof changes on the final pane lookup", async harness => {
+  nativeReadOnly(harness);
+  record.desired_state = "stopped"; record.state = "stopped"; save();
+  for (const change of ["reused-pid", "rebound-child", "record", "replacement", "header"] as const) {
+    const originalRecord = structuredClone(record);
+    const originalObserved = structuredClone(observed);
+    const originalFile = readFileSync(sessionFile);
+    let reads = 0;
+    const racing: ManagedSessionDeps = { ...deps, paneById: async () => {
+      if (++reads === 2) {
+        if (change === "reused-pid") observed = { ...observed!, starttime: "reused" };
+        if (change === "rebound-child") { observed = { ...observed!, starttime: "new-birth" }; record.child = { ...observed }; save(); }
+        if (change === "record") { record.generation = 2; save(); }
+        if (change === "replacement") { renameSync(sessionFile, `${sessionFile}.old`); writeFileSync(sessionFile, originalFile, { mode: 0o600 }); }
+        if (change === "header") writeFileSync(sessionFile, JSON.stringify({ type: "bad", sessionId: "other", cwd: root }) + "\n");
+      }
+      return pane;
+    } };
+    await expect(conversationForPane(pane, undefined, {}, racing)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "blocked_managed_identity_changed" });
+    if (change === "replacement") { rmSync(sessionFile); renameSync(`${sessionFile}.old`, sessionFile); }
+    if (change === "header") writeFileSync(sessionFile, originalFile);
+    record = originalRecord; observed = originalObserved; save();
+    expect((await conversationForPane(pane)).managed_session?.readable).toBe(true);
+  }
+});
+
+it.each(["claude", "codex"] as const)("rejects both directions of %s lifecycle change and permits a new read", async harness => {
+  nativeReadOnly(harness);
+  for (const initial of ["ready", "stopped", "runtime-blocked"] as const) {
+    for (const lookup of [1, 2]) {
+      record.desired_state = initial === "stopped" ? "stopped" : "running";
+      record.state = initial === "stopped" ? "stopped" : initial === "ready" ? "ready" : "blocked";
+      record.error = initial === "runtime-blocked" ? "blocked_runtime_changed" : null;
+      save();
+      let reads = 0;
+      const racing: ManagedSessionDeps = { ...deps, paneById: async () => {
+        if (++reads === lookup) {
+          record.desired_state = initial === "ready" ? "stopped" : "running";
+          record.state = initial === "ready" ? "stopped" : "ready";
+          record.error = null; save();
+        }
+        return pane;
+      } };
+      await expect(conversationForPane(pane, undefined, {}, racing)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "blocked_managed_identity_changed" });
+      const fresh = await conversationForPane(pane);
+      expect(fresh.managed_session?.state).toBe(initial === "ready" ? "blocked" : "ready");
+      expect(fresh.managed_session?.readable).toBe(initial === "ready" ? true : undefined);
+    }
+  }
+});
+
+it.each(["gjc", "omo"] as const)("rejects a late %s lifecycle change without another SDK lookup", async harness => {
+  if (harness === "omo") { useOmo(); holdOmoSession(); }
+  for (const initial of ["ready", "blocked"] as const) {
+    record.state = initial; record.error = initial === "blocked" ? "blocked_runtime_changed" : null; save();
+    let reads = 0, sdkCalls = 0;
+    const racing: ManagedSessionDeps = {
+      ...(harness === "omo" ? omoDeps() : deps),
+      gjcSession: async () => { sdkCalls++; return live; },
+      paneById: async () => {
+        if (++reads === 2) {
+          record.state = initial === "ready" ? "blocked" : "ready";
+          record.error = initial === "ready" ? "blocked_runtime_changed" : null; save();
+        }
+        return pane;
+      },
+    };
+    await expect(conversationForPane(pane, undefined, {}, racing)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "blocked_managed_identity_changed" });
+    expect(sdkCalls).toBe(harness === "gjc" ? 2 : 0);
+    expect((await conversationForPane(pane, undefined, {}, harness === "omo" ? omoDeps() : deps)).managed_session?.state)
+      .toBe(initial === "ready" ? "blocked" : "ready");
+  }
+});
+
 it.each(["claude", "codex"] as const)("serves a read-only %s conversation only while the pane's native session matches", async harness => {
   nativeReadOnly(harness);
   expect(await resolve()).toMatchObject({

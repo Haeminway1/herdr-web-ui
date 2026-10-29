@@ -40,7 +40,7 @@ import nodePath, { type PlatformPath } from "node:path";
 
 import type { ConversationMetadata, ConversationTurn, HerdrPane, ManagedSessionIdentity, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc, paneRead, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
-import { managedNativeSessionBound, resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
+import { recheckManagedSessionAfterProof, resolveManagedSession, type ManagedSessionDeps } from "./managed-sessions.ts";
 import { CodexReadScope, codexHistorySegments, createCodexTranscriptParser, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHome, parseCodexTranscript, readRange, unansweredCodexQuestions, type QueuedQuestion } from "./codex.ts";
 import { resolveAgent } from "./pane-context.ts";
 import { CODEX_IMAGE_REF, codexTranscriptImage, MAX_IMAGE_BYTES } from "./codex-images.ts";
@@ -947,6 +947,7 @@ type ManagedResolvedTranscript = {
   path: string;
   managed_session: ManagedSessionIdentity;
   fileIdentity: { dev: number; ino: number };
+  bindingDigest: string;
   codexHome?: string;
   agy?: AgyStore;
 };
@@ -1016,7 +1017,7 @@ async function managedTranscript(pane: HerdrPane, deps: ManagedSessionDeps): Pro
     throw new ConversationUnavailable(identity.reason ?? identity.state, identity);
   }
   const source = MANAGED_SOURCES[identity.harness];
-  const resolved: ManagedResolvedTranscript = { source, path: sessionFile, managed_session: identity, fileIdentity: resolution.fileIdentity! };
+  const resolved: ManagedResolvedTranscript = { source, path: sessionFile, managed_session: identity, fileIdentity: resolution.fileIdentity!, bindingDigest: resolution.bindingDigest! };
   if (identity.harness === "codex") {
     let directory = nodePath.dirname(sessionFile);
     while (nodePath.basename(directory) !== "sessions" && nodePath.dirname(directory) !== directory) directory = nodePath.dirname(directory);
@@ -1027,7 +1028,8 @@ async function managedTranscript(pane: HerdrPane, deps: ManagedSessionDeps): Pro
 
 function sameManagedIdentity(a: ManagedSessionIdentity, b: ManagedSessionIdentity): boolean {
   return a.id === b.id && a.harness === b.harness && a.generation === b.generation
-    && managedIdentityReadable(a) && managedIdentityReadable(b) && a.session_id === b.session_id;
+    && managedIdentityReadable(a) && managedIdentityReadable(b) && a.state === b.state
+    && a.reason === b.reason && a.readable === b.readable && a.session_id === b.session_id;
 }
 
 const managedOmoQuestions = new OmoAskReader();
@@ -1069,8 +1071,9 @@ async function assertManagedTranscriptCurrent(pane: Pick<HerdrPane, "pane_id">, 
     throw error;
   }
   if (current === null || current.path !== resolved.path || current.fileIdentity.dev !== resolved.fileIdentity.dev
-    || current.fileIdentity.ino !== resolved.fileIdentity.ino || !sameManagedIdentity(current.managed_session, resolved.managed_session)) {
-    throw new ConversationUnavailable(current?.managed_session.reason ?? "blocked_managed_identity_changed", current?.managed_session);
+    || current.fileIdentity.ino !== resolved.fileIdentity.ino || current.bindingDigest !== resolved.bindingDigest
+    || !sameManagedIdentity(current.managed_session, resolved.managed_session)) {
+    throw new ConversationUnavailable("blocked_managed_identity_changed", current?.managed_session);
   }
   // The SDK proof awaited I/O. Its captured pane may have been reassigned while the old
   // record and child stayed valid; fetch ownership after that await, before releasing bytes.
@@ -1088,9 +1091,12 @@ async function assertManagedTranscriptCurrent(pane: Pick<HerdrPane, "pane_id">, 
     throw new ConversationUnavailable("blocked_managed_identity_changed", finalPane.managed_session);
   }
   const identity = current.managed_session;
-  if (identity.readable === true && (identity.harness === "claude" || identity.harness === "codex")
-    && !managedNativeSessionBound(final.pane, identity.harness, identity.session_id!, current.path)) {
-    throw new ConversationUnavailable("blocked_managed_identity_changed", finalPane.managed_session);
+  const verified = recheckManagedSessionAfterProof(final.pane, undefined, deps);
+  if (verified?.lookupError) throw verified.lookupError;
+  if (!verified || verified.sessionFile !== current.path || verified.fileIdentity?.dev !== current.fileIdentity.dev
+    || verified.fileIdentity.ino !== current.fileIdentity.ino || verified.bindingDigest !== current.bindingDigest
+    || !sameManagedIdentity(verified.identity, identity)) {
+    throw new ConversationUnavailable("blocked_managed_identity_changed", verified?.identity);
   }
 }
 
