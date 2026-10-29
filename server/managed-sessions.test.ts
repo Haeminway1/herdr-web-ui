@@ -27,6 +27,7 @@ const deps: ManagedSessionDeps = {
   processIdentity: pid => observed?.pid === pid ? { ...observed } : null,
   gjcSession: async () => live,
   paneById: async () => pane,
+  paneProcessInfo: async id => ({ pane_id: id, shell_pid: 400, foreground_processes: [{ pid: 42, name: "agent" }] }),
 };
 const message = (role: string, text: string) => JSON.stringify({ type: "message", message: { role, content: [{ type: "text", text }] } });
 const save = () => writeFileSync(recordFile, JSON.stringify(record), { mode: 0o600 });
@@ -1056,6 +1057,61 @@ it.each(["claude", "codex"] as const)("serves stopped %s native history without 
   expect(projected.panes[0]?.agent_session).toEqual(pane.agent_session);
   expect(readFileSync(recordFile, "utf8")).toBe(kept);
   expect(pane).toEqual(originalPane);
+});
+
+it.each(["claude", "codex"] as const)("requires the exact foreground child for stopped and runtime-blocked %s history", async harness => {
+  nativeReadOnly(harness);
+  for (const stopped of [true, false]) {
+    if (stopped) { record.desired_state = "stopped"; record.state = "stopped"; save(); }
+    else { record.desired_state = "running"; blockRuntime(); }
+    let calls = 0;
+    const lookup = (pid: number, target = pane.pane_id): ManagedSessionDeps => ({
+      ...deps, paneProcessInfo: async () => { calls++; return { pane_id: target, shell_pid: 400, foreground_processes: [{ pid, name: harness }] }; },
+    });
+    pane.agent = null;
+    await expect(conversationForPane(pane, undefined, {}, lookup(43))).rejects.toThrow();
+    pane.agent = harness;
+    const helpers: ManagedSessionDeps = { ...deps, paneProcessInfo: async id => ({ pane_id: id, shell_pid: 400,
+      foreground_processes: [{ pid: 43, name: harness }, { pid: 44, name: "helper" }] }) };
+    for (const candidate of [lookup(43), lookup(400), lookup(42, "other-pane"), helpers]) {
+      expect((await resolveWith(candidate)).identity.readable).not.toBe(true);
+      await expect(conversationForPane(pane, undefined, {}, candidate)).rejects.toThrow();
+    }
+    expect(calls).toBeGreaterThan(0);
+    const noInfo: ManagedSessionDeps = { ...deps, paneProcessInfo: async () => undefined };
+    expect(await resolveWith(noInfo)).toMatchObject({ identity: { state: "identity_pending" }, lookupError: { reason: "unavailable" } });
+    await expect(conversationForPane(pane, undefined, {}, noInfo)).rejects.toBeInstanceOf(GjcSdkLookupError);
+    const nullInfo: ManagedSessionDeps = { ...deps, paneProcessInfo: async () => null };
+    await expect(conversationForPane(pane, undefined, {}, nullInfo)).rejects.toBeInstanceOf(GjcSdkLookupError);
+    const incomplete: ManagedSessionDeps = { ...deps, paneProcessInfo: async id => ({ pane_id: id, shell_pid: 400 }) };
+    await expect(conversationForPane(pane, undefined, {}, incomplete)).rejects.toBeInstanceOf(GjcSdkLookupError);
+    const broken: ManagedSessionDeps = { ...deps, paneProcessInfo: async () => { throw new Error("offline"); } };
+    await expect(conversationForPane(pane, undefined, {}, broken)).rejects.toBeInstanceOf(GjcSdkLookupError);
+    expect((await conversationForPane(pane, undefined, {}, lookup(42))).managed_session?.readable).toBe(true);
+  }
+});
+
+it.each(["claude", "codex"] as const)("rejects stopped %s proof changes during foreground lookup", async harness => {
+  nativeReadOnly(harness);
+  record.desired_state = "stopped"; record.state = "stopped"; save();
+  for (const change of ["child", "record", "pane", "last-pane", "last-child", "last-foreground"] as const) {
+    const savedPane = structuredClone(pane), savedRecord = structuredClone(record), savedObserved = structuredClone(observed);
+    let calls = 0;
+    const racing: ManagedSessionDeps = {
+      ...deps,
+      paneProcessInfo: async id => {
+        calls++;
+        if (change === "child" && calls === 1) observed = null;
+        if (change === "record" && calls === 1) { record.generation = 2; save(); }
+        if (change === "pane" && calls === 2) pane = { ...pane, terminal_id: "other" };
+        if (change === "last-pane" && calls === 3) pane = { ...pane, agent: null };
+        if (change === "last-child" && calls === 3) observed = null;
+        return { pane_id: id, shell_pid: 400, foreground_processes: [{ pid: change === "last-foreground" && calls === 3 ? 43 : 42, name: harness }] };
+      },
+    };
+    await expect(conversationForPane(pane, undefined, {}, racing)).rejects.toThrow();
+    pane = savedPane; record = savedRecord; observed = savedObserved; save();
+  }
 });
 
 it.each(["claude", "codex"] as const)("denies stopped %s history without exact proof", async harness => {

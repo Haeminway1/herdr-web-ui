@@ -7,6 +7,7 @@ import { gjcSdkCurrentSession } from "./gjc-sdk.ts";
 import { GjcSdkLookupError, lookupExecutionError } from "./gjc-sdk-error.ts";
 import { heldSessionIds } from "./omo-holders.ts";
 import { processStartedAt } from "./process-start.ts";
+import { paneProcessInfo, type ProcessInfo } from "./herdr/client.ts";
 
 interface ProcessIdentity { readonly pid: number; readonly starttime: string; readonly boot: string; readonly cwd: string }
 export interface ManagedSessionDeps {
@@ -14,6 +15,8 @@ export interface ManagedSessionDeps {
   processIdentity?: (pid: number) => ProcessIdentity | null;
   /** Final conversation authorization reads the pane anew, independently of its saved record. */
   paneById?: (paneId: string) => Promise<HerdrPane | null>;
+  /** Foreground process evidence from the selected pane, injectable for isolated tests. */
+  paneProcessInfo?: (paneId: string) => Promise<ProcessInfo | null | undefined>;
   /** Native holder evidence for an OMO process, by the OS start time of that exact pid. */
   processStartedAt?: (pid: number) => number | null;
   heldSessionIds?: typeof heldSessionIds;
@@ -134,6 +137,7 @@ function transcriptPermission(
 /** A Claude/Codex record is readable only while herdr's current native session binds to the same harness and file or id. */
 export function managedNativeSessionBound(pane: HerdrPane, harness: Harness, sessionId: string, sessionFile: string): boolean {
   if (harness !== "codex" && harness !== "claude") return false;
+  if (pane.agent !== harness) return false;
   const binding = pane.agent_session;
   if (!binding || binding.agent !== harness || typeof binding.value !== "string" || binding.value === "") return false;
   if (binding.kind === "id") return binding.value === sessionId;
@@ -200,8 +204,8 @@ function header(path: string, harness: Harness, expected: FileIdentityPin): { id
 
 type GjcProof = Awaited<ReturnType<typeof gjcSdkCurrentSession>>;
 
-/** Shared proof; only the GJC SDK step can suspend it. */
-function* managedSessionProof(pane: HerdrPane, namespace: string, deps: ManagedSessionDeps, finalCheck: boolean): Generator<Promise<GjcProof>, ManagedSessionResolution | null, GjcProof> {
+/** Shared proof; the SDK and native foreground lookups can suspend it. */
+function* managedSessionProof(pane: HerdrPane, namespace: string, deps: ManagedSessionDeps, finalCheck: boolean): Generator<Promise<GjcProof | ProcessInfo | undefined>, ManagedSessionResolution | null, GjcProof | ProcessInfo | undefined> {
   const identity: ManagedSessionIdentity = { id: null, harness: null, generation: null, state: "blocked", reason: null, session_id: null };
   const blocked = (reason: string): ManagedSessionResolution => ({ identity: { ...identity, state: "blocked", reason }, sessionFile: null });
   const pending = (reason: string): ManagedSessionResolution => ({ identity: { ...identity, state: "identity_pending", reason }, sessionFile: null });
@@ -284,11 +288,11 @@ function* managedSessionProof(pane: HerdrPane, namespace: string, deps: ManagedS
         || typeof child.starttime !== "string" || typeof child.boot !== "string") return blocked("blocked_runtime_identity");
       const readIdentity = deps.processIdentity ?? processIdentity;
       const before = readIdentity(child.pid);
-      if (!before || before.starttime !== child.starttime || before.boot !== child.boot || before.cwd !== recordCwd) return blocked("blocked_runtime_identity");
+      if (!before || before.pid !== child.pid || before.starttime !== child.starttime || before.boot !== child.boot || before.cwd !== recordCwd) return blocked("blocked_runtime_identity");
       if (identity.harness === "gjc" && !finalCheck) {
         let live: Awaited<ReturnType<typeof gjcSdkCurrentSession>>;
         try {
-          live = yield (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"));
+          live = (yield (deps.gjcSession ?? gjcSdkCurrentSession)([before.pid], recordCwd, join(homedir(), ".gjc", "agent"))) as GjcProof;
         } catch (error) {
           throw lookupExecutionError(error);
         }
@@ -301,6 +305,14 @@ function* managedSessionProof(pane: HerdrPane, namespace: string, deps: ManagedS
         if (!live) return pending("identity_pending");
         if (live.pid !== before.pid || live.hostIncarnation !== `linux:${before.starttime}` || live.sessionId !== sessionId) return blocked("blocked_gjc_session_mismatch");
       } else {
+        if ((identity.harness === "claude" || identity.harness === "codex") && !finalCheck) {
+          if (!managedNativeSessionBound(pane, identity.harness, sessionId, sessionFile)) return blocked("blocked_runtime_identity");
+          let info: ProcessInfo | null | undefined;
+          try { info = (yield (deps.paneProcessInfo ?? paneProcessInfo)(pane.pane_id)) as ProcessInfo | null | undefined; }
+          catch (error) { throw lookupExecutionError(error); }
+          if (!info || !Array.isArray(info.foreground_processes)) return { ...pending("identity_pending"), lookupError: new GjcSdkLookupError("unavailable") };
+          if (info.pane_id !== pane.pane_id || !info.foreground_processes.some(process => process.pid === before.pid)) return blocked("blocked_runtime_identity");
+        }
         const after = readIdentity(before.pid);
         if (!after || after.pid !== before.pid || after.starttime !== before.starttime || after.boot !== before.boot || after.cwd !== before.cwd) return blocked("blocked_runtime_identity");
         if (identity.harness === "omo") {

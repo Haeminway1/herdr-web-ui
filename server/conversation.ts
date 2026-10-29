@@ -1091,7 +1091,31 @@ async function assertManagedTranscriptCurrent(pane: Pick<HerdrPane, "pane_id">, 
     throw new ConversationUnavailable("blocked_managed_identity_changed", finalPane.managed_session);
   }
   const identity = current.managed_session;
-  const verified = recheckManagedSessionAfterProof(final.pane, undefined, deps);
+  let proofPane = final.pane;
+  if (identity.readable === true && (identity.harness === "claude" || identity.harness === "codex")) {
+    const native = await resolveManagedSession(proofPane, undefined, deps);
+    if (native?.lookupError) throw native.lookupError;
+    if (!native || native.sessionFile !== current.path || native.fileIdentity?.dev !== current.fileIdentity.dev
+      || native.fileIdentity.ino !== current.fileIdentity.ino || native.bindingDigest !== current.bindingDigest
+      || !sameManagedIdentity(native.identity, identity)) {
+      throw new ConversationUnavailable("blocked_managed_identity_changed", native?.identity);
+    }
+    let afterProof: HerdrPane | null;
+    try {
+      afterProof = deps.paneById ? await deps.paneById(pane.pane_id)
+        : (await sessionSnapshot()).panes.find(candidate => candidate.pane_id === pane.pane_id) ?? null;
+    } catch (error) { throw lookupExecutionError(error); }
+    if (!afterProof) throw new ConversationUnavailable("blocked_managed_identity_changed");
+    const after = managedLookupPane(afterProof);
+    if (!after.declared || after.invalid || after.pane.pane_id !== pane_id || after.pane.workspace_id !== workspace_id
+      || after.pane.terminal_id !== terminal_id || after.pane.cwd !== cwd
+      || after.pane.tokens?.hm_managed_session !== resolved.managed_session.id
+      || after.pane.tokens?.hm_managed_generation !== String(resolved.managed_session.generation)) {
+      throw new ConversationUnavailable("blocked_managed_identity_changed", afterProof.managed_session);
+    }
+    proofPane = after.pane;
+  }
+  const verified = recheckManagedSessionAfterProof(proofPane, undefined, deps);
   if (verified?.lookupError) throw verified.lookupError;
   if (!verified || verified.sessionFile !== current.path || verified.fileIdentity?.dev !== current.fileIdentity.dev
     || verified.fileIdentity.ino !== current.fileIdentity.ino || verified.bindingDigest !== current.bindingDigest
