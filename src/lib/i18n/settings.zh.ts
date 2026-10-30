@@ -228,6 +228,7 @@ export const SETTINGS_ZH: Record<string, string> = {
   "In a popup": "以弹窗",
   "Web links": "网页链接",
   "Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way.": "只有这台 PC 提供的页面（例如 localhost 上的开发服务器）会在窗格旁打开。按住 Shift 点击则以另一种方式打开。",
+  "Pages this PC serves, such as Tailscale reports, can open in the app. Shift-click opens the other way.": "这台 PC 提供的页面（例如 Tailscale 报告）可以在应用内打开。按住 Shift 点击则以另一种方式打开。",
   "Beside the pane": "在窗格旁",
   "In a new tab": "在新标签页中",
   "A phone shows one column either way.": "手机上无论如何都显示为单栏。",

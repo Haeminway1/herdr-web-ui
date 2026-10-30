@@ -228,6 +228,7 @@ export const SETTINGS_JA: Record<string, string> = {
   "In a popup": "ポップアップで",
   "Web links": "Web リンク",
   "Only a page this PC serves, such as a dev server on localhost, opens beside the pane. Shift-click opens it the other way.": "localhost の開発サーバーなど、この PC が配信するページだけがペインの横に開きます。Shift キーを押しながらクリックすると、もう一方で開きます。",
+  "Pages this PC serves, such as Tailscale reports, can open in the app. Shift-click opens the other way.": "Tailscale レポートなど、この PC が配信するページはアプリ内で開けます。Shift キーを押しながらクリックすると、もう一方で開きます。",
   "Beside the pane": "ペインの横",
   "In a new tab": "新しいタブ",
   "A phone shows one column either way.": "スマートフォンではどちらでも1列で表示します。",

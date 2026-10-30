@@ -3627,3 +3627,17 @@ may have failed while offline; losing the socket alone keeps already decoded ima
 load that failed retries after the new stat passes the size/type checks, without remounting decoded
 neighbors. No new setting, endpoint or permission grant is
 introduced.
+
+## Same-host web links
+
+The device's **Web links** setting stays on **In a new tab** by default. Choosing **In the app**
+opens only pages this PC serves, on the app's hostname, in the existing web panel. A wide window
+keeps the panel beside the pane; a narrow window uses the file viewer's modal surface, with a
+named close button, focus return and browser Back. Shift-click still chooses the other destination.
+The page and a docked file share one place and one history entry: either one replacing the other
+takes over that entry in place, so one Back closes the panel shown and the next leaves the conversation.
+A popup file moved beside the pane while the page is shown steps back past the page's entry and pushes the docked file from their opener, so Forward cannot bring the popup back; resizing under such a popup file adds no entry of its own.
+Other hosts keep opening in a new tab, and unsafe schemes stay blocked; the app's `frame-src` stays
+limited to its own host. This follows T3 Code's in-thread visual replies and full-screen page view,
+while keeping external page links in the browser as its [HTML renders guide](https://github.com/pingdotgg/t3code/blob/main/docs/user/html-renders.md)
+does. No code or visual assets are copied.
