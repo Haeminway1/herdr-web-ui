@@ -78,7 +78,7 @@ export function useFilePanels({ settings, filePanelAvailable, selectedPaneId, se
   // A diff's file docking in the place of a docked report that holds the entry under the diff: like the
   // popup collapse above, step back past the diff and the report's entry and push the file from their
   // opener, so Back closes the file and then leaves, as when the report held no entry.
-  const openDiffFile = useCallback((preview: Parameters<typeof openPreview>[0]) => {
+  const openDiffFile = useCallback(async (preview: Parameters<typeof openPreview>[0]) => {
     const docks = filePanelAvailable && openPresentation(preview.path, settings.fileOpen) === "panel";
     if (!docks || webPage === null || !holdsEntry()) return false;
     if (collapsing.current) return true;
@@ -88,7 +88,13 @@ export function useFilePanels({ settings, filePanelAvailable, selectedPaneId, se
       openFile(preview);
     };
     window.addEventListener("popstate", land, { once: true });
-    backUnderCurrentEntry(2)?.catch(() => { window.removeEventListener("popstate", land); collapsing.current = false; });
+    try {
+      await backUnderCurrentEntry(2);
+    } catch (error) {
+      window.removeEventListener("popstate", land);
+      collapsing.current = false;
+      throw error;
+    }
     return true;
   }, [filePanelAvailable, settings.fileOpen, webPage, holdsEntry, openFile]);
   // the kind corrects a guess from the extension; with files set to open in the popup there is no guess to correct
