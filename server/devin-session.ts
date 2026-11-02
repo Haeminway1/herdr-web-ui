@@ -86,10 +86,11 @@ export function devinLockProof(pid: number, dbPath: string, proc: DevinProc = lo
       }
     }
     const proofs: DevinLockProof[] = [];
+    // a child that could not be read may hold a lock of its own: the proof is then inconclusive
+    let unread = false;
     for (const child of children) {
       let info: ReturnType<typeof processInfo>;
-      // a child gone or unreadable since it was listed holds no lock this proof can read
-      try { info = processInfo(child); } catch { continue; }
+      try { info = processInfo(child); } catch { unread = true; continue; }
       if (info.parent !== pid) throw unavailable();
       if (!isDevinProcess(info.argv) || info.argv[1] !== "acp") continue;
       if (info.exe !== outer.exe) throw unavailable();
@@ -113,8 +114,8 @@ export function devinLockProof(pid: number, dbPath: string, proc: DevinProc = lo
         proofs.push({ session, binding: JSON.stringify([pid, outer.start, outer.exe, child, info.start, file.dev, file.ino, fd, db.dev, db.ino]) });
       }
     }
-    if (proofs.length === 0) throw missing();
-    if (proofs.length !== 1) throw unavailable();
+    if (proofs.length > 1) throw unavailable();
+    if (unread || proofs.length === 0) throw missing();
     const outerAfter = processInfo(pid);
     if (outerAfter.start !== outer.start || outerAfter.exe !== outer.exe || outerAfter.parent !== outer.parent || JSON.stringify(outerAfter.argv) !== JSON.stringify(outer.argv)) throw unavailable();
     const proof = proofs[0]!;
