@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { HerdrPane } from "../shared/protocol.ts";
-import { devinLockProof, devinSessionForPane, type DevinProc } from "./devin-session.ts";
+import { DevinLockMissing, devinLockProof, devinSessionForPane, type DevinProc } from "./devin-session.ts";
 
 function fixture() {
   const root = "/fixture/devin/cli";
@@ -97,6 +97,23 @@ describe("Devin kernel session lock", () => {
     f.texts.set("/proc/200/stat", f.processStat(100, 21));
     f.stats.set("/proc/200/exe", f.stat(91));
     expect(f.proof).toThrow();
+  });
+
+  it("tells no lock to read (a caller may fall back) from evidence that refuses", () => {
+    const missing = (f: ReturnType<typeof fixture>) => { try { f.proof(); } catch (error) { return error instanceof DevinLockMissing; } throw new Error("proof did not throw"); };
+    const noLocksDir = fixture();
+    noLocksDir.stats.delete(`${noLocksDir.root}/session_locks`);
+    expect(missing(noLocksDir)).toBeTrue();
+    const noLockYet = fixture();
+    noLockYet.lists.set("/proc/200/fd", []);
+    expect(missing(noLockYet)).toBeTrue();
+    const twoLocks = fixture();
+    twoLocks.setLock("another-session", 51, "9");
+    twoLocks.lists.set("/proc/200/fd", ["8", "9"]);
+    expect(missing(twoLocks)).toBeFalse();
+    const foreign = fixture();
+    foreign.stats.set(`${foreign.root}/session_locks/fresh-session.lock`, foreign.stat(50, false, 1001));
+    expect(missing(foreign)).toBeFalse();
   });
 
   it("binds the store it read: a database replaced between two proofs changes the binding", () => {

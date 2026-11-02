@@ -33,19 +33,33 @@ const localProc: DevinProc = {
 export interface DevinLockProof { session: string; binding: string }
 const LOCK_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/**
+ * No lock to read: no session_locks (an older Devin), a store reached through a symlink, no ACP
+ * child, or no lock held yet. A caller may then read a session the pane names explicitly; any
+ * other failure (two locks, a foreign owner, a replaced file) contradicts one and refuses.
+ */
+export class DevinLockMissing extends ConversationUnavailable {
+  constructor() { super("no_session_id"); }
+}
+
 /** A stable proof from one pane's outer process and its direct ACP children only. */
 export function devinLockProof(pid: number, dbPath: string, proc: DevinProc = localProc): DevinLockProof {
   const unavailable = () => new ConversationUnavailable("no_session_id");
+  const missing = () => new DevinLockMissing();
   try {
     if (!Number.isSafeInteger(pid) || pid <= 0) throw unavailable();
     const root = resolve(dirname(dbPath));
     const locks = join(root, "session_locks");
     for (const dir of [root, locks]) {
-      const stat = proc.stat(dir, false);
-      if (!stat.isDirectory() || stat.uid !== proc.uid || proc.real(dir) !== dir) throw unavailable();
+      let stat: ReturnType<DevinProc["stat"]>;
+      try { stat = proc.stat(dir, false); } catch { throw missing(); }
+      if (!stat.isDirectory() || proc.real(dir) !== dir) throw missing();
+      if (stat.uid !== proc.uid) throw unavailable();
     }
-    const db = proc.stat(dbPath, false);
-    if (!db.isFile() || db.uid !== proc.uid || proc.real(dbPath) !== resolve(dbPath)) throw unavailable();
+    let db: ReturnType<DevinProc["stat"]>;
+    try { db = proc.stat(dbPath, false); } catch { throw missing(); }
+    if (!db.isFile() || proc.real(dbPath) !== resolve(dbPath)) throw missing();
+    if (db.uid !== proc.uid) throw unavailable();
     const processInfo = (id: number) => {
       const base = `/proc/${id}`;
       if (proc.stat(base).uid !== proc.uid) throw unavailable();
@@ -63,14 +77,19 @@ export function devinLockProof(pid: number, dbPath: string, proc: DevinProc = lo
     const children = new Set<number>();
     for (const tid of proc.list(`/proc/${pid}/task`)) {
       if (!/^\d+$/.test(tid)) throw unavailable();
-      for (const child of proc.read(`/proc/${pid}/task/${tid}/children`).trim().split(/\s+/).filter(Boolean)) {
+      let listed: string;
+      // a kernel without the children file cannot say which child holds the lock
+      try { listed = proc.read(`/proc/${pid}/task/${tid}/children`); } catch { throw missing(); }
+      for (const child of listed.trim().split(/\s+/).filter(Boolean)) {
         if (!/^\d+$/.test(child)) throw unavailable();
         children.add(Number(child));
       }
     }
     const proofs: DevinLockProof[] = [];
     for (const child of children) {
-      const info = processInfo(child);
+      let info: ReturnType<typeof processInfo>;
+      // a child gone or unreadable since it was listed holds no lock this proof can read
+      try { info = processInfo(child); } catch { continue; }
       if (info.parent !== pid) throw unavailable();
       if (!isDevinProcess(info.argv) || info.argv[1] !== "acp") continue;
       if (info.exe !== outer.exe) throw unavailable();
@@ -94,12 +113,14 @@ export function devinLockProof(pid: number, dbPath: string, proc: DevinProc = lo
         proofs.push({ session, binding: JSON.stringify([pid, outer.start, outer.exe, child, info.start, file.dev, file.ino, fd, db.dev, db.ino]) });
       }
     }
+    if (proofs.length === 0) throw missing();
     if (proofs.length !== 1) throw unavailable();
     const outerAfter = processInfo(pid);
     if (outerAfter.start !== outer.start || outerAfter.exe !== outer.exe || outerAfter.parent !== outer.parent || JSON.stringify(outerAfter.argv) !== JSON.stringify(outer.argv)) throw unavailable();
     const proof = proofs[0]!;
     return proof;
-  } catch {
+  } catch (error) {
+    if (error instanceof DevinLockMissing) throw error;
     throw unavailable();
   }
 }

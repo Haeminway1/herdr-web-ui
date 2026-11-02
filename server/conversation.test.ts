@@ -284,7 +284,8 @@ describe("Devin pane identity", () => {
     const cwd = "/synthetic/work";
     let live: string | null = null;
     const proof = spyOn(devinSession, "devinLockProof").mockImplementation((pid) => {
-      if (live === null) throw new ConversationUnavailable("no_session_id");
+      if (live === "ambiguous") throw new ConversationUnavailable("no_session_id");
+      if (live === null) throw new devinSession.DevinLockMissing();
       return { session: live, binding: JSON.stringify([pid, live]) };
     });
     try {
@@ -313,6 +314,9 @@ describe("Devin pane identity", () => {
       live = "two";
       mockedPanes = [resumed];
       mockedProcesses = [{ argv: ["/usr/local/bin/devin", "--resume=one"] }];
+      await expect(paneConversation(resumed.pane_id, undefined, {}, dbPath)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "no_session_id" });
+      // lock evidence that is read but does not hold up (two locks held) refuses too: no fallback to --resume
+      live = "ambiguous";
       await expect(paneConversation(resumed.pane_id, undefined, {}, dbPath)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "no_session_id" });
     } finally {
       proof.mockRestore();
