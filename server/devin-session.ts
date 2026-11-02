@@ -90,7 +90,8 @@ export function devinLockProof(pid: number, dbPath: string, proc: DevinProc = lo
         const lockLines = fdinfo.split("\n").filter((line) => line.startsWith("lock:"));
         const lock = new RegExp(`^lock:\\s+\\d+: FLOCK\\s+ADVISORY\\s+WRITE\\s+${child}\\s+[0-9a-fA-F]+:[0-9a-fA-F]+:${file.ino}\\s+0\\s+EOF\\s*$`);
         if (lockLines.length !== 1 || !lock.test(lockLines[0]!)) throw unavailable();
-        proofs.push({ session, binding: JSON.stringify([pid, outer.start, outer.exe, child, info.start, file.dev, file.ino, fd]) });
+        // the store's own inode too: a database replaced between two proofs changes the binding
+        proofs.push({ session, binding: JSON.stringify([pid, outer.start, outer.exe, child, info.start, file.dev, file.ino, fd, db.dev, db.ino]) });
       }
     }
     if (proofs.length !== 1) throw unavailable();

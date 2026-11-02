@@ -99,6 +99,15 @@ describe("Devin kernel session lock", () => {
     expect(f.proof).toThrow();
   });
 
+  it("binds the store it read: a database replaced between two proofs changes the binding", () => {
+    const f = fixture();
+    const first = f.proof();
+    f.stats.set(f.db, f.stat(4));
+    const replaced = f.proof();
+    expect(replaced.session).toBe(first.session);
+    expect(replaced.binding).not.toBe(first.binding);
+  });
+
   it("accepts separate same-folder owners but refuses contradictory explicit identities", () => {
     const pane = { pane_id: "a", agent: "devin", cwd: "/work" } as HerdrPane;
     const peer = { ...pane, pane_id: "b" };

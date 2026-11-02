@@ -278,6 +278,50 @@ describe("Devin pane identity", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+  it.skipIf(process.platform !== "linux")("keeps an explicitly named Devin session as chat when its lock cannot be read, and refuses one a read lock contradicts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-devin-explicit-"));
+    const dbPath = join(root, "sessions.db");
+    const cwd = "/synthetic/work";
+    let live: string | null = null;
+    const proof = spyOn(devinSession, "devinLockProof").mockImplementation((pid) => {
+      if (live === null) throw new ConversationUnavailable("no_session_id");
+      return { session: live, binding: JSON.stringify([pid, live]) };
+    });
+    try {
+      const db = new Database(dbPath);
+      try {
+        db.exec("CREATE TABLE sessions(id TEXT, working_directory TEXT, main_chain_id INTEGER, hidden INTEGER, model TEXT); CREATE TABLE message_nodes(session_id TEXT,node_id INTEGER,parent_node_id INTEGER,chat_message TEXT,created_at INTEGER); CREATE TABLE tool_call_state(session_id TEXT,tool_call_id TEXT,tool_call_json TEXT,tool_call_update_json TEXT)");
+        const insertSession = db.query("INSERT INTO sessions VALUES (?, ?, 2, 0, NULL)");
+        const insertNode = db.query("INSERT INTO message_nodes VALUES (?, ?, ?, ?, ?)");
+        for (const session of ["one", "two"]) {
+          insertSession.run(session, cwd);
+          insertNode.run(session, 1, null, JSON.stringify({ role: "user", content: `${session} synthetic question` }), 1700000000);
+          insertNode.run(session, 2, 1, JSON.stringify({ role: "assistant", content: `${session} synthetic answer` }), 1700000001);
+        }
+      } finally { db.close(); }
+      const firstText = async (paneId: string) => (await paneConversation(paneId, undefined, {}, dbPath)).turns[0]?.parts[0];
+      // no lock to read (an older Devin, a symlinked store, no lock taken yet): the named session reads as on main
+      const resumed = { pane_id: "pane-resumed", cwd, foreground_cwd: cwd, agent: "devin" } as HerdrPane;
+      mockedPanes = [resumed];
+      mockedProcesses = [{ argv: ["/usr/local/bin/devin", "--resume=one"] }];
+      expect(await firstText(resumed.pane_id)).toEqual({ kind: "text", text: "one synthetic question" });
+      const reported = { ...resumed, pane_id: "pane-reported", agent_session: { agent: "devin", kind: "id", value: "two" } } as HerdrPane;
+      mockedPanes = [reported];
+      mockedProcesses = [{ argv: ["/usr/local/bin/devin"] }];
+      expect(await firstText(reported.pane_id)).toEqual({ kind: "text", text: "two synthetic question" });
+      // a lock that is read and names another session than --resume refuses: Devin switched inside the app
+      live = "two";
+      mockedPanes = [resumed];
+      mockedProcesses = [{ argv: ["/usr/local/bin/devin", "--resume=one"] }];
+      await expect(paneConversation(resumed.pane_id, undefined, {}, dbPath)).rejects.toMatchObject({ name: "ConversationUnavailable", message: "no_session_id" });
+    } finally {
+      proof.mockRestore();
+      mockedPanes = [];
+      mockedProcesses = [];
+      forgetTranscriptState();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("reads through paneConversation only with live executable and explicit session evidence", async () => {
     const root = mkdtempSync(join(tmpdir(), "herdr-devin-pane-"));
     const dbPath = join(root, "sessions.db");

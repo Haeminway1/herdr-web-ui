@@ -81,7 +81,7 @@ import { readsStartScreen, startScreenMetadata } from "./start-screen.ts";
 import { commandTranscriptRecords, PI_EVIDENCE_TYPES, type CommandTranscriptRecord } from "./outcome.ts";
 import { type ClaudeBranch, claudeForks, followClaudeBranch, type PromptChain, turnStarts } from "./transcript-turns.ts";
 import { copilotSetAside } from "./copilot.ts";
-import { devinLockProof, devinSessionForPane, isDevinProcess } from "./devin-session.ts";
+import { devinLockProof, devinSessionForPane, isDevinProcess, type DevinLockProof } from "./devin-session.ts";
 import { userHome } from "./user-home.ts";
 import { kiroCodexProcess } from "./kiro-terminal.ts";
 
@@ -1579,9 +1579,13 @@ export async function paneTranscript(paneId: string, codexHome?: string, snapsho
     // reader (an omo is found by its process tree, whatever herdr calls the pane).
     if (processes.length === 1) {
       const foreground = processes[0]!;
-      if (process.platform === "linux" && typeof foreground.pid !== "number") throw new ConversationUnavailable("no_session_id");
-      const proof = process.platform === "linux" && typeof foreground.pid === "number"
-        ? devinLockProof(foreground.pid, storePath) : undefined;
+      // the live lock names a fresh session; where it cannot be read (no session_locks in an older
+      // Devin, a symlinked store, no lock taken yet) an explicitly named session reads as before,
+      // and a lock that is read but names another session refuses (devinSessionForPane)
+      let proof: DevinLockProof | undefined;
+      if (process.platform === "linux" && typeof foreground.pid === "number") {
+        try { proof = devinLockProof(foreground.pid, storePath); } catch { proof = undefined; }
+      }
       const session = devinSessionForPane(pane, panes, foreground.argv as string[], proof?.session);
       if (proof !== undefined) {
         const again = devinLockProof(foreground.pid!, storePath);
