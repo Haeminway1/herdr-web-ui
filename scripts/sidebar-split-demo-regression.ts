@@ -113,6 +113,8 @@ try {
           const defaultPcs = await pcListLayout(page);
           assert.ok(Math.abs(defaultPcs.clientHeight - defaultPcs.expectedHeight) <= 1, `${label} default PCs use their content height or available room`);
           assert.ok(defaultPcs.firstVisible, `${label} the first PC row is visible in the default layout`);
+          // CI runs Chromium, which shows the rows with either layout; WebKit needs the grid, so pin it.
+          assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector(".pcs-sidebar")!).display), "grid", `${label} the PCs section stays a grid, or WebKit caps its list at one row`);
           assert.equal(original.machineList.devicePixelRatio, phone ? 3 : 1, `${label} the phone uses DPR 3 and desktop DPR 1`);
           assert.equal(await page.evaluate((key) => localStorage.getItem(key), key), null, `${label} opening the sidebar does not save a split`);
           assert.ok(original.agents.height <= original.shell.height / 2 + 1, `${label} the default starts at no more than today's half-shell allocation`);
