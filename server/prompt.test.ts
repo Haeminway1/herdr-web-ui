@@ -759,6 +759,31 @@ Ready to submit your answers?
  ❯ No
  Esc to cancel
 `))).toEqual(["Yes", "No"]);
+    // nor do two paragraphs that only together read as the words
+    expect(parseInteractivePrompt("claude", `
+────────────────────────────────────────
+ About the automatic safety check
+
+ Flagged this action? Here is how it looks:
+ Do you want to proceed?
+   Yes
+ > No
+ Esc to cancel
+`)).toBeNull();
+    // a call quoted in a boxed preview is not the panel's call: the approval keeps its card
+    const boxed = parseInteractivePrompt("claude", `
+● Bash(cat <<'EOF' > notes.md)
+────────────────────────────────────────
+ Bash command
+   │ cat <<'EOF' > notes.md
+   │ ● plugin/thing - do (MCP)(id: 1)
+   │ EOF
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+ Esc to cancel
+`);
+    expect(boxed).toMatchObject({ kind: "approval", title: "Bash command" });
     // the words quoted above a rule do not make an example under it a held approval
     expect(parseInteractivePrompt("claude", `
 ● The safety check says "Claude Code's automatic safety check flagged this action" when it holds one.
