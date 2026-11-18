@@ -8,20 +8,12 @@ import { buildDemoApp, buildDevelopmentDemoApp } from "./demo-build.ts";
 import { DEMO_FILE_PREVIEW_SCRIPT } from "./demo-file-preview.ts";
 import { openSettingsFolds, openSettingsPage, themeSide } from "./settings-page.ts";
 import { SETTINGS, closeSettings, dialogOf, historyHolds, openPalette, openSettings } from "./settings-pages-harness.ts";
-import { DEFAULT_SETTINGS } from "../src/lib/settings.ts";
+import { DEFAULT_SETTINGS, TERMINAL_FONT_MAX, TERMINAL_FONT_MIN } from "../src/lib/settings.ts";
 
-// What Settings' pages hold, on the unmodified app over the demo's fixture transport: the dialog's
-// own search, the folded groups, the rows that merge or put back settings, the account's PCs and
-// sign-in, and About. One landing is checked on React's development build too. All files and HTTP
-// traffic stay in these disposable, loopback-only apps; no herdr session is opened.
+// All files and HTTP traffic stay in these disposable, loopback-only apps; no herdr session is opened.
 const app = mkdtempSync(join(tmpdir(), "herdr-settings-demo-"));
 const devApp = mkdtempSync(join(tmpdir(), "herdr-settings-dev-"));
 
-/**
- * Loaded after the demo's transport in the development app: the voice status the Voice input page
- * asks for is held until the page releases it, and the observers made on the OpenAI key's group are
- * counted, live and made.
- */
 const HOLD_VOICE = `(() => {
   const fetch = window.fetch, held = [];
   let holding = true, asked = 0, made = 0;
@@ -46,11 +38,9 @@ interface HeldVoice { voiceAsked: () => number; releaseVoice: () => void; groupO
 /**
  * The OpenAI key's group, whose form waits for the server's answer, on React's development build:
  * StrictMode runs the landing's effect, its cleanup and the effect again, and the group is still
- * followed into view when the held answer comes. A reader who scrolled before it came stays where
- * they scrolled.
+ * followed into view when the held answer comes.
  */
 async function heldGroupLanding(browser: import("playwright-core").Browser, url: string): Promise<void> {
-  // short enough that the OpenAI key's group starts below the fold, so a landing has to scroll to it
   const context = await browser.newContext({ viewport: { width: 390, height: 480 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, locale: "en" });
   try {
     await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify(SETTINGS));
@@ -82,12 +72,10 @@ async function heldGroupLanding(browser: import("playwright-core").Browser, url:
 
     await land();
     assert.ok(await body.evaluate((node) => node.scrollTop) > 0, "the landing scrolled to the group");
-    // the reader goes back to the page's top with the hardware keyboard before the answer comes
     await page.keyboard.press("Home");
     await page.waitForFunction(() => document.querySelector(".settings-body:not([hidden])")?.scrollTop === 0);
     await page.evaluate(() => (window as unknown as HeldVoice).releaseVoice());
     await page.locator(".voice-key input").waitFor();
-    // the frames after the form arrives, when an observer still following would have scrolled to it
     await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
     assert.equal(await body.evaluate((node) => node.scrollTop), 0, "a reader who scrolled away is not pulled back");
     assert.equal((await observers()).live, 0, "the reader's scroll ended the follow");
@@ -98,12 +86,6 @@ async function heldGroupLanding(browser: import("playwright-core").Browser, url:
   }
 }
 
-/**
- * At 1440: a press on the page already open leaves nothing that takes Back from the key bar editor
- * away from Edit key bar; a search result whose group the server fills in (Also send to) is landed on
- * once the group comes; the OpenAI key's field drawn again empty by a search keeps Save waiting for a
- * key; and Check again keeps the focus its press gave it while it reads and after.
- */
 async function focusAndLandings(browser: import("playwright-core").Browser, url: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en" });
   try {
@@ -168,11 +150,6 @@ async function focusAndLandings(browser: import("playwright-core").Browser, url:
   }
 }
 
-/**
- * Settings' own search, at 1440 and 390: the settings of every page that hold all the words typed,
- * each under its page's name and changed right there; a group named by the words shows its settings;
- * a page's name opens it; no match says so; and Escape empties the search before it closes Settings.
- */
 async function dialogSearch(browser: import("playwright-core").Browser, url: string): Promise<void> {
   for (const width of [1440, 390] as const) {
     const context = await browser.newContext(width === 390 ? { viewport: { width, height: 844 }, isMobile: true, hasTouch: true, locale: "en" } : { viewport: { width, height: 900 }, locale: "en" });
@@ -187,25 +164,28 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
       const dialog = dialogOf(page);
       const search = dialog.getByRole("searchbox", { name: "Search settings", exact: true });
       const results = dialog.getByRole("region", { name: "Search results", exact: true });
-      // the pages drawn with what each shows: its name and the labels of the settings in sight
       const shown = () => results.evaluate((region) => [...region.querySelectorAll<HTMLElement>(".settings-search-page")].filter((section) => section.checkVisibility())
         .map((section) => [section.getAttribute("aria-label"), [...section.querySelectorAll<HTMLElement>("[data-setting]")].filter((row) => row.checkVisibility()).map((row) => row.querySelector(".settings-label")?.textContent ?? "")] as const));
 
+      for (const words of ["test notification", "push alerts arrive"]) {
+        await search.fill(words);
+        const alerts = await shown();
+        assert.deepEqual(alerts.map(([name]) => name), ["Alerts"], `${width}px: "${words}" finds a setting on Alerts`);
+        assert.ok(alerts[0]?.[1].includes("Test notification"), `${width}px: "${words}" finds Test notification`);
+      }
+
       await search.fill("Font SIZE");
       const found = await shown();
-      // every font row is on Appearance: the terminal's and the chat's are found by their sizes' words
       assert.deepEqual(found.map(([name]) => name), ["Appearance"], `${width}px: "font size" finds settings on Appearance only`);
       for (const [name, label] of [["Appearance", "Interface font size"], ["Appearance", "Chat font"], ["Appearance", "Terminal font"]] as const) {
         assert.ok(found.find(([page]) => page === name)?.[1].includes(label), `${width}px: ${label} is found under ${name}`);
       }
       assert.equal(await dialog.getByRole("tablist").isVisible(), width !== 390, `${width}px: a phone's results take the list's place`);
 
-      // a setting found is changed where it is shown
       await results.getByRole("button", { name: "Increase terminal font size", exact: true }).click();
       await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:settings") ?? "{}").terminalFontSize === 14);
       const typedSize = results.getByRole("group", { name: "Terminal font size", exact: true }).getByRole("textbox", { name: "Terminal font size", exact: true });
       assert.equal(await typedSize.inputValue(), "14");
-      // the -/+ buttons still have the new size read out
       assert.equal(await results.getByRole("group", { name: "Terminal font size", exact: true }).locator('[aria-live="polite"]').textContent(), "14px", `${width}px: a stepped size is announced`);
       // a finger's field is read at --fs-input or larger, so iOS does not zoom into it
       if (width === 390) assert.ok(await typedSize.evaluate((input) => {
@@ -216,15 +196,12 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
         probe.remove();
         return Number.parseFloat(getComputedStyle(input).fontSize) >= least;
       }), `${width}px: the typed size is read at --fs-input or larger`);
-      // the number is typed in its place too: one out of range is refused and the field goes back (G-179)
       await typedSize.fill("30");
       await typedSize.press("Enter");
       assert.equal(await typedSize.inputValue(), "14", `${width}px: a size out of range is refused`);
-      // the refusal names the range under the field until the next edit, and the field is described by it all along
       const rangeLine = results.locator(`[id="${await typedSize.getAttribute("aria-describedby")}"]`);
       assert.equal(await rangeLine.textContent(), "Enter 10–22px", `${width}px: the field is described by its range`);
       assert.equal(await rangeLine.isVisible(), true, `${width}px: a refused size shows the range`);
-      // a pasted number is read whole: 200 is refused, never cut to 20
       await typedSize.focus();
       await typedSize.selectText();
       await page.keyboard.insertText("200");
@@ -236,7 +213,6 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
       await typedSize.fill("16");
       await typedSize.press("Enter");
       await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:settings") ?? "{}").terminalFontSize === 16);
-      // an IME's full-width digits are the number too, and the field shows it in plain digits once it is taken (#3487)
       await typedSize.fill("１８");
       assert.equal(await typedSize.inputValue(), "１８", `${width}px: the typed full-width digits stay as typed until they are taken`);
       await typedSize.press("Enter");
@@ -246,27 +222,39 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
       await typedSize.press("Enter");
       await page.waitForFunction(() => JSON.parse(localStorage.getItem("ovis:settings") ?? "{}").terminalFontSize === 14);
 
-      // a group named by the words shows each of its settings, and one with a form but no setting row shows the form
       await search.fill("quick replies");
       assert.deepEqual(await shown(), [["Chat", ["Show above the message box"]]], `${width}px: the Quick replies group's setting is found by the group's name`);
       await search.fill("openai api key");
       await results.locator('input[aria-label="OpenAI API key"]').waitFor();
 
-      // Escape empties a search from a result too, not only from the field
+      await search.click();
       await search.fill("sound");
-      await results.getByRole("switch", { name: "Play sounds", exact: true }).focus();
+      const playSounds = results.getByRole("switch", { name: "Play sounds", exact: true });
+      await playSounds.focus();
+      assert.equal(await page.locator(".settings-help").count(), 0, `${width}px: a focus the keyboard did not move shows no sentence`);
       await page.keyboard.press("Escape");
       assert.equal(await search.inputValue(), "", `${width}px: Escape on a result empties the search`);
       assert.equal(await search.evaluate((field) => field === document.activeElement), true, `${width}px: the field takes the focus back`);
+      await search.fill("sound");
+      await playSounds.focus();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      assert.equal(await playSounds.evaluate((control) => control === document.activeElement), true, `${width}px: Tab is back on the result`);
+      await page.locator(".settings-help").waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator(".settings-help").waitFor({ state: "detached" });
+      assert.equal(await search.inputValue(), "sound", `${width}px: Escape on a result closes its sentence first and keeps the search`);
+      assert.equal(await playSounds.evaluate((control) => control === document.activeElement), true, `${width}px: and leaves the focus on the result`);
+      await page.keyboard.press("Escape");
+      assert.equal(await search.inputValue(), "", `${width}px: the next Escape empties the search`);
+      assert.equal(await search.evaluate((field) => field === document.activeElement), true, `${width}px: and gives the field the focus`);
 
-      // a row a found row opens is found with it: Custom from a description match shows its field
       await search.fill("menus dialogs");
       await results.getByRole("combobox", { name: "Interface font", exact: true }).selectOption("custom");
       await results.getByRole("textbox", { name: "Custom interface font", exact: true }).waitFor();
       await results.getByRole("combobox", { name: "Interface font", exact: true }).selectOption("default");
       assert.equal(await page.locator(".settings-dialog").count(), 1, `${width}px: and keeps Settings open`);
 
-      // the key bar editor opened from a search sits over the Terminal page: Back steps out to it, not out of Settings
       if (width === 390) {
         await search.fill("key bar");
         await results.getByRole("button", { name: "Edit key bar", exact: true }).click();
@@ -283,14 +271,12 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
       await dialog.getByRole("status").filter({ hasText: "No settings match." }).waitFor();
       assert.deepEqual(await shown(), [], `${width}px: no page is drawn when nothing matches`);
 
-      // the first Escape empties the search and keeps Settings; the next one closes it
       await search.press("Escape");
       assert.equal(await search.inputValue(), "");
       assert.equal(await results.count(), 0);
       assert.equal(await dialog.getByRole("tablist").isVisible(), true, `${width}px: the list of pages is back`);
       assert.equal(await page.locator(".settings-dialog").count(), 1, `${width}px: Escape on a search does not close Settings`);
 
-      // a page's name opens the page and ends the search
       await search.fill("sound");
       await results.getByRole("button", { name: "Open Alerts", exact: true }).click();
       await dialog.getByRole("tabpanel", { name: "Alerts", exact: true }).waitFor();
@@ -307,10 +293,6 @@ async function dialogSearch(browser: import("playwright-core").Browser, url: str
   console.log("PASS Settings' search at 1440 and 390px: settings of every page found and changed in place, groups by name, pages opened, nothing matching said, Escape empties first");
 }
 
-/**
- * The folded part of a page (SettingsFold), at 1440 and 390: closed on opening, with the count of what this
- * device changed in it on its line; a link to a group inside opens it on that group; a search finds its rows.
- */
 async function foldedGroups(browser: import("playwright-core").Browser, url: string): Promise<void> {
   for (const width of [1440, 390] as const) {
     const context = await browser.newContext(width === 390 ? { viewport: { width, height: 844 }, isMobile: true, hasTouch: true, locale: "en" } : { viewport: { width, height: 900 }, locale: "en" });
@@ -332,28 +314,23 @@ async function foldedGroups(browser: import("playwright-core").Browser, url: str
       await more.locator("> summary").click();
       await panel.getByRole("switch", { name: "Show the sidebar on hover", exact: true }).waitFor();
 
-      // a search finds a folded row with the rest
       await closeSettings(page);
       await openSettings(page);
       await dialog.getByRole("searchbox", { name: "Search settings", exact: true }).fill("sidebar on hover");
       await dialog.getByRole("region", { name: "Search results", exact: true }).getByRole("switch", { name: "Show the sidebar on hover", exact: true }).waitFor();
-      // an agent's own setting is found with its agent's row shut, in a group named after it
       await dialog.getByRole("searchbox", { name: "Search settings", exact: true }).fill("sandbox");
       await dialog.getByRole("region", { name: "Search results", exact: true }).getByLabel("Sandbox and approvals", { exact: true }).waitFor();
-      // Model and Effort are alike for every agent: each found group says whose it is
       await dialog.getByRole("searchbox", { name: "Search settings", exact: true }).fill("effort");
       const found = dialog.getByRole("region", { name: "Search results", exact: true });
       await found.locator("[data-section='agent-codex']").waitFor();
       assert.deepEqual(await found.locator("[data-section='agent-claude'] > h3, [data-section='agent-codex'] > h3").allTextContents(), ["Claude Code", "Codex"], `${width}px: a found agent's rows sit under its name`);
       await closeSettings(page);
 
-      // an old link to the Chat page's folded Chat group lands on Conversation, where its row went
       await page.goto(`${url}?settings=chat&section=chat-more`);
       await page.getByRole("switch", { name: "Collapse work", exact: true }).waitFor();
       assert.equal(await page.locator(".settings-body:not([hidden]) [data-section='conversation']").evaluate((group) => document.activeElement === group), true, `${width}px: chat-more lands on Conversation`);
       await closeSettings(page);
 
-      // a link to a group inside a fold opens it on that group
       await page.goto(`${url}?settings=chat&section=composer-more`);
       const queued = page.getByRole("switch", { name: "Send queued messages automatically", exact: true });
       await queued.waitFor();
@@ -366,21 +343,6 @@ async function foldedGroups(browser: import("playwright-core").Browser, url: str
   console.log("PASS folded groups at 1440 and 390px: closed on opening with a count of what changed, opened by a click, a link to a group inside and a search");
 }
 
-/**
- * The three merged rows keep both settings each stands for: Agents order's By state groups this device's list
- * (and shows Within a state), Show thinking's Expanded opens reasoning, and Tidy dictated text's Terminal tidies
- * the terminal alone; each choice is kept through a reload.
- */
-/**
- * Signed in on a PC's own page, Settings > Devices and PCs lists the account's PCs in My devices, one
- * row each with a hairline under it and a PC pill, after this PC; the Account group lists none of its own. The sign-in is a fixture in this page's IndexedDB and the account service a route
- * of this context: nothing reaches GitHub or account.ovis.sh.
- */
-/**
- * About's first line names the runtime this PC serves with its version. With herdr's TUI and the
- * Herdr app's core both installed (`?demo_runtime=both`) it is a choice between them, and picking
- * the other asks before switching; with one installed it is a plain fact.
- */
 async function runtimeInUse(browser: import("playwright-core").Browser, url: string): Promise<void> {
   for (const width of [390, 1280]) {
     const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 }, isMobile: width === 390, hasTouch: width === 390, locale: "en" });
@@ -412,16 +374,10 @@ async function runtimeInUse(browser: import("playwright-core").Browser, url: str
   console.log("PASS About names the runtime in use, and offers the switch only with two installed, asking first");
 }
 
-/**
- * About after an update: its compact Updates line keeps the notes of what the update brought (the
- * header's "What's new" opens them), the section's name and the running version.
- */
 async function installedNotes(browser: import("playwright-core").Browser, url: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en" });
   try {
     await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify(SETTINGS));
-    // the demo's transport answers /api in the page: these two answers go in over it. The running
-    // revision is the build's own, so the app reads no reload and the notes are this release's.
     await context.addInitScript((revision) => {
       const answers: Record<string, unknown> = {
         "/api/updates": { managed: true, auto_update: false, phase: "idle", current_revision: revision, latest_revision: null, current_version: null, latest_version: null, available: false, checked_at: "2099-01-01T00:00:00Z", blocked_reason: null, error: null },
@@ -429,13 +385,10 @@ async function installedNotes(browser: import("playwright-core").Browser, url: s
       };
       let inner = window.fetch;
       const outer: typeof window.fetch = (input, init) => {
-        // the demo app is served under a path of its own: its requests end in the API's path
         const path = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href).pathname;
         const answer = Object.keys(answers).find((key) => path.endsWith(key));
         return answer !== undefined ? Promise.resolve(new Response(JSON.stringify(answers[answer]), { headers: { "content-type": "application/json" } })) : inner(input, init);
       };
-      // the transport's own assignment goes under these answers; a later wrapper (the file preview's)
-      // reads them as its fetch and replaces the property as a plain value
       Object.defineProperty(window, "fetch", { configurable: true, get: () => outer, set: (next: typeof window.fetch) => {
         inner = next;
         Object.defineProperty(window, "fetch", { configurable: true, writable: true, value: outer });
@@ -456,10 +409,6 @@ async function installedNotes(browser: import("playwright-core").Browser, url: s
   console.log("PASS About's compact Updates line keeps what the last update brought, its name and the running version");
 }
 
-/**
- * Alerts' one line of chips: Any turn finished lights Long turn finished too, and the row's ↺ puts
- * back all five, the two kept in the alert filters' own store included.
- */
 async function alertChipsReset(browser: import("playwright-core").Browser, url: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en" });
   try {
@@ -486,11 +435,14 @@ async function alertChipsReset(browser: import("playwright-core").Browser, url: 
   console.log("PASS Alerts' chips: every turn lights the long turns, and ↺ restores all five");
 }
 
+/**
+ * The sign-in is a fixture in this page's IndexedDB and the account service a route of this
+ * context: nothing reaches GitHub or account.ovis.sh.
+ */
 async function accountPcList(browser: import("playwright-core").Browser, url: string): Promise<void> {
   const service = "https://account.ovis.sh";
   for (const [width, theme] of [[390, "light"], [390, "dark"], [1280, "light"], [1280, "dark"]] as const) {
     const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 }, isMobile: width === 390, hasTouch: width === 390, locale: "en" });
-    /** the PCs this context took out of the account's directory */
     const removed: string[] = [];
     try {
       await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify({ ...SETTINGS, theme }));
@@ -503,16 +455,13 @@ async function accountPcList(browser: import("playwright-core").Browser, url: st
         const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, POST, PUT, DELETE" };
         if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
         const path = new URL(route.request().url()).pathname;
-        // the directory's own removal: the PC is gone from the next read
         if (route.request().method() === "DELETE" && path.startsWith("/v1/pcs/")) {
           removed.push(path.slice("/v1/pcs/".length));
           return route.fulfill({ status: 204, headers: cors });
         }
         if (path !== "/v1/pcs") return route.fulfill({ status: 404, headers: cors, json: { error: { code: "not_found" } } });
         return route.fulfill({ headers: cors, json: { pcs: [
-          // heard from just now: in use
           { server_id: "a".repeat(32), label: "home-server", added_at: "2026-11-01T00:00:00Z", last_seen_at: new Date().toISOString() },
-          // not heard from for longer than two days
           { server_id: "b".repeat(32), label: "office-mac", added_at: "2026-10-01T00:00:00Z", last_seen_at: new Date(Date.now() - 9 * 24 * 3_600_000).toISOString() },
         ].filter((pc) => !removed.includes(pc.server_id)) } });
       });
@@ -545,7 +494,6 @@ async function accountPcList(browser: import("playwright-core").Browser, url: st
       assert.deepEqual(style, { listStyle: "none", display: "flex", border: "solid" }, `the account's PCs are styled rows in My devices (${width}px, ${theme})`);
       assert.equal(await page.locator("[data-section='account'] .relay-shell-pcs").count(), 0, "the Account group does not list the PCs a second time");
       // no row claims to open its PC: this page cannot tell whether the browser is paired with it at app.ovis.sh.
-      // One link under the rows goes to the hosted app's front page, which is right for every browser.
       assert.equal(await list.getByRole("link", { name: "Open in browser" }).count(), 0, `no account PC row has an Open of its own (${width}px, ${theme})`);
       const open = list.locator(".account-pcs-open");
       assert.deepEqual(await open.getByRole("link").evaluateAll((links) => links.map((link) => [link.textContent, link.getAttribute("href"), link.getAttribute("target")])),
@@ -568,7 +516,6 @@ async function accountPcList(browser: import("playwright-core").Browser, url: st
         await list.scrollIntoViewIfNeeded();
         await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `account-pcs-${width}-${theme}.png`), animations: "disabled" });
       }
-      // the removal asks first, saying what it does not do; a no removes nothing
       await accountRows.getByRole("button", { name: "Remove office-mac from the list", exact: true }).click();
       const confirm = page.getByRole("alertdialog", { name: "Remove office-mac from the list?" });
       await confirm.getByText("It revokes nothing: devices paired with office-mac keep their access", { exact: false }).waitFor();
@@ -577,7 +524,6 @@ async function accountPcList(browser: import("playwright-core").Browser, url: st
       await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
       await confirm.waitFor({ state: "detached" });
       assert.deepEqual(removed, [], `a cancelled removal removes nothing (${width}px, ${theme})`);
-      // a yes takes it out of the directory, the list is read again without it, and the focus stays in the list's group
       await accountRows.getByRole("button", { name: "Remove office-mac from the list", exact: true }).click();
       await confirm.getByRole("button", { name: "Remove from list", exact: true }).click();
       await confirm.waitFor({ state: "detached" });
@@ -646,7 +592,6 @@ async function accountGoogle(browser: import("playwright-core").Browser, url: st
           }
           await openSettings(page);
           await openSettingsPage(page, "Devices and PCs");
-          // the account is at the top of the page, outside More settings
           const account = page.locator("[data-section='account']");
           assert.equal(await account.evaluate((group) => group.closest("details") === null), true, "the Account group is not folded away");
           await openSettingsFolds(page);
@@ -663,7 +608,6 @@ async function accountGoogle(browser: import("playwright-core").Browser, url: st
               assert.equal(await account.locator("[data-provider='google'] svg path").count(), 4, "Google's G keeps its four colours");
               await shot("account-google-signin");
             } else {
-              // once the service's answer is on screen, GitHub stays alone
               await account.locator("[data-offer='service'] .account-provider").first().waitFor();
               assert.deepEqual(await buttons.allTextContents(), ["Continue with GitHub"], `no Google button while the service offers none (${width}px)`);
             }
@@ -685,121 +629,6 @@ async function accountGoogle(browser: import("playwright-core").Browser, url: st
   console.log("PASS Continue with Google shows under GitHub only while the service offers it, and the account lists its ways to sign in, at 390 and 1280px");
 }
 
-/**
- * Sign-in on the first-run welcome (components/SetupGuide.tsx): Continue with each provider the account
- * service lists for this page (`GET /v1/providers`), none without an account service, Not now folds it
- * away and leaves the two choices, and a sign-in this page already holds is the one Settings shows.
- * The account service is a route of this context: nothing reaches GitHub, Google or account.ovis.sh.
- */
-async function welcomeSignIn(browser: import("playwright-core").Browser, url: string): Promise<void> {
-  const service = "https://account.ovis.sh";
-  const cases = [
-    { offered: ["github", "google"], signedIn: false },
-    { offered: ["github"], signedIn: false },
-    { offered: ["google"], signedIn: false },
-    { offered: null, signedIn: false },
-    { offered: ["github", "google"], signedIn: true },
-  ] as const;
-  for (const width of [390, 1280] as const) {
-    for (const { offered, signedIn } of cases) {
-      const at = `(${width}px, ${offered === null ? "no account service" : offered.join("+")}${signedIn ? ", signed in" : ""})`;
-      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 }, isMobile: width === 390, hasTouch: width === 390, locale: "en" });
-      try {
-        await context.addInitScript((settings) => {
-          localStorage.setItem("ovis:settings", settings);
-          localStorage.setItem("ovis:setup-guide", JSON.stringify({ status: "open", state: { step: "welcome" } }));
-        }, JSON.stringify({ ...SETTINGS, theme: "light" }));
-        if (offered !== null) {
-          await context.route((address) => address.href.startsWith(url) && (address.pathname.endsWith("/") || address.pathname.endsWith("/index.html")), async (route) => {
-            const response = await route.fetch();
-            await route.fulfill({ response, body: (await response.text()).replace("</head>", `<meta name="ovis-pc-account-service" content="${service}" />\n</head>`) });
-          });
-          await context.route(`${service}/**`, (route) => {
-            const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, POST, PUT, DELETE" };
-            if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
-            switch (new URL(route.request().url()).pathname) {
-              case "/v1/providers": return route.fulfill({ headers: cors, json: { providers: offered, device: offered } });
-              case "/v1/pcs": return route.fulfill({ headers: cors, json: { pcs: [] } });
-              case "/v1/identities": return route.fulfill({ headers: cors, json: { identities: [{ provider: "google", added_at: "2026-11-06T00:00:00Z" }] } });
-              // a device sign-in that stays pending: the code shows until someone approves it elsewhere
-              case "/v1/signin/github/device": return route.fulfill({ headers: cors, json: { code_challenge_method: "S256", device_code: "fixture-device", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5 } });
-              case "/v1/token": return route.fulfill({ status: 400, headers: cors, json: { error: { code: "authorization_pending" } } });
-              default: return route.fulfill({ status: 404, headers: cors, json: { error: { code: "not_found" } } });
-            }
-          });
-        }
-        if (signedIn) {
-          await context.addInitScript((service) => {
-            const request = indexedDB.open("ovis-account", 1);
-            request.onupgradeneeded = () => { request.result.createObjectStore("account"); };
-            request.onsuccess = () => {
-              const tx = request.result.transaction("account", "readwrite");
-              tx.objectStore("account").put({ service, account: "fixture", provider: "google", access_token: "fixture-access", refresh_token: "fixture-refresh", expires_at: Date.now() + 3_600_000 }, "session");
-              tx.oncomplete = () => request.result.close();
-            };
-          }, service);
-        }
-        const page = await context.newPage();
-        const errors: string[] = [];
-        page.on("pageerror", (error) => errors.push(error.message));
-        await page.goto(url);
-        const guide = page.getByRole("region", { name: "Setup guide", exact: true });
-        await guide.getByRole("button", { name: /I've used Ovis before/ }).waitFor();
-        const signIn = guide.locator(".setup-signin");
-        const shot = async (name: string) => {
-          if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `${name}-${width}.png`), animations: "disabled" });
-        };
-        if (offered === null) {
-          // whether this page has an account service is known on first render (its meta tag), with the welcome
-          assert.equal(await signIn.count(), 0, `no sign-in without an account service ${at}`);
-          assert.equal(await guide.locator(".account-provider").count(), 0, `no provider button without an account service ${at}`);
-        } else if (!signedIn) {
-          await signIn.locator("[data-offer='service'] .account-provider").first().waitFor();
-          const expected = offered.map((provider) => provider === "github" ? "Continue with GitHub" : "Continue with Google");
-          assert.deepEqual(await signIn.locator(".account-provider").allTextContents(), expected, `one button for each provider the service lists ${at}`);
-          await shot(`welcome-signin-${offered.join("-")}`);
-          if (offered.length === 1 && offered[0] === "github") {
-            // a code on screen: only its Cancel ends it, Not now cannot fold it away unnoticed
-            await signIn.getByRole("button", { name: "Continue with GitHub", exact: true }).click();
-            await signIn.locator(".account-device-code").filter({ hasText: "ABCD-1234" }).waitFor();
-            assert.equal(await signIn.getByRole("button", { name: "Not now", exact: true }).count(), 0, `no Not now while a device code waits ${at}`);
-            await signIn.getByRole("button", { name: "Cancel", exact: true }).click();
-            await signIn.locator("[data-offer='service'] .account-provider").first().waitFor();
-          }
-          // by keyboard: the box goes and the keyboard's place moves to the first choice, not the page
-          await signIn.getByRole("button", { name: "Not now", exact: true }).focus();
-          await page.keyboard.press("Enter");
-          await signIn.waitFor({ state: "detached" });
-          assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("setup-choice") ?? false), true, `Not now hands the keyboard to the first choice ${at}`);
-          assert.equal(await guide.getByRole("button", { name: /I'm new to Ovis/ }).count(), 1, `Not now leaves the welcome's choices ${at}`);
-          assert.equal(await guide.getByRole("button", { name: /I've used Ovis before/ }).count(), 1, `Not now leaves the welcome's choices ${at}`);
-        } else {
-          // the account's id is the service's own, never shown: the line names the way in, as Settings does
-          await signIn.getByText("Signed in with Google", { exact: true }).waitFor();
-          assert.equal(await signIn.getByRole("button", { name: "Not now", exact: true }).count(), 0, `no Not now once signed in ${at}`);
-          assert.equal(await signIn.locator(".account-provider").count(), 0, `no provider buttons once signed in ${at}`);
-          await shot("welcome-signin-signed-in");
-          await guide.getByRole("button", { name: /I've used Ovis before/ }).click();
-          await guide.waitFor({ state: "detached" });
-          await openSettings(page);
-          await openSettingsPage(page, "Devices and PCs");
-          await openSettingsFolds(page);
-          await page.locator("[data-section='account']").getByText("Signed in with Google", { exact: true }).waitFor();
-        }
-        assert.deepEqual(errors, [], `no page errors ${at}`);
-      } finally {
-        await context.close();
-      }
-    }
-  }
-  console.log("PASS the welcome offers Continue with each provider the account service lists, none without one, Not now keeps the choices, and its sign-in is the one Settings shows, at 390 and 1280px");
-}
-
-/**
- * Appearance's ↺ beside a changed row, and its theme cards by keyboard: ↺ shows only off the default,
- * puts back every key of its row (a font and its size; a theme and the palette it draws) and goes; the
- * arrows pick along the row as a radio group's do; the cards follow the Theme mode until a side is chosen.
- */
 async function rowResets(browser: import("playwright-core").Browser, url: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en" });
   try {
@@ -812,7 +641,6 @@ async function rowResets(browser: import("playwright-core").Browser, url: string
     await page.goto(`${url}?settings=appearance`);
     await page.locator(".conn-live").waitFor({ state: "attached" });
     await page.locator(".theme-cards").waitFor();
-    // the cards follow the Theme mode while no side is chosen here
     const mode = page.getByRole("group", { name: "Theme", exact: true });
     await mode.getByRole("button", { name: "Light", exact: true }).click();
     await page.getByRole("radiogroup", { name: "Light theme", exact: true }).waitFor();
@@ -830,7 +658,6 @@ async function rowResets(browser: import("playwright-core").Browser, url: string
     const fonts = await saved();
     assert.deepEqual([fonts["terminalFontSize"], fonts["terminalFontFamily"] ?? DEFAULT_SETTINGS.terminalFontFamily], [DEFAULT_SETTINGS.terminalFontSize, DEFAULT_SETTINGS.terminalFontFamily], "↺ puts back the size and the font of its row");
 
-    // a custom interface font put back: the field closes and the typed list is not saved again as it goes
     const uiFont = page.getByLabel("Interface font", { exact: true });
     await uiFont.selectOption("custom");
     const custom = page.getByRole("textbox", { name: "Custom interface font", exact: true });
@@ -839,7 +666,6 @@ async function rowResets(browser: import("playwright-core").Browser, url: string
     await reset("Interface font").click();
     await custom.waitFor({ state: "detached" });
     assert.equal(await uiFont.inputValue(), "default", "the select shows Default once the font is put back");
-    // a reload closes Settings: open the page again from its address
     await page.goto(`${url}?settings=appearance`);
     await page.locator(".theme-cards").waitFor();
     assert.equal(await page.getByLabel("Interface font", { exact: true }).inputValue(), "default", "the font put back stays put back after a reload");
@@ -852,7 +678,6 @@ async function rowResets(browser: import("playwright-core").Browser, url: string
     assert.deepEqual([(await saved())["darkTheme"], (await saved())["palette"]], [DEFAULT_SETTINGS.darkTheme, DEFAULT_SETTINGS.darkTheme], "↺ puts back the dark theme and the palette it draws");
     assert.equal(await reset("Dark theme").count(), 0, "↺ goes once the theme is back");
 
-    // the arrows pick along the row, Home goes to its first card
     const cards = page.getByRole("radiogroup", { name: "Dark theme", exact: true });
     const listed = await dark.listed();
     await cards.locator('[role="radio"][aria-checked="true"]').focus();
@@ -869,6 +694,346 @@ async function rowResets(browser: import("playwright-core").Browser, url: string
     await context.close();
   }
   console.log("PASS Appearance: ↺ shows only off the default and puts back its row's keys; theme cards pick by arrow and follow the Theme mode");
+}
+
+async function rowSentences(browser: import("playwright-core").Browser, url: string): Promise<void> {
+  type Page = import("playwright-core").Page;
+  interface Box { left: number; top: number; right: number; bottom: number }
+  const over = (a: Box, b: Box): boolean => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  const drawn = (page: Page) => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  const rowOf = (page: Page, name: string) => page.locator(".settings-body:not([hidden]) .settings-row").filter({ has: page.getByText(name, { exact: true }) }).first();
+  const describes = (control: import("playwright-core").Locator) => control.evaluate((node) => document.getElementById(node.getAttribute("aria-describedby") ?? "")?.textContent ?? null);
+  const appearance = async (page: Page, query = ""): Promise<void> => {
+    await page.goto(`${url}?settings=appearance${query}`);
+    await page.locator(".conn-live").waitFor({ state: "attached" });
+    await page.locator(".theme-cards").waitFor();
+  };
+
+  const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en" });
+  try {
+    await desktop.addInitScript((settings) => { if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", settings); }, JSON.stringify(SETTINGS));
+    const page = await desktop.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await appearance(page);
+    const sentence = page.locator(".settings-help");
+    const density = rowOf(page, "Density");
+    const control = page.getByRole("group", { name: "Density", exact: true });
+    const text = await describes(control);
+    assert.ok(text !== null && text.trim() !== "", "Density's control is described by its row's sentence");
+    assert.equal(await sentence.count(), 0, "no sentence over the page until something asks for one");
+
+    await density.locator(".settings-label").hover();
+    await sentence.waitFor();
+    assert.equal(await sentence.textContent(), text, "the sentence over the page is the one that describes the control");
+    const boxes = await density.evaluate((row) => {
+      const box = (node: Element) => { const rect = node.getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }; };
+      const below = row.closest(".settings-section")?.nextElementSibling?.querySelector(".settings-row") ?? row.nextElementSibling;
+      return { sentence: box(document.querySelector(".settings-help")!), row: box(row), control: box(row.querySelector(".settings-segmented")!), below: below ? box(below) : null };
+    });
+    assert.ok(boxes.sentence.top < boxes.row.top, "the sentence is above its row");
+    assert.equal(over(boxes.sentence, boxes.control), false, "off the row's own control");
+    assert.ok(boxes.below !== null && !over(boxes.sentence, boxes.below), "and off the row below");
+    await page.mouse.move(boxes.sentence.left + 10, (boxes.sentence.top + boxes.sentence.bottom) / 2, { steps: 4 });
+    await drawn(page);
+    assert.equal(await sentence.count(), 1, "the pointer on the sentence keeps it");
+    await page.keyboard.press("Escape");
+    await sentence.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".settings-dialog").count(), 1, "Escape closed the sentence, not Settings");
+    await page.mouse.move(2, 2);
+
+    const withSentence = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".settings-body:not([hidden]) .settings-row")]
+      .filter((row) => row.checkVisibility() && row.querySelector(":scope > .settings-row-text > .visually-hidden[id]") !== null)
+      .map((row) => row.querySelector(".settings-label")?.textContent ?? ""));
+    let covered: { row: string; x: number; y: number; beside: number } | null = null;
+    for (const name of ["Density", ...withSentence.filter((other) => other !== "Density")]) {
+      await rowOf(page, name).locator(".settings-label").first().hover();
+      await sentence.waitFor();
+      covered = await page.evaluate((name) => {
+        const tip = document.querySelector(".settings-help")!.getBoundingClientRect();
+        const rows = [...document.querySelectorAll<HTMLElement>(".settings-body:not([hidden]) .settings-row")];
+        for (const row of rows.filter((other) => other.querySelector(".settings-label")?.textContent !== name)) {
+          for (const control of [...row.children].filter((child) => !child.classList.contains("settings-row-text"))) {
+            const box = control.getBoundingClientRect();
+            const [left, right, top, bottom] = [Math.max(box.left, tip.left), Math.min(box.right, tip.right), Math.max(box.top, tip.top), Math.min(box.bottom, tip.bottom)];
+            const beside = box.top - tip.top > 6 ? (tip.top + box.top) / 2 : tip.bottom - box.bottom > 6 ? (box.bottom + tip.bottom) / 2 : null;
+            if (box.height > 0 && right - left > 4 && bottom - top > 4 && beside !== null) return { row: row.querySelector(".settings-label")?.textContent ?? "", x: (left + right) / 2, y: (top + bottom) / 2, beside };
+          }
+        }
+        return null;
+      }, name);
+      if (covered !== null) break;
+      await page.mouse.move(2, 2);
+      await sentence.waitFor({ state: "detached" });
+    }
+    assert.ok(covered !== null, "some row's sentence lies on the control of another row at this width");
+    const lying = await sentence.textContent();
+    await page.mouse.move(covered.x, covered.beside, { steps: 4 });
+    await drawn(page);
+    assert.equal(await sentence.textContent(), lying, "above or below the control it lies on, the sentence keeps the pointer");
+    assert.equal(await page.evaluate(({ x, beside }) => document.elementFromPoint(x, beside)?.closest(".settings-help") != null, covered), true, "and is what a press there lands on, so its words can be selected");
+    await page.mouse.move(covered.x, covered.y, { steps: 4 });
+    await page.waitForFunction((was) => document.querySelector(".settings-help")?.textContent !== was, lying);
+    assert.equal(await page.evaluate(({ x, y }) => {
+      const under = document.elementFromPoint(x, y);
+      return under?.closest(".settings-help") ? "the sentence" : (under?.closest(".settings-row")?.querySelector(".settings-label")?.textContent ?? null);
+    }, covered), covered.row, "a press on the part that lay on another row's control reaches that control");
+    await page.mouse.move(2, 2);
+    await sentence.waitFor({ state: "detached" });
+    const lyingRow = (await page.evaluate((was) => [...document.querySelectorAll<HTMLElement>(".settings-body:not([hidden]) .settings-row")]
+      .find((row) => row.querySelector(":scope > .settings-row-text > .visually-hidden[id]")?.textContent === was)?.querySelector(".settings-label")?.textContent ?? null, lying))!;
+    await rowOf(page, lyingRow).locator("button, input, select").first().focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await page.waitForFunction((was) => document.querySelector(".settings-help")?.textContent === was, lying);
+    assert.equal(await page.evaluate(({ x, y }) => {
+      const under = document.elementFromPoint(x, y);
+      return under?.closest(".settings-help") ? "the sentence" : (under?.closest(".settings-row")?.querySelector(".settings-label")?.textContent ?? null);
+    }, covered), covered.row, "under the keyboard's sentence too, a press on the covered part lands on the control");
+    await page.keyboard.press("Escape");
+    await sentence.waitFor({ state: "detached" });
+    const lyingName = rowOf(page, lyingRow).locator(".settings-label").first();
+    await lyingName.hover();
+    await page.waitForFunction((was) => document.querySelector(".settings-help")?.textContent === was, lying);
+    const natural = await sentence.evaluate((tip: HTMLElement) => tip.offsetHeight);
+    await page.mouse.move(2, 2);
+    await sentence.waitFor({ state: "detached" });
+    const cut = await page.addStyleTag({ content: `.settings-help { max-height: ${natural - 14}px !important; }` });
+    await lyingName.hover();
+    await page.waitForFunction((was) => document.querySelector(".settings-help")?.textContent === was, lying);
+    await page.locator(".settings-help-copy").waitFor();
+    const tall = await sentence.evaluate((tip: HTMLElement, { x, beside }) => {
+      const box = tip.getBoundingClientRect();
+      const on = ([[box.left + 10, (box.top + box.bottom) / 2], [x, beside]] as const).find(([px, py]) => document.elementFromPoint(px, py)?.closest(".settings-help") === tip);
+      return { on: on ?? null, scrolls: tip.scrollHeight > tip.clientHeight };
+    }, covered);
+    assert.ok(tall.scrolls, "a sentence with less room than its words need scrolls");
+    assert.ok(tall.on !== null, "and has a part that lies on no control, where the pointer is its own");
+    await page.mouse.move(tall.on[0], tall.on[1], { steps: 4 });
+    await page.mouse.wheel(0, 40);
+    await page.waitForFunction(() => {
+      const tip = document.querySelector(".settings-help");
+      const copy = document.querySelector(".settings-help-copy");
+      return tip !== null && copy !== null && tip.scrollTop > 0 && copy.scrollTop === tip.scrollTop;
+    });
+    assert.equal(await sentence.textContent(), lying, "the wheel over it scrolls it and keeps it, and the copy under it follows");
+    await cut.evaluate((node) => node.remove());
+    await page.mouse.move(2, 2);
+    await sentence.waitFor({ state: "detached" });
+
+    // a search hides a row while its sentence shows: the row is removed under a still pointer, which sends no
+    // leave, and the sentence does not come back with the row once the pointer is elsewhere
+    const search = page.getByRole("searchbox", { name: "Search settings", exact: true });
+    await search.fill("densit");
+    await control.waitFor();
+    await page.locator(".settings-row").filter({ has: page.getByText("Density", { exact: true }) }).first().locator(".settings-label").hover();
+    await sentence.waitFor();
+    await search.focus();
+    await page.keyboard.press("End");
+    await page.keyboard.type("zzzz");
+    await page.getByRole("status").filter({ hasText: "No settings match." }).waitFor();
+    await page.mouse.move(2, 2);
+    for (let erased = 0; erased < 4; erased += 1) await page.keyboard.press("Backspace");
+    await control.waitFor();
+    await page.keyboard.press("Backspace");
+    await control.waitFor();
+    await drawn(page);
+    assert.equal(await sentence.count(), 0, "a row the search hid comes back without its sentence");
+    await appearance(page);
+
+    await control.getByRole("button", { name: "Comfortable", exact: true }).focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await sentence.waitFor();
+    assert.equal(await sentence.textContent(), text, "the keyboard on the control shows the same sentence");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    const focusedRow = () => page.evaluate(() => document.activeElement?.closest(".settings-row")?.querySelector(".settings-label")?.textContent ?? null);
+    const next = await page.evaluate(() => {
+      const row = document.activeElement?.closest(".settings-row");
+      return { name: row?.querySelector(".settings-label")?.textContent ?? null, text: row?.querySelector(":scope > .settings-row-text > .visually-hidden[id]")?.textContent ?? null };
+    });
+    assert.ok(next.name !== null && next.name !== "Density", "Tab left Density for the row after it");
+    assert.ok(next.text !== null && next.text !== text, "the row after Density has a sentence of its own");
+    await page.waitForFunction((want) => document.querySelector(".settings-help")?.textContent === want, next.text);
+    await page.keyboard.press("Escape");
+    await sentence.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".settings-dialog").count(), 1, "Escape closed the sentence, not Settings");
+    assert.equal(await focusedRow(), next.name, "and left the focus where it was");
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+
+    await appearance(page);
+    await control.getByRole("button", { name: "Comfortable", exact: true }).focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await sentence.waitFor();
+    await page.keyboard.press("Space");
+    await sentence.waitFor({ state: "detached" });
+    assert.equal(await focusedRow(), "Density", "the focus stays on the choice that was pressed");
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+
+    await appearance(page);
+    const size = page.getByRole("textbox", { name: "Terminal font size", exact: true });
+    await size.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await sentence.waitFor();
+    await size.fill(String(DEFAULT_SETTINGS.terminalFontSize + 2));
+    await sentence.waitFor({ state: "detached" });
+    await page.keyboard.press("Escape");
+    assert.equal(await size.inputValue(), String(DEFAULT_SETTINGS.terminalFontSize), "Escape still takes a typed size back");
+    assert.equal(await page.locator(".settings-dialog").count(), 1);
+    await appearance(page);
+    await size.click();
+    assert.equal(await size.evaluate((field) => field === document.activeElement), true);
+    assert.equal(await sentence.count(), 0, "a click into a field shows no sentence");
+
+    // a pen that cannot hover has only its tap: on the name it opens the sentence in the row, as a finger's does.
+    // The events such a pen sends, dispatched: the browser's own pen input gives a page no click here
+    await appearance(page);
+    await density.locator(".settings-label").evaluate((name) => {
+      const pen = { bubbles: true, cancelable: true, pointerType: "pen", pointerId: 7, isPrimary: true };
+      for (const type of ["pointerover", "pointerdown", "pointerup", "click", "pointerout"]) name.dispatchEvent(new PointerEvent(type, pen));
+    });
+    await density.locator(":scope > .settings-row-sentence").waitFor();
+    assert.equal(await sentence.count(), 0, "a pen's tap draws nothing over the page");
+
+    await appearance(page);
+    await page.evaluate(() => { for (const fold of document.querySelectorAll<HTMLDetailsElement>(".settings-body:not([hidden]) details")) fold.open = true; });
+    const far = page.getByRole("group", { name: "Status indicators", exact: true }).getByRole("button", { name: "Classic", exact: true });
+    const farText = await describes(page.getByRole("group", { name: "Status indicators", exact: true }));
+    assert.ok(farText !== null && farText.trim() !== "");
+    const outOfView = () => far.evaluate((control) => { const page = control.closest(".modal-body")!.getBoundingClientRect(); const row = control.closest(".settings-row")!.getBoundingClientRect(); return row.bottom <= page.top || row.top >= page.bottom; });
+    const drawnSentence = () => page.evaluate(() => { const tip = document.querySelector<HTMLElement>(".settings-help"); return tip === null ? null : tip.style.visibility === "hidden" ? "waiting" : tip.textContent; });
+    await page.getByRole("group", { name: "Agent logos", exact: true }).getByRole("button", { name: "Mono", exact: true }).evaluate((control: HTMLElement) => control.focus({ preventScroll: true }));
+    await page.keyboard.press("Tab");
+    assert.equal(await far.evaluate((control) => control === document.activeElement), true, "Tab reached Status indicators");
+    assert.equal(await outOfView(), true, "the focused setting is below what the page shows");
+    assert.equal(await drawnSentence(), "waiting", "no sentence is drawn for a setting the page is not scrolled to");
+    await far.evaluate((control) => control.scrollIntoView({ block: "nearest" }));
+    await page.waitForFunction((want) => { const tip = document.querySelector<HTMLElement>(".settings-help"); return tip !== null && tip.style.visibility !== "hidden" && tip.textContent === want; }, farText);
+    await far.evaluate((control) => { control.closest(".modal-body")!.scrollTop = 0; });
+    await page.waitForFunction(() => (document.querySelector<HTMLElement>(".settings-help")?.style.visibility ?? "") === "hidden");
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+
+    await page.goto(`${url}?settings=terminal`);
+    await page.locator(".settings-dialog").waitFor();
+    const sentenceOf = (name: string) => rowOf(page, name).locator(":scope > .settings-row-text > .visually-hidden[id]").textContent();
+    const keyBarText = await sentenceOf("Key bar");
+    assert.ok(keyBarText !== null && keyBarText.trim() !== "");
+    assert.equal(await describes(page.getByRole("button", { name: "Edit key bar", exact: true })), keyBarText, "Edit key bar is described by its row's sentence");
+    await appearance(page);
+    assert.equal(await describes(page.getByRole("textbox", { name: "Terminal font", exact: true })), await sentenceOf("Terminal font"), "the font field is described by its row's sentence");
+
+    // a stepper's button at its end keeps the keyboard's focus: it says it goes no further (aria-disabled) and reads as
+    // a disabled one, where a disabled button would drop the focus out of Settings to the page; a press there does nothing
+    const typedSize = page.getByRole("textbox", { name: "Terminal font size", exact: true });
+    const larger = page.getByRole("button", { name: "Increase terminal font size", exact: true });
+    const smaller = page.getByRole("button", { name: "Decrease terminal font size", exact: true });
+    for (const [button, other, end] of [[larger, smaller, TERMINAL_FONT_MAX], [smaller, larger, TERMINAL_FONT_MIN]] as const) {
+      const name = await button.getAttribute("aria-label");
+      await button.focus();
+      for (let press = Math.abs(end - Number(await typedSize.inputValue())); press > 0; press -= 1) await page.keyboard.press("Enter");
+      await page.waitForFunction((want) => document.querySelector<HTMLInputElement>('input[aria-label="Terminal font size"]')?.value === want, String(end));
+      const holder = () => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? document.activeElement?.tagName ?? null);
+      assert.equal(await holder(), name, `${name} keeps the focus at ${end}px`);
+      assert.equal(await button.getAttribute("aria-disabled"), "true", `${name} says it goes no further at ${end}px`);
+      assert.equal(await other.getAttribute("aria-disabled"), null, "the other way is still open");
+      const disabledOpacity = await button.evaluate((node) => {
+        const twin = node.cloneNode(true) as HTMLButtonElement;
+        twin.removeAttribute("aria-disabled");
+        twin.disabled = true;
+        node.after(twin);
+        const opacity = getComputedStyle(twin).opacity;
+        twin.remove();
+        return opacity;
+      });
+      assert.notEqual(disabledOpacity, "1", "a disabled icon button is faded");
+      assert.equal(await button.evaluate((node) => getComputedStyle(node).opacity), disabledOpacity, "it reads as a disabled icon button does");
+      await page.keyboard.press("Enter");
+      // (Playwright waits for an aria-disabled button to be enabled: the click is forced, as a person's is)
+      await button.click({ force: true });
+      assert.equal(await typedSize.inputValue(), String(end), `a press of ${name} at its end changes nothing`);
+      assert.equal(await holder(), name, "and keeps the focus");
+      await button.hover();
+      assert.equal(await button.evaluate((node) => getComputedStyle(node).backgroundColor), "rgba(0, 0, 0, 0)", "and gets no hover plate");
+      const look = () => button.evaluate(async (node) => {
+        await Promise.all(node.getAnimations().map((animation) => animation.finished));
+        const style = getComputedStyle(node);
+        return [style.backgroundColor, style.borderColor, style.color].join(" / ");
+      });
+      const resting = await look();
+      await page.mouse.down();
+      const held = await look();
+      await page.mouse.up();
+      assert.equal(held, resting, `holding ${name} down at its end shows no press`);
+    }
+
+    await appearance(page, "&demo_devices=watch");
+    await rowOf(page, "Density").locator(".settings-label").hover();
+    await sentence.waitFor();
+    assert.equal(await sentence.textContent(), text, "a watching device reads the same sentence");
+    assert.deepEqual(errors, []);
+  } finally {
+    await desktop.close();
+  }
+
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, locale: "en" });
+  try {
+    await phone.addInitScript((settings) => { if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", settings); }, JSON.stringify(SETTINGS));
+    const page = await phone.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await appearance(page);
+    const density = rowOf(page, "Density");
+    const text = await describes(page.getByRole("group", { name: "Density", exact: true }));
+    const opened = density.locator(".settings-row-sentence");
+    await density.locator(".settings-label").tap();
+    await opened.waitFor();
+    assert.equal(await opened.textContent(), text, "a tap on the row's name opens its sentence in the row");
+    assert.equal(await page.locator(".settings-help").count(), 0, "nothing is drawn over a phone's page");
+    const placed = await density.evaluate((row) => {
+      const line = row.querySelector(".settings-row-sentence")!.getBoundingClientRect();
+      const control = row.querySelector(".settings-segmented")!.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      return { underControl: line.top >= control.bottom, inRow: line.left >= box.left && line.right <= box.right + 0.5 };
+    });
+    assert.deepEqual(placed, { underControl: true, inRow: true }, "under the name and the control, inside the row");
+    await density.getByRole("button", { name: "Compact", exact: true }).tap();
+    await page.waitForFunction(() => document.documentElement.dataset["density"] === "compact");
+    assert.equal(await opened.count(), 1, "a tap on the control is the control's: the sentence stays as it was");
+    await density.locator(".settings-label").tap();
+    await opened.waitFor({ state: "detached" });
+    const font = rowOf(page, "Terminal font");
+    await font.locator(".settings-label").tap();
+    await font.locator(":scope > .settings-row-sentence").waitFor();
+    assert.deepEqual(await font.evaluate((row) => {
+      const line = row.querySelector(":scope > .settings-row-sentence")!.getBoundingClientRect();
+      const card = row.closest(".settings-card")!.getBoundingClientRect();
+      const body = row.closest(".settings-body")!;
+      return { inCard: line.left >= card.left && line.right <= card.right + 0.5, sideways: body.scrollWidth > body.clientWidth + 1 };
+    }), { inCard: true, sideways: false }, "a stacked row's sentence stays in its card");
+    await font.locator(".settings-label").tap();
+    await font.locator(":scope > .settings-row-sentence").waitFor({ state: "detached" });
+    await page.getByRole("textbox", { name: "Terminal font size", exact: true }).tap();
+    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Terminal font size");
+    assert.equal(await page.locator(".settings-help").count(), 0, "a tap into a field draws no sentence over the page");
+    await appearance(page);
+    await density.locator(".settings-label").tap();
+    await opened.waitFor();
+    await page.keyboard.press("Escape");
+    await opened.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".settings-dialog").count(), 1, "Escape closed the sentence a tap opened, not Settings");
+    await page.keyboard.press("Escape");
+    await page.locator(".settings-dialog").waitFor({ state: "detached" });
+    assert.deepEqual(errors, []);
+  } finally {
+    await phone.close();
+  }
+  console.log("PASS a row's sentence: over the page on a resting mouse and on keyboard focus, off its control and the row below, closed alone by Escape and by a press on its control, gone when the pointer comes onto another row's control under it or a search hides its row, scrolled by the wheel where it has less room than its words need, none for a click or a tap into a field, waiting for a row out of view, describing a row's button and field, opened in the row by a finger's or a pen's tap, inside the card and closed by Escape, and the same on a watching device");
 }
 
 async function mergedRows(browser: import("playwright-core").Browser, url: string): Promise<void> {
@@ -939,10 +1104,10 @@ try {
       await dialogSearch(browser, url);
       await foldedGroups(browser, url);
       await mergedRows(browser, url);
+      await rowSentences(browser, url);
       await rowResets(browser, url);
       await accountPcList(browser, url);
       await accountGoogle(browser, url);
-      await welcomeSignIn(browser, url);
       await runtimeInUse(browser, url);
       await alertChipsReset(browser, url);
       await installedNotes(browser, url);

@@ -1,16 +1,17 @@
-/** Real mouse-capture programs, native OmO question records, and the real attach stream. */
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { chromium } from "playwright-core";
+import { chromium, type Response as PageResponse } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { UsageService } from "../server/usage.ts";
 import { herdrRpc, paneScrollInfo, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { omoSessionFolder } from "../server/omo.ts";
+import { FLING_STOPPED_MS } from "../src/lib/touchFling.ts";
 import { chromePath } from "./chrome-path.ts";
+import { unlessGone } from "./response-gone.ts";
 import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
 
 const state = mkdtempSync(join(tmpdir(), "omo-question-wheel-"));
@@ -21,12 +22,13 @@ const workspaces: string[] = [];
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+type ScrollBody = { scroll: { offset_from_bottom: number; viewport_rows: number } | null };
+const bodyOf = (response: PageResponse) => unlessGone(response, (answer) => answer.json() as Promise<ScrollBody>);
 const waitOutput = (pane: string, value: string) => herdrRpc("pane.wait_for_output", {
   pane_id: pane, source: "visible", match: { type: "substring", value }, timeout_ms: 10000,
 }, undefined, 12000);
 
 try {
-  // Given: a program with native history that captures wheel reports but does not scroll.
   const fixtures = [];
   for (const omo of [true, false]) {
     const cwd = join(state, omo ? "omo-pane" : "shell-pane");
@@ -90,7 +92,7 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
   }));
   page.on("response", response => {
     if (response.url().endsWith("/pane/scroll") && response.request().method() === "POST") {
-      void response.json().then(body => console.log("SCROLL", JSON.stringify(body)));
+      void bodyOf(response).then(body => { if (body !== undefined) console.log("SCROLL", JSON.stringify(body)); });
     }
   });
   for (const fixture of fixtures) {
@@ -124,11 +126,8 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
     const received = omo && !baseline
       ? page.waitForResponse(response => response.url().endsWith("/api/pane/scroll") && response.request().method() === "POST")
       : waitOutput(pane, "WHEEL_RECEIVED");
-    // When: a real wheel moves up over the attached terminal.
     await page.mouse.wheel(0, -120);
     if (delayed) await page.mouse.wheel(0, -120);
-    // The initial metrics read is deliberately held until the wheel has been handled.
-    // Its intent must survive that read rather than disappearing on a fresh terminal.
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
     // The held response cannot arrive until release: start its timeout here, not before
     // navigation and terminal startup, and subscribe before allowing it to continue.
@@ -138,7 +137,6 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
     releaseMetrics.resolve();
     await releasedMetrics;
     await received;
-    // Then: only a blocked OmO pane scrolls history instead of delivering mouse input.
     const after = await paneScrollInfo(pane);
     assert.ok(after);
     const input = readFileSync(log, "utf8");
@@ -146,13 +144,14 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
     await page.screenshot({ path: join(evidence, `${baseline ? "before" : "after"}-${omo ? "omo" : "non-omo"}.png`) });
     if (omo && !baseline) {
       assert.ok(after.offset_from_bottom > 0, "an open OmO question does not swallow the wheel");
-      // two real wheel events at speed two: three lines each, twice over, as the reports would scroll
       assert.equal(after.offset_from_bottom, 2 * 3 * 2, "wheel steps accumulate while the first metrics read is held");
       assert.equal(input, "", "no wheel report reaches OmO");
-      const scrollResponse = (offset: number) => page.waitForResponse(async response =>
-        response.url().endsWith("/pane/scroll") && response.request().method() === "POST"
-        && (await response.json()).scroll.offset_from_bottom === offset);
-      // each event is one step whatever its delta, so a clamp is reached by enough events
+      const scrollResponse = (offset: number) => page.waitForResponse(async response => {
+        if (!response.url().endsWith("/pane/scroll") || response.request().method() !== "POST") return false;
+        const body = await bodyOf(response);
+        // a scroll's answer holds where it went: one without it (an error's answer) fails the wait
+        return body !== undefined && body.scroll!.offset_from_bottom === offset;
+      });
       const lineWheel = async (deltaY: number, offset: number, events = 1) => {
         console.log("line wheel", deltaY, "x", events, "expects", offset);
         const moved = scrollResponse(offset);
@@ -160,20 +159,20 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
         await moved;
         assert.equal((await paneScrollInfo(pane))?.offset_from_bottom, offset);
       };
-      // An untrusted wheel is not repeated at the wheel speed: one three-line step.
       await lineWheel(-1, after.offset_from_bottom + 3);
       await lineWheel(-1, after.max_offset_from_bottom, Math.ceil(after.max_offset_from_bottom / 3) + 2);
       await lineWheel(1, 0, Math.ceil(after.max_offset_from_bottom / 3) + 2);
-      // A real phone drag takes the same path; end-of-gesture rounding keeps the final partial step.
-      const resizedMetrics = page.waitForResponse(async response => response.url().includes("/pane/scroll?")
-        && (await response.json()).scroll?.viewport_rows !== after.viewport_rows);
+      const resizedMetrics = page.waitForResponse(async response => {
+        if (!response.url().includes("/pane/scroll?")) return false;
+        const body = await bodyOf(response);
+        return body !== undefined && body.scroll?.viewport_rows !== after.viewport_rows;
+      });
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForFunction(() => {
         const screen = document.querySelector(".xterm-screen");
         return screen && screen.getBoundingClientRect().width <= innerWidth;
       });
       await resizedMetrics;
-      // the reflow at the phone's width can leave the view off the end: the touch starts from the end
       await lineWheel(1, 0, Math.ceil(after.max_offset_from_bottom / 3) + 2);
       const mobile = await screen.boundingBox();
       assert.ok(mobile);
@@ -185,33 +184,33 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
       const rowHeight = mobile.height / mobileScroll.viewport_rows;
       const travel = rowHeight * 3 * 2;
       await page.screenshot({ path: join(evidence, "mobile-before-touch.png") });
-      // touch follows the finger: two three-line steps, never multiplied by the wheel speed
       const touched = scrollResponse(6);
       console.log("touch expects", 6, { mobile, rowHeight, travel });
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + travel }] });
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      const lift = Date.now() / 1000;
+      const moved = lift - FLING_STOPPED_MS * 2 / 1000;
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }], timestamp: moved - 0.016 });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + travel }], timestamp: moved });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [], timestamp: lift });
       await touched;
+      await page.waitForFunction(() => document.querySelector("[data-touch-fling]") === null, undefined, { polling: 50, timeout: 10_000 });
+      assert.equal((await paneScrollInfo(pane))?.offset_from_bottom, 6, "a touch held still before the lift ends where the finger stopped");
       assert.equal(readFileSync(log, "utf8"), "", "touch sends no mouse reports to the question");
       await page.screenshot({ path: join(evidence, "after-omo-mobile.png") });
       await cdp.detach();
       // back to the desktop size: herdr reflows the history at the new width, which moves the view's place in it,
       // so the wheels that bring it back to the end go once that size has reached herdr, not alongside it
       const desktopMetrics = page.waitForResponse(async response => response.url().includes("/pane/scroll?")
-        && (await response.json()).scroll?.viewport_rows === after.viewport_rows);
+        && (await bodyOf(response))?.scroll?.viewport_rows === after.viewport_rows);
       await page.setViewportSize({ width: 1280, height: 800 });
       await desktopMetrics;
       console.log("PASS speed-two line wheels, maximum/bottom clamps, and phone touch history");
       await lineWheel(1, 0, Math.ceil(after.max_offset_from_bottom / 3) + 2);
-      // Closing the native question updates the existing once-attached wheel handler via its ref.
       settledPane = pane;
       appendFileSync(fixture.transcript, JSON.stringify({ type: "custom", customType: "ask-user:settlement",
         data: { requestId: "question" } }) + "\n");
       await Promise.race([settled.promise, new Promise<never>((_resolve, reject) => {
         AbortSignal.timeout(10000).addEventListener("abort", () => reject(new Error("question settlement status did not arrive")), { once: true });
       })]);
-      // the frame is heard before the page has drawn it: the wheel decides by what the pane was last drawn with
-      // (PaneTerminal's wheelStateRef), so it goes once the tab's own mark shows the question settled
       await page.locator('.tab-strip-item.is-active .tab-strip-dot[data-status="working"]').waitFor();
       const backToApp = waitOutput(pane, "WHEEL_RECEIVED");
       const desktop = await screen.boundingBox();

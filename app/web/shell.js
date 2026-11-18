@@ -1,19 +1,9 @@
-// Shared by the app's own pages: the native plugin (ios/App/App/HerdrShellPlugin.swift) and
-// what an address typed or scanned becomes.
-
-/**
- * The hosted shell's origin (app.ovis.sh), where a PC paired over the Ovis relay opens, at its scope
- * `/s/<server_id>/`. app/scripts/build-web.ts puts in another for a test build (OVIS_APP_URL).
- */
 export const APP_ORIGIN = "https://app.ovis.sh";
 
-/** Whether the connect screen offers signing in to the account (the hosted shell's front page); app/scripts/build-web.ts turns it on with OVIS_APP_ACCOUNT=1. */
 export const ACCOUNT_SIGN_IN = false;
 
-/** Whether the phone's first language is Korean, the one language the app's own pages have besides English. */
 export const korean = /^ko\b/i.test(navigator.language ?? "");
 
-/** The text in the phone's language. */
 export function t(en, ko) {
   return korean ? ko : en;
 }
@@ -25,29 +15,19 @@ export function localize() {
   for (const element of document.querySelectorAll("[data-ko]")) element.textContent = element.dataset.ko;
 }
 
-/** Calls the native HerdrShell plugin through Capacitor's bridge. */
 export function shell(method, options = {}) {
   return window.Capacitor.nativePromise("HerdrShell", method, options);
 }
 
 /**
  * Whether opening url sends a pairing code and everything typed over the internet unencrypted:
- * plain http to an address outside a tailnet, a home network and this phone. The apps allow
+ * plain http to an address that does not look like a tailnet's, a home network's or this phone's.
+ * homeHost judges by the name or address alone: a dotless or .local name counts as home even if DNS
+ * sends it to a public server, so this is a heuristic, not proof. The apps allow
  * cleartext to any host, as Android cannot limit it to address ranges.
  */
 export function publicHttp(url) {
-  if (url.protocol !== "http:") return false;
-  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  const ipv4 = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
-  if (ipv4) {
-    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
-    // 10/8, 127/8, 172.16/12, 192.168/16, link-local 169.254/16, and Tailscale's 100.64/10
-    return !(a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127));
-  }
-  // ::1, unique local fc00::/7 (Tailscale's fd7a:115c:a1e0::/48 among them) and link-local fe80::/10
-  if (host.includes(":")) return !(host === "::1" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host));
-  // a one-word name (a MagicDNS short name, localhost) or a tailnet or home network name
-  return host.includes(".") && !/\.(ts\.net|local|lan|home\.arpa|internal)$/.test(host);
+  return url.protocol === "http:" && !homeHost(url.hostname);
 }
 
 /** Whether `hostname` (a URL's) is this phone itself: localhost, 127.0.0.0/8 or ::1. */
@@ -63,14 +43,29 @@ export function tailnetHost(hostname) {
   return host.endsWith(".ts.net") || (ipv4 !== null && Number(ipv4[1]) >= 64 && Number(ipv4[1]) <= 127) || host.startsWith("fd7a:115c:a1e0:");
 }
 
-/** How long the Android app waits for an address to answer before it says so (PCStore.ANSWER_SECONDS), as the iOS app's cover waits. */
+/**
+ * Whether `hostname` is an address of a home network or a tailnet, which opens only from inside it:
+ * this phone itself, a private or link-local IP, a Tailscale address, a one-word name or a name
+ * under .local, .lan, .home.arpa or .internal. Any other name is a public server. error.html has
+ * the same test.
+ */
+export function homeHost(hostname) {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (loopbackHost(host) || tailnetHost(host)) return true;
+  const ipv4 = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (ipv4) {
+    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+    // 10/8, 172.16/12, 192.168/16 and link-local 169.254/16 (127/8 and Tailscale's 100.64/10 above)
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  // unique local fc00::/7 and link-local fe80::/10 (::1 above)
+  if (host.includes(":")) return /^f[cd]/.test(host) || /^fe[89ab]/.test(host);
+  // a one-word name (a MagicDNS short name) or a home network name
+  return !host.includes(".") || /\.(local|lan|home\.arpa|internal)$/.test(host);
+}
+
 export const ANSWER_SECONDS = 20;
 
-/**
- * Why `url` did not open, for the connect screen, from the HerdrShell open's refusal: its `code`
- * (PCStore.check's kind) and `message` (the answer that was not Ovis, or the error). "" for a
- * cancelled open.
- */
 export function openFailure(url, code, message) {
   const host = url.host;
   const tailscale = tailnetHost(url.hostname) ? " " + t(
@@ -91,10 +86,13 @@ export function openFailure(url, code, message) {
       );
     }
     case "refused": return refusedHelp(url, host);
-    case "timeout": return t(
+    case "timeout": return (homeHost(url.hostname) ? t(
       `${host} did not answer within ${ANSWER_SECONDS} seconds. The PC may be off, or out of this phone's reach: a home network address does not open over mobile data or another Wi-Fi, and a firewall on the PC can block the port.`,
       `${host}이(가) ${ANSWER_SECONDS}초 안에 응답하지 않았습니다. PC가 꺼져 있거나 이 휴대폰에서 닿지 않을 수 있습니다. 집 네트워크 주소는 모바일 데이터나 다른 Wi-Fi에서 열리지 않고, PC의 방화벽이 포트를 막을 수도 있습니다.`,
-    ) + tailscale;
+    ) : t(
+      `Nothing came back from ${host} within ${ANSWER_SECONDS} seconds. The server may be down, or this phone's connection (or a VPN on it) may not reach it.`,
+      `${ANSWER_SECONDS}초 동안 ${host}에서 아무 응답도 오지 않았습니다. 서버가 꺼져 있거나, 이 휴대폰의 연결(또는 VPN)이 서버에 닿지 않을 수 있습니다.`,
+    )) + tailscale;
     case "unknown-host": return t(
       `${url.hostname} was not found. Check the name, or open the address Ovis shows under Settings → Phone & devices on the PC.`,
       `${url.hostname}을(를) 찾지 못했습니다. 이름을 확인하거나, PC의 Ovis에서 설정 → 폰 및 기기에 표시된 주소를 여세요.`,
@@ -103,7 +101,6 @@ export function openFailure(url, code, message) {
   }
 }
 
-/** What a refused connection means: nothing listens on that address and port. */
 function refusedHelp(url, host) {
   const text = t(
     `${host} refused the connection: nothing listens there. Ovis has to run on the PC (herdr alone is not enough), and by default it listens only on the PC itself (127.0.0.1). Open the address Ovis shows under Settings → Phone & devices on the PC.`,
@@ -154,7 +151,6 @@ export function relayLink(url, appOrigin = APP_ORIGIN) {
   return { url: scope + url.hash, scope, name: offer.name };
 }
 
-/** The offer's `server_id` and `name` from its base64url JSON, or null when it is none. */
 function offerOf(payload) {
   if (!/^[A-Za-z0-9_-]{1,2048}$/.test(payload) || payload.length % 4 === 1) return null;
   let offer;

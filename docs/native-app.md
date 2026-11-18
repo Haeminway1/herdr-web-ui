@@ -7,7 +7,8 @@ Status: Phase 1 step 2 built for iOS (checked in a simulator) and Android (check
 (FCM), and deployed at `push.ovis.sh` on 2026-10-24, where its APNs and FCM credentials passed
 their authentication tests. Steps 4 and 5, the client's push through the app and the iOS
 Notification Service Extension, are built, 2026-10-24 (see [Push in the app](#push-in-the-app));
-a push received on a real device is still to be checked. iOS 1.0 (build 2) is in App Review.
+a push received on a real device is still to be checked. iOS 1.0 (build 8) is on the App Store
+since 2026-11-15 (<https://apps.apple.com/app/id6824664162>), and Android 1.0.1 (8) on Google Play.
 
 Ovis ships as a store app for iOS first, Android later. The goal is reach: the app is
 found in the App Store and installs in one tap, where the web app needs "Add to Home Screen". It
@@ -96,7 +97,7 @@ relay's FCM credentials are a service account key of the app's Firebase project,
 5. Notification Service Extension that decrypts. Built 2026-10-24 (`OvisNotifications`), see
    [Push in the app](#push-in-the-app).
 6. App Store listing, privacy answers, review notes pointing at the demo mode. Version 1.0
-   (build 2) was submitted for review on 2026-10-24, to be released by hand once approved.
+   (build 8) was submitted for review on 2026-11-08 and released on the App Store on 2026-11-15.
 
 ## Phase 2 and later
 
@@ -229,9 +230,16 @@ What is there:
   PC's whole host stay in the app and shows `error.html` when the first load fails. Until the
   PC answers, a native cover says which PC is opening and offers Change PC; when a PC
   sends no answer within 20 seconds, the cover itself says so, with Try again and Change PC, and
-  for a Tailscale address that Tailscale may be off on the phone (WebKit alone waits a minute or
+  for a Tailscale address that Tailscale may be off on the phone, or for a public server that it
+  may be down or out of the phone's reach (WebKit alone waits a minute or
   more, which is what a phone with Tailscale off sees for a `.ts.net` address, and while that
-  connection hangs it did not paint the error page either). When a Tailscale address fails to
+  connection hangs it did not paint the error page either). A PC that answered is never cut off
+  (`OpeningWatch`): the cover stays until the client is up (its root no longer holds index.html's
+  loading spinner), with a bar filled from the web view's `estimatedProgress` (it never goes back
+  and stops at 95 %); after 5 s it says the connection is slow, with Try again. iOS has no count
+  of the bytes received, and `estimatedProgress` holds still while one large file arrives (about
+  40 % through the client's script at 10 KB/s), so iOS never claims a stall as Android does, and a
+  TLS handshake still under way at 20 s counts as no answer. When a Tailscale address fails to
   load, `error.html` (on Android too) adds the same note. A redirect of the address being opened
   to another origin is handled as on Android (see [The Android app](#the-android-app)), where
   Capacitor would send another host to Safari, except a sign-in in front of the PC: on iOS one
@@ -344,7 +352,18 @@ one more browser's and is unchanged.
   plugin the app lacks would never settle.
 - Turning alerts on asks for notifications (the phone's own prompt), then subscribes, and the PC
   sends its confirmation push, as in a browser. The app shows an alert that arrives while it is
-  open too. Tapping one opens the app, not yet the pane as a browser's does.
+  open too. On Android, tapping a pane's alert opens the PC that sent it on that pane's chat, as a
+  browser's does: the PC names the endpoint it pushed to and its relay ID inside the encrypted alert
+  (`shared/push.ts`), and the app finds the saved PC by them (`PCStore.alertLink`). A tap for the
+  PC already open selects the pane in its page without reloading the page (over a reader or a file
+  page, or before that page is up, the alert's address opens instead). An alert for another
+  saved PC opens that PC, as switching PC does, without asking: unsent text the open page kept in
+  memory alone (the panes of a PC whose server names no herdr lifetime) is not lost but waits in
+  Recover unsent text for that PC and pane, never sent. An alert too long to carry the endpoint and relay
+  ID is sent without them, and its tap just opens the app, as does an alert from an older PC or
+  from one the phone no longer keeps. A tap for the open PC only brings the app forward when that
+  PC's page is from an Ovis older than this hand-over and is served over plain http, where a page
+  has no service worker. On iOS a tap still only opens the app.
 - The plugin is `app/ios/App/App/OvisPushPlugin.swift` on iOS and
   [`app/android/ovis-push`](../app/android/ovis-push/README.md) on Android, with the same calls:
   `checkPermissions()` and `requestPermissions()` (`{ notifications }`, Capacitor's permission
@@ -391,12 +410,41 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
   so another server on that host (a dev server's port) would otherwise replace Ovis in the WebView
   (`PCStore.sameOrigin`). A sign-in's steps and the redirects of the first load are judged before it.
   Opening or leaving a PC starts the activity again, so the next page is a first load and the
-  old WebView goes with the old activity.
-- Until the PC answers, a native cover over the WebView says which PC is opening and offers
-  Change PC, as on iOS. After 20 seconds (`PCStore.ANSWER_SECONDS`, counted from Open on the connect
-  screen when it checked the address first, with at least 5 s left for the page) the app stops the load and
-  shows `error.html`, which says the PC did not answer and that a home network address does not
-  open over mobile data or another Wi-Fi; Chromium alone waits about two minutes. The first page
+  old WebView goes with the old activity. Just before, the page shown hears `ovis-page-leaving`
+  (waited for up to a second): the client leaves the pane state it keeps in memory alone (for a PC
+  whose server names no herdr lifetime, or typed before that PC's herdr was proven) in storage, and
+  that PC's next page takes it once and puts
+  its text in Recover unsent text, never back into a pane: nothing proves the herdr it comes back to
+  is the one it was typed under, and a replaced herdr gives the same pane IDs to other programs
+  (`src/lib/paneLifetime.ts`, `carry`). Held input older than a day is dropped, as it is from an
+  open page. A terminal line that looks like a key and a secret prompt's input are never written
+  down (#2532), and unsaved edits in the file editor are not carried, so they still go with the
+  page, as does an edit that storage refused. A page served directly by a PC on an Ovis release
+  before this one has no hand-over listener, so what it held in memory alone is not carried: on any
+  release, an edit its storage refused, and from 0.4.19 also text typed while that PC's herdr was not
+  proven (before its first snapshot, or for a PC, such as a remote one on an older bridge, that names
+  no herdr lifetime); its stored drafts stay in storage, as before.
+- Until the PC's page shows, a native cover over the WebView says which PC is opening and offers
+  Change PC, as on iOS. When the PC's page has not answered after 20 seconds (`PCStore.ANSWER_SECONDS`,
+  counted from Open on the connect screen when it checked the address first, with at least 5 s left
+  for the page) the app stops the load and shows `error.html`, which says the PC did not answer:
+  for a home network or tailnet address, that such an address does not open over mobile data or
+  another Wi-Fi; for a public server, that it may be down or out of the phone's reach. Chromium
+  alone waits about two minutes. Bytes still arriving before that answer (a slow TLS handshake)
+  put the limit off until 5 s pass with none, for at most 60 s, so a server that completes its
+  handshake and never responds still gets the error page ("accepted the connection but sent no
+  page"). A PC whose page has answered is never cut off (`OpeningWatch`, from the WebView's
+  committed response and the app's received bytes, `TrafficStats`): after 5 s the cover says the
+  connection is slow and how much has arrived, and after 20 s with nothing more it offers Keep
+  waiting and Try again. Once the PC has answered, the cover stays until the client is up (its
+  root no longer holds index.html's loading spinner; a page with no root, such as a sign-in, lifts
+  it when shown) and shows a bar: filled by the bytes received against the sizes of the page and
+  the files it starts with (a HEAD of each from the page, so with the page's own encoding and
+  cookies), indeterminate when any of them gives no Content-Length; it never goes back and stops at
+  95 % until the client is up. The page's files are content-hashed and cached a year, so once an
+  open has finished a second one fetches only index.html (1.6 s at 10 KB/s, against 126 s for the
+  first); a new release names new files, and each PC's origin keeps its own copy. On a 10 KB/s link the first paint needs
+  about 90 KB and a usable client about 1.1 MB (measured on main, 2026-11-14). The first page
   of a PC saved by its origin is checked once more (`PCStore.check`, with the WebView's cookies):
   one that answers but not as Ovis is not kept and gives way to `error.html`, which has Change PC,
   so a PC saved before that check (or one whose port another server took) never traps the app.

@@ -84,9 +84,7 @@ export const TERMINAL_KO: Record<string, string> = {
   "Queued message {n}": "대기 메시지 {n}",
   "Not sent. Reconnect and try again.": "전송하지 못했습니다. 다시 연결한 후 시도하세요.",
   "The chat can't be shown. The terminal still works.": "채팅을 표시할 수 없습니다. 터미널은 계속 쓸 수 있습니다.",
-  "New tab with agent…": "에이전트로 새 탭…",
   "Tab {n}": "탭 {n}",
-  "Close tab": "탭 닫기",
   "Tab name": "탭 이름",
   "Actions for {tab}": "{tab} 작업",
   "Close {tab}": "{tab} 닫기",
@@ -128,4 +126,5 @@ export const TERMINAL_KO: Record<string, string> = {
   "Recover unsent text": "보내지 않은 글 복구",
   "Codex selected this: Shift+drag copies or quotes it here": "Codex가 선택했습니다. 여기서 복사하거나 인용하려면 Shift+끌기",
   "Codex selected this: Option+drag copies or quotes it here": "Codex가 선택했습니다. 여기서 복사하거나 인용하려면 Option+끌기",
+  "Pane {index} of {count}": "창 {count}개 중 {index}번째",
 };
