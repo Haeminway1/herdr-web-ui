@@ -730,6 +730,45 @@ Ready to submit your answers?
     expect(later).toMatchObject({ kind: "approval", title: "Create file" });
     expect(later!.body).toContain("notes.md");
     expect(later!.body).not.toContain("rm -rf old");
+    const laterMcp = parseInteractivePrompt("claude", `
+● Bash(rm -rf old)
+  This command requires approval
+  ⎿ done
+
+● plugin/thing - do (MCP)(id: 1)
+────────────────────────────────────────
+ Tool use
+   plugin/thing - do (MCP)
+ Claude Code's automatic safety check flagged this action, so the action hasn't run.
+ Do you want to proceed?
+   Yes
+ ❯ No
+ Esc to cancel
+`);
+    expect(laterMcp).toMatchObject({ kind: "approval", title: "Tool use" });
+    expect(laterMcp!.body).not.toContain("rm -rf old");
+    // a narrow pane wraps the safety check's words
+    expect(labels(parseInteractivePrompt("claude", `
+────────────────────────────────────────
+ Tool use
+ Claude Code's automatic safety check
+ flagged this action, so the action
+ hasn't run.
+ Do you want to proceed?
+   Yes
+ ❯ No
+ Esc to cancel
+`))).toEqual(["Yes", "No"]);
+    // the words quoted above a rule do not make an example under it a held approval
+    expect(parseInteractivePrompt("claude", `
+● The safety check says "Claude Code's automatic safety check flagged this action" when it holds one.
+────────────────────────────────────────
+ Example dialog
+ Do you want to proceed?
+   Yes
+ > No
+ Esc to cancel
+`)).toBeNull();
     const wrapped = parseInteractivePrompt("claude", `
 ────────────────────────────────────────
  Bash command

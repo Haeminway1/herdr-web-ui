@@ -553,14 +553,16 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
   // a marker with a later tool call or panel rule under it is an earlier asking's: it names
   // neither this panel's title nor its action
   const approvalIndex = markerIndex >= 0 && lines.slice(markerIndex + 1, questionIndex)
-    .some((line) => SOLID_RULE_RE.test(cleanLine(line)) || /^●\s+[\w.:-]+(?:\s[\w.:-]+)*(?:\s\(MCP\))?\(/.test(cleanLine(line))) ? -1 : markerIndex;
+    .some((line) => SOLID_RULE_RE.test(cleanLine(line)) || CLAUDE_CALL_RE.test(cleanLine(line))) ? -1 : markerIndex;
   // options end at the key hint: a line under the last one is then only its wrapped label
   const hintIndex = findLastIndex(lines, (_, index) => /esc to cancel/i.test(wrapped(lines, index)));
   const rowsEnd = hintIndex > questionIndex ? hintIndex : lines.length;
   const numbered = parseNumberedRows(lines, questionIndex + 1, rowsEnd);
-  // unnumbered rows are a held approval only under the safety check's own words in the panel
-  const held = numbered.length === 0 && lines.slice(Math.max(0, questionIndex - 12), questionIndex)
-    .some((line) => /automatic safety check flagged this action/i.test(cleanLine(line)));
+  // unnumbered rows are a held approval only under the safety check's own words in this panel,
+  // read across the rows a narrow pane wraps them on, never from above the panel's rule
+  const panelTop = findLastIndex(lines.slice(0, questionIndex), (line) => SOLID_RULE_RE.test(cleanLine(line)) || isDivider(cleanLine(line)));
+  const held = numbered.length === 0 && /automatic safety check flagged this action/i.test(lines
+    .slice(Math.max(0, panelTop + 1, questionIndex - 12), questionIndex).map(cleanLine).join(" ").replace(/\s+/g, " "));
   const rows = held ? heldApprovalRows(lines, questionIndex + 1, rowsEnd) : numbered;
   if (!sequentialRows(rows) || rows.length < 2 || rows.filter((row) => row.selected).length !== 1) return null;
   // a hint of its own under the last row and over the last hint, whole or wrapped by a narrow
@@ -580,7 +582,7 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
     // down belong to a file preview; with the call scrolled away, the nearest rule
     // Claude's own text opens with ● too ("● Results table follows:"): a call is a tool name and "("
     // (an MCP call reads "● server - tool (MCP)(…)")
-    const callIndex = findLastIndex(lines.slice(0, questionIndex), (line) => /^●\s+[\w.:-]+(?:\s[\w.:-]+)*(?:\s\(MCP\))?\(/.test(cleanLine(line)));
+    const callIndex = findLastIndex(lines.slice(0, questionIndex), (line) => CLAUDE_CALL_RE.test(cleanLine(line)));
     const rules = lines.slice(0, questionIndex).flatMap((line, index) => index > callIndex && SOLID_RULE_RE.test(cleanLine(line)) ? [index] : []);
     const ruleIndex = callIndex >= 0 ? rules[0] ?? -1 : rules.at(-1) ?? -1;
     // a long command pushes the panel's rule and tool name off the top of the screen: the
