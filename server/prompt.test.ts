@@ -696,11 +696,40 @@ Ready to submit your answers?
     expect(parseInteractivePrompt("claude", `
 ────────────────────────────────────────
  Tool use
+ Claude Code's automatic safety check flagged this action, so the action hasn't run.
  Do you want to proceed?
    Something else
  ❯ No
  Esc to cancel
 `)).toBeNull();
+    // nor is a Yes/No list without the safety check's words over it (an example in Claude's text)
+    expect(parseInteractivePrompt("claude", `
+────────────────────────────────────────
+ Example dialog
+ Do you want to proceed?
+   Yes
+ > No
+ Esc to cancel
+`)).toBeNull();
+    // the words of an earlier asking above a later panel name neither its title nor its action
+    const later = parseInteractivePrompt("claude", `
+● Bash(rm -rf old)
+  This command requires approval
+  ⎿ done
+
+● Write(notes.md)
+────────────────────────────────────────
+ Create file
+   notes.md
+ Claude Code's automatic safety check flagged this action, so the action hasn't run.
+ Do you want to proceed?
+   Yes
+ ❯ No
+ Esc to cancel
+`);
+    expect(later).toMatchObject({ kind: "approval", title: "Create file" });
+    expect(later!.body).toContain("notes.md");
+    expect(later!.body).not.toContain("rm -rf old");
     const wrapped = parseInteractivePrompt("claude", `
 ────────────────────────────────────────
  Bash command

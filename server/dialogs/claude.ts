@@ -547,14 +547,21 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
 
   const requiredIndex = findLastIndex(lines, (line) => /This command requires approval/i.test(cleanLine(line)));
   const dangerousRmIndex = findLastIndex(lines, (line) => /^Dangerous rm operation\b/i.test(cleanLine(line)));
-  const approvalIndex = Math.max(requiredIndex, dangerousRmIndex);
+  const markerIndex = Math.max(requiredIndex, dangerousRmIndex);
   const questionIndex = findLastIndex(lines, (line) => /^Do you want to .+\?$/i.test(cleanLine(line)));
   if (questionIndex < 0) return null;
+  // a marker with a later tool call or panel rule under it is an earlier asking's: it names
+  // neither this panel's title nor its action
+  const approvalIndex = markerIndex >= 0 && lines.slice(markerIndex + 1, questionIndex)
+    .some((line) => SOLID_RULE_RE.test(cleanLine(line)) || /^●\s+[\w.:-]+(?:\s[\w.:-]+)*(?:\s\(MCP\))?\(/.test(cleanLine(line))) ? -1 : markerIndex;
   // options end at the key hint: a line under the last one is then only its wrapped label
   const hintIndex = findLastIndex(lines, (_, index) => /esc to cancel/i.test(wrapped(lines, index)));
   const rowsEnd = hintIndex > questionIndex ? hintIndex : lines.length;
   const numbered = parseNumberedRows(lines, questionIndex + 1, rowsEnd);
-  const rows = numbered.length > 0 ? numbered : heldApprovalRows(lines, questionIndex + 1, rowsEnd);
+  // unnumbered rows are a held approval only under the safety check's own words in the panel
+  const held = numbered.length === 0 && lines.slice(Math.max(0, questionIndex - 12), questionIndex)
+    .some((line) => /automatic safety check flagged this action/i.test(cleanLine(line)));
+  const rows = held ? heldApprovalRows(lines, questionIndex + 1, rowsEnd) : numbered;
   if (!sequentialRows(rows) || rows.length < 2 || rows.filter((row) => row.selected).length !== 1) return null;
   // a hint of its own under the last row and over the last hint, whole or wrapped by a narrow
   // pane: the panel was answered, and what ends the screen now is another prompt ("Password:"
