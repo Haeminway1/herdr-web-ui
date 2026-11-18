@@ -561,8 +561,9 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
   // unnumbered rows are a held approval only under the safety check's own words in this panel,
   // read across the rows a narrow pane wraps them on, never from above the panel's rule
   const panelTop = findLastIndex(lines.slice(0, questionIndex), (line) => SOLID_RULE_RE.test(cleanLine(line)) || isDivider(cleanLine(line)));
-  const held = numbered.length === 0 && lines.slice(Math.max(0, panelTop + 1, questionIndex - 12), questionIndex).map(cleanLine)
-    .join("\n").split(/\n\s*\n/).some((rows) => /automatic safety check flagged this action/i.test(rows.replace(/\s+/g, " ")));
+  const held = numbered.length === 0 && !isBoxedRow(lines[questionIndex]!)
+    && lines.slice(Math.max(0, panelTop + 1, questionIndex - 12), questionIndex).map((line) => isBoxedRow(line) ? "" : cleanLine(line))
+      .join("\n").split(/\n\s*\n/).some((paragraph) => /automatic safety check flagged this action/i.test(paragraph.replace(/\s+/g, " ")));
   const rows = held ? heldApprovalRows(lines, questionIndex + 1, rowsEnd) : numbered;
   if (!sequentialRows(rows) || rows.length < 2 || rows.filter((row) => row.selected).length !== 1) return null;
   // a hint of its own under the last row and over the last hint, whole or wrapped by a narrow
@@ -582,7 +583,7 @@ function parseClaudeApproval(screen: string): ParsedPrompt | null {
     // down belong to a file preview; with the call scrolled away, the nearest rule
     // Claude's own text opens with ● too ("● Results table follows:"): a call is a tool name and "("
     // (an MCP call reads "● server - tool (MCP)(…)")
-    const callIndex = findLastIndex(lines.slice(0, questionIndex), isCallRow);
+    const callIndex = findLastIndex(lines.slice(0, questionIndex), (line) => /^●\s+[\w.:-]+(?:\s[\w.:-]+)*(?:\s\(MCP\))?\(/.test(cleanLine(line)));
     const rules = lines.slice(0, questionIndex).flatMap((line, index) => index > callIndex && SOLID_RULE_RE.test(cleanLine(line)) ? [index] : []);
     const ruleIndex = callIndex >= 0 ? rules[0] ?? -1 : rules.at(-1) ?? -1;
     // a long command pushes the panel's rule and tool name off the top of the screen: the
@@ -623,6 +624,11 @@ function isCallRow(line: string): boolean {
   return CLAUDE_CALL_RE.test(line.replace(ANSI_RE, "").trimStart());
 }
 
+/** a row of a boxed preview (`│ …`): what it quotes is the command's text, not Claude's dialog */
+function isBoxedRow(line: string): boolean {
+  return line.replace(ANSI_RE, "").trimStart().startsWith("│");
+}
+
 /**
  * An approval Claude Code's safety check held (`defaultToNo`: "Claude Code's automatic safety
  * check flagged this action, so the action hasn't run") hides its numbers so that no single
@@ -642,7 +648,7 @@ function heldApprovalRows(lines: string[], start: number, end: number): Numbered
     const text = cleanLine(lines[index]!);
     if (!text || isDivider(text)) continue;
     const label = text.replace(SELECTED_RE, "").trim();
-    if (!/^(?:Yes|No)\b/i.test(label)) return [];
+    if (isBoxedRow(lines[index]!) || !/^(?:Yes|No)\b/i.test(label)) return [];
     rows.push({ number: rows.length + 1, label, selected: SELECTED_RE.test(text), checked: false, lineIndex: index });
   }
   return rows.length >= 2 && rows.length <= 4 ? rows : [];

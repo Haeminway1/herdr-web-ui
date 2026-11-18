@@ -784,6 +784,32 @@ Ready to submit your answers?
  Esc to cancel
 `);
     expect(boxed).toMatchObject({ kind: "approval", title: "Bash command" });
+    // a held menu quoted inside a boxed preview is the command's text, not Claude's dialog
+    expect(parseInteractivePrompt("claude", `
+────────────────────────────────────────
+ Bash command
+   │ Claude Code's automatic safety check flagged this action, so the action hasn't run.
+   │ Do you want to proceed?
+   │   Yes
+   │ ❯ No
+   │ Esc to cancel
+`)).toBeNull();
+    // a call-less held approval under an earlier, finished MCP panel keeps its own title
+    expect(parseInteractivePrompt("claude", `
+● plugin/thing - do (MCP)(id: 1)
+────────────────────────────────────────
+ Tool use
+   plugin/thing - do (MCP)
+  ⎿ done
+────────────────────────────────────────
+ Bash command
+   sleep 100
+ Claude Code's automatic safety check flagged this action, so the action hasn't run.
+ Do you want to proceed?
+   Yes
+ ❯ No
+ Esc to cancel
+`)).toMatchObject({ kind: "approval", title: "Bash command" });
     // the words quoted above a rule do not make an example under it a held approval
     expect(parseInteractivePrompt("claude", `
 ● The safety check says "Claude Code's automatic safety check flagged this action" when it holds one.
